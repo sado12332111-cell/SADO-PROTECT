@@ -2,6 +2,7 @@ const express = require('express');
 const {
     Client,
     GatewayIntentBits,
+    MessageFlags,
     REST,
     Routes,
     SlashCommandBuilder,
@@ -227,11 +228,20 @@ async function startDiscordBot() {
 
                 if (interaction.isChatInputCommand()) {
                     if (interaction.commandName === 'panel') {
+                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+                        const channel = interaction.channel;
+                        if (!channel || typeof channel.send !== 'function') {
+                            await interaction.editReply({
+                                content: 'Bu kanalda panel göndərilə bilmədi (kanal mesaj göndərməyi dəstəkləmir).'
+                            });
+                            return;
+                        }
+
                         const panelPayload = buildControlPanelMessage(interaction.guild?.name || "SADOPROTECT");
-                        await interaction.channel.send(panelPayload);
-                        await interaction.reply({
-                            content: 'SADOPROTECT Control Panel kanala göndərildi.',
-                            ephemeral: true
+                        await channel.send(panelPayload);
+                        await interaction.editReply({
+                            content: 'SADOPROTECT Control Panel kanala göndərildi.'
                         });
                     }
                     return;
@@ -288,14 +298,14 @@ async function startDiscordBot() {
                         if (!roleId) {
                             await interaction.reply({
                                 content: 'Buyer Role ID paneldə təyin edilməyib.',
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                             return;
                         }
                         if (!interaction.guild || !interaction.member) {
                             await interaction.reply({
                                 content: 'Bu düymə yalnız server daxilində işləyir.',
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                             return;
                         }
@@ -303,12 +313,12 @@ async function startDiscordBot() {
                             await interaction.member.roles.add(roleId);
                             await interaction.reply({
                                 content: `<@&${roleId}> rolu sizə verildi.`,
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                         } catch (roleErr) {
                             await interaction.reply({
                                 content: `Rol verilə bilmədi (Botun rol icazəsini yoxlayın): ${roleErr.message}`,
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                         }
                         return;
@@ -325,7 +335,7 @@ async function startDiscordBot() {
                                 { name: 'Active Keys', value: String(activeCount), inline: true },
                                 { name: 'Bound HWIDs', value: String(boundCount), inline: true }
                             );
-                        await interaction.reply({ embeds: [embed], ephemeral: true });
+                        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
                         return;
                     }
                 }
@@ -337,14 +347,14 @@ async function startDiscordBot() {
                         if (!keys[submittedKey]) {
                             await interaction.reply({
                                 content: `Key tapılmadı və ya vaxtı bitib: \`${submittedKey}\``,
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                             return;
                         }
                         keys[submittedKey].discordUserId = interaction.user.id;
                         await interaction.reply({
                             content: `Key təsdiqləndi (\`${submittedKey}\`). Müddət: **${keys[submittedKey].durationLabel || "lifetime"}** (${formatRemainingTime(keys[submittedKey])}). Skripti almaq üçün **Get Script** düyməsinə basın.`,
-                            ephemeral: true
+                            flags: MessageFlags.Ephemeral
                         });
                         return;
                     }
@@ -353,14 +363,14 @@ async function startDiscordBot() {
                         if (!keys[submittedKey]) {
                             await interaction.reply({
                                 content: `Key tapılmadı və ya vaxtı bitib: \`${submittedKey}\``,
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                             return;
                         }
                         const snippet = buildLoaderSnippet(submittedKey);
                         await interaction.reply({
                             content: `SADOPROTECT Loader (\`${submittedKey}\` • ${keys[submittedKey].durationLabel || "lifetime"}):\n\`\`\`lua\n${snippet}\n\`\`\``,
-                            ephemeral: true
+                            flags: MessageFlags.Ephemeral
                         });
                         return;
                     }
@@ -369,20 +379,25 @@ async function startDiscordBot() {
                         if (!keys[submittedKey]) {
                             await interaction.reply({
                                 content: `Key tapılmadı və ya vaxtı bitib: \`${submittedKey}\``,
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                             return;
                         }
                         keys[submittedKey].hwid = null;
                         await interaction.reply({
                             content: `HWID uğurla sıfırlandı: \`${submittedKey}\``,
-                            ephemeral: true
+                            flags: MessageFlags.Ephemeral
                         });
                         return;
                     }
                 }
             } catch (interErr) {
                 console.error("Interaction xətası:", interErr.message);
+                if (interaction && (interaction.deferred || interaction.replied)) {
+                    await interaction.editReply({ content: `Xəta baş verdi: ${interErr.message}` }).catch(() => {});
+                } else if (interaction && typeof interaction.reply === 'function') {
+                    await interaction.reply({ content: `Xəta baş verdi: ${interErr.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                }
             }
         });
 
