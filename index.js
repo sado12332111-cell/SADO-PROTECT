@@ -387,7 +387,14 @@ async function startDiscordBot() {
         const commands = [
             new SlashCommandBuilder()
                 .setName('panel')
-                .setDescription('SADOPROTECT skript seçim və Control Panelini açır')
+                .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir')
+                .addStringOption(option =>
+                    option
+                        .setName('name')
+                        .setDescription('Saytda yaratdiginiz skriptin adi')
+                        .setRequired(false)
+                        .setAutocomplete(true)
+                )
         ].map(cmd => cmd.toJSON());
 
         client.once('ready', async () => {
@@ -409,18 +416,67 @@ async function startDiscordBot() {
             try {
                 purgeExpiredKeys();
 
+                // /panel name secimi ucun avtomatik tamamlama (autocomplete)
+                if (interaction.isAutocomplete()) {
+                    if (interaction.commandName === 'panel') {
+                        const focused = String(interaction.options.getFocused() || "").toLowerCase();
+                        const matched = store.scripts
+                            .filter(sc => !focused || sc.name.toLowerCase().includes(focused) || sc.id.toLowerCase().includes(focused))
+                            .slice(0, 25)
+                            .map(sc => ({
+                                name: sc.name.slice(0, 100),
+                                value: sc.id
+                            }));
+                        await interaction.respond(matched).catch(() => {});
+                    }
+                    return;
+                }
+
                 if (interaction.isChatInputCommand()) {
                     if (interaction.commandName === 'panel') {
                         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                        await refreshGuildRoles(client);
 
                         if (!store.scripts.length) {
                             await interaction.editReply({
-                                content: 'Heç bir skript yaradılmayıb. Əvvəlcə saytdakı **New scripts** bölməsindən skript yaradın.'
+                                content: 'Hec bir skript yaradilmayib. Evvelce saytda **+ NEW SCRIPTS** ile skript yaradin.'
                             });
                             return;
                         }
 
+                        const rawNameOption = interaction.options.getString('name');
+                        const channel = interaction.channel;
+
+                        // Eger /panel name:... secilibse ve ya adi yazilibsa, birbaşa hemin skripte aid paneli gonder
+                        if (rawNameOption) {
+                            const byId = store.scripts.find(s => s.id === rawNameOption);
+                            const byName = store.scripts.find(s => s.name.toLowerCase() === rawNameOption.toLowerCase());
+                            const partialName = store.scripts.find(s => s.name.toLowerCase().includes(rawNameOption.toLowerCase()));
+                            const targetScript = byId || byName || partialName;
+
+                            if (!targetScript) {
+                                const availableNames = store.scripts.map(s => `• ${s.name}`).join('\n');
+                                await interaction.editReply({
+                                    content: `\`${rawNameOption}\` adli skript tapilmadi.\nMovcud skriptler:\n${availableNames}`
+                                });
+                                return;
+                            }
+
+                            if (!channel || typeof channel.send !== 'function') {
+                                await interaction.editReply({
+                                    content: 'Bu kanalda panel gonderile bilmedi.'
+                                });
+                                return;
+                            }
+
+                            const panelMsg = buildScriptControlPanelMessage(targetScript, interaction.guild?.name || "SADOPROTECT");
+                            await channel.send(panelMsg);
+                            await interaction.editReply({
+                                content: `**${targetScript.name}** skriptine aid panel kanala gonderildi.`
+                            });
+                            return;
+                        }
+
+                        // Name secilmeyibse skript secim menyusunu goster
                         const selectorPayload = buildScriptSelectorMessage(interaction.guild?.name || "SADOPROTECT");
                         await interaction.editReply(selectorPayload);
                     }
@@ -429,6 +485,7 @@ async function startDiscordBot() {
 
                 if (interaction.isStringSelectMenu()) {
                     if (interaction.customId === 'sado_select_script_panel') {
+                        await interaction.deferUpdate().catch(() => {});
                         const chosenScriptId = interaction.values[0];
                         const chosenScript = getScriptById(chosenScriptId);
                         const channel = interaction.channel;
@@ -436,16 +493,16 @@ async function startDiscordBot() {
                         if (channel && typeof channel.send === 'function') {
                             const panelMsg = buildScriptControlPanelMessage(chosenScript, interaction.guild?.name || "SADOPROTECT");
                             await channel.send(panelMsg);
-                            await interaction.update({
-                                content: `**${chosenScript.name}** paneli kanala göndərildi.`,
+                            await interaction.editReply({
+                                content: `**${chosenScript.name}** paneli kanala gonderildi.`,
                                 embeds: [],
                                 components: []
-                            });
+                            }).catch(() => {});
                         } else {
-                            await interaction.reply({
-                                content: 'Bu kanalda mesaj göndərilə bilmədi.',
+                            await interaction.followUp({
+                                content: 'Bu kanalda mesaj gonderile bilmedi.',
                                 flags: MessageFlags.Ephemeral
-                            });
+                            }).catch(() => {});
                         }
                     }
                     return;
@@ -458,11 +515,11 @@ async function startDiscordBot() {
                     if (actionPart === 'sado_btn_redeem') {
                         const modal = new ModalBuilder()
                             .setCustomId(`modal_redeem:${activeScript.id}`)
-                            .setTitle(`Redeem Key — ${activeScript.name.slice(0, 30)}`);
+                            .setTitle(`Redeem Key — ${activeScript.name.slice(0, 28)}`);
                         const input = new TextInputBuilder()
                             .setCustomId('key_input')
-                            .setLabel('Açarınızı (Key) daxil edin')
-                            .setPlaceholder('Məs: SADO-ABC123')
+                            .setLabel('Acarinizi (Key) daxil edin')
+                            .setPlaceholder('Mes: SADO-ABC123')
                             .setStyle(TextInputStyle.Short)
                             .setRequired(true);
                         modal.addComponents(new ActionRowBuilder().addComponents(input));
@@ -473,11 +530,11 @@ async function startDiscordBot() {
                     if (actionPart === 'sado_btn_script') {
                         const modal = new ModalBuilder()
                             .setCustomId(`modal_script:${activeScript.id}`)
-                            .setTitle(`Get Script — ${activeScript.name.slice(0, 30)}`);
+                            .setTitle(`Get Script — ${activeScript.name.slice(0, 28)}`);
                         const input = new TextInputBuilder()
                             .setCustomId('key_input')
-                            .setLabel('Aktiv Key kodunuzu yazın')
-                            .setPlaceholder('Məs: SADO-ABC123')
+                            .setLabel('Aktiv Key kodunuzu yazin')
+                            .setPlaceholder('Mes: SADO-ABC123')
                             .setStyle(TextInputStyle.Short)
                             .setRequired(true);
                         modal.addComponents(new ActionRowBuilder().addComponents(input));
@@ -488,11 +545,11 @@ async function startDiscordBot() {
                     if (actionPart === 'sado_btn_hwid') {
                         const modal = new ModalBuilder()
                             .setCustomId(`modal_hwid:${activeScript.id}`)
-                            .setTitle(`Reset HWID — ${activeScript.name.slice(0, 30)}`);
+                            .setTitle(`Reset HWID — ${activeScript.name.slice(0, 28)}`);
                         const input = new TextInputBuilder()
                             .setCustomId('key_input')
-                            .setLabel('HWID sıfırlanacaq Key kodunu yazın')
-                            .setPlaceholder('Məs: SADO-ABC123')
+                            .setLabel('HWID sifirlanacaq Key kodunu yazin')
+                            .setPlaceholder('Mes: SADO-ABC123')
                             .setStyle(TextInputStyle.Short)
                             .setRequired(true);
                         modal.addComponents(new ActionRowBuilder().addComponents(input));
@@ -519,14 +576,14 @@ async function startDiscordBot() {
                 }
 
                 if (interaction.isModalSubmit()) {
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     const [modalType] = String(interaction.customId || "").split(":");
                     const submittedKey = String(interaction.fields.getTextInputValue('key_input') || "").trim();
                     const entry = submittedKey ? store.keys[submittedKey] : null;
 
                     if (!entry) {
-                        await interaction.reply({
-                            content: `Key tapılmadı və ya vaxtı bitib: \`${submittedKey}\``,
-                            flags: MessageFlags.Ephemeral
+                        await interaction.editReply({
+                            content: `Key tapilmadi ve ya vaxti bitib: \`${submittedKey}\``
                         });
                         return;
                     }
@@ -536,9 +593,8 @@ async function startDiscordBot() {
                         const existingUser = entry.users.find(u => u.discordUserId === interaction.user.id);
 
                         if (!existingUser && entry.users.length >= maxLimit) {
-                            await interaction.reply({
-                                content: `Bu key-i başqası işlətdi! (Limit: ${maxLimit} nəfər)`,
-                                flags: MessageFlags.Ephemeral
+                            await interaction.editReply({
+                                content: `Bu key-i basqasi isledib! (Limit: ${maxLimit} nefer)`
                             });
                             return;
                         }
@@ -556,9 +612,8 @@ async function startDiscordBot() {
                             ? `\nRol verildi: <@&${roleResult.roleId}>`
                             : "";
 
-                        await interaction.reply({
-                            content: `Key aktivləşdirildi (\`${submittedKey}\`). Müddət: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}). İstifadəçi limiti: **${entry.users.length}/${maxLimit}**${roleNote}`,
-                            flags: MessageFlags.Ephemeral
+                        await interaction.editReply({
+                            content: `Key aktivlesdirildi (\`${submittedKey}\`). Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}). Istifadeci limiti: **${entry.users.length}/${maxLimit}**${roleNote}`
                         });
                         return;
                     }
@@ -570,9 +625,8 @@ async function startDiscordBot() {
                             !entry.users.some(u => u.discordUserId === interaction.user.id);
 
                         if (alreadyClaimedByOther) {
-                            await interaction.reply({
-                                content: `Bu key-i başqası işlətdi! (Limit: ${maxLimit} nəfər)`,
-                                flags: MessageFlags.Ephemeral
+                            await interaction.editReply({
+                                content: `Bu key-i basqasi isledib! (Limit: ${maxLimit} nefer)`
                             });
                             return;
                         }
@@ -588,9 +642,8 @@ async function startDiscordBot() {
                         await assignRoleToDiscordUser(interaction.user.id, entry.autoRoleId);
 
                         const snippet = buildLoaderSnippet(submittedKey);
-                        await interaction.reply({
-                            content: `SADOPROTECT Loader (\`${submittedKey}\` • ${entry.durationLabel || "lifetime"}):\n\`\`\`lua\n${snippet}\n\`\`\``,
-                            flags: MessageFlags.Ephemeral
+                        await interaction.editReply({
+                            content: `SADOPROTECT Loader (\`${submittedKey}\` • ${entry.durationLabel || "lifetime"}):\n\`\`\`lua\n${snippet}\n\`\`\``
                         });
                         return;
                     }
@@ -598,9 +651,8 @@ async function startDiscordBot() {
                     if (modalType === 'modal_hwid') {
                         entry.users = [];
                         saveStoreToDisk();
-                        await interaction.reply({
-                            content: `HWID uğurla sıfırlandı: \`${submittedKey}\``,
-                            flags: MessageFlags.Ephemeral
+                        await interaction.editReply({
+                            content: `HWID ugurla sifirlandi: \`${submittedKey}\``
                         });
                         return;
                     }
@@ -608,9 +660,9 @@ async function startDiscordBot() {
             } catch (interErr) {
                 console.error("Interaction xətası:", interErr.message);
                 if (interaction && (interaction.deferred || interaction.replied)) {
-                    await interaction.editReply({ content: `Xəta baş verdi: ${interErr.message}` }).catch(() => {});
+                    await interaction.editReply({ content: `Xeta bas verdi: ${interErr.message}` }).catch(() => {});
                 } else if (interaction && typeof interaction.reply === 'function') {
-                    await interaction.reply({ content: `Xəta baş verdi: ${interErr.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                    await interaction.reply({ content: `Xeta bas verdi: ${interErr.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
                 }
             }
         });
@@ -648,11 +700,13 @@ app.get('/', async (req, res) => {
         const msgType = String(req.query.msg || "");
         let bannerHtml = "";
         if (msgType === "script_created") {
-            bannerHtml = `<div style="background:#065f46;color:#d1fae5;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Yeni skript yadda saxlanıldı!</div>`;
+            bannerHtml = `<div style="background:#065f46;color:#d1fae5;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Yeni skript yadda saxlanildi!</div>`;
+        } else if (msgType === "script_updated") {
+            bannerHtml = `<div style="background:#1d4ed8;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Skript deyisdirildi ve yadda saxlanildi!</div>`;
         } else if (msgType === "script_deleted") {
             bannerHtml = `<div style="background:#7f1d1d;color:#fecaca;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Skript silindi!</div>`;
         } else if (msgType === "bot_saved") {
-            bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord bot ayarları saxlanıldı. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
+            bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord bot ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
         }
 
         // Rol seçim siyahısı
@@ -668,23 +722,23 @@ app.get('/', async (req, res) => {
             ? `<option value="">Rol verilməsin</option>` + cachedGuildRoles.map(r => {
                 const selected = store.discordConfig.autoRoleId === r.id ? "selected" : "";
                 return `<option value="${escapeHtml(r.id)}" ${selected}>${escapeHtml(r.name)}</option>`;
-            }).join("")
-            : `<option value="">Rol seçilməyib</option>`;
-
-        // Skript seçim siyahısı
-        const scriptOptionsHtml = store.scripts.map(sc =>
-            `<option value="${escapeHtml(sc.id)}">${escapeHtml(sc.name)}</option>`
-        ).join("");
-
-        // Yaradılmış skriptlərin siyahısı
+        // Yaradilmis skriptlerin siyahisi (ustune basanda deyisdirme formasi acilir)
         const savedScriptsHtml = store.scripts.map(sc => `
-            <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;margin-bottom:10px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <b>${escapeHtml(sc.name)}</b>
+            <details style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;margin-bottom:10px;">
+                <summary style="cursor:pointer;font-weight:bold;color:#e2e8f0;list-style:none;display:flex;justify-content:space-between;align-items:center;">
+                    <span>${escapeHtml(sc.name)} <span style="color:#38bdf8;font-size:12px;font-weight:normal;">(Deyisdirmek ucun basin)</span></span>
                     <a href="/delete-script?pass=${safePassEnc}&id=${encodeURIComponent(sc.id)}" style="color:#f87171;text-decoration:none;font-size:13px;">[Sil]</a>
-                </div>
-                <pre style="margin:0;padding:8px;background:#020617;color:#93c5fd;border-radius:6px;overflow-x:auto;font-size:12px;">${escapeHtml(sc.code)}</pre>
-            </div>
+                </summary>
+                <form action="/edit-script" method="POST" style="margin-top:12px;">
+                    <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+                    <input type="hidden" name="scriptId" value="${escapeHtml(sc.id)}">
+                    <label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px;">Skriptin adi:</label>
+                    <input type="text" name="scriptName" value="${escapeHtml(sc.name)}" required style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:8px;">
+                    <label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px;">Skriptin kodu:</label>
+                    <textarea name="scriptCode" rows="6" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;font-family:monospace;margin-bottom:8px;">${escapeHtml(sc.code)}</textarea>
+                    <button type="submit" style="background:#2563eb;color:white;border:none;padding:8px 14px;border-radius:6px;font-weight:bold;cursor:pointer;">Skripti Deyisdir</button>
+                </form>
+            </details>
         `).join("");
 
         // Key cədvəli
@@ -720,20 +774,21 @@ app.get('/', async (req, res) => {
                     <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">Istifadeci Loader Kodu:</div>
                     <pre style="margin:0;padding:8px;background:#020617;color:#38bdf8;border-radius:6px;overflow-x:auto;font-size:12px;">${sampleLoader}</pre>
                 </td>
-            </tr>`;
-        }
-
-        res.send(`
-            <body style="background:#0b0f19;color:white;font-family:sans-serif;padding:20px;max-width:1040px;margin:0 auto;">
-                <h1 style="color:#38bdf8;">SADOPROTECT — Idareetme Paneli</h1>
-                ${bannerHtml}
-
-                <form action="/save-bot" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
-                    <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
-                    <h3 style="margin-top:0;color:#818cf8;">Discord Bot Qoşma Paneli</h3>
-                    <div style="margin-bottom:10px;font-size:14px;color:#cbd5e1;">
-                        Bot Vəziyyəti: <b>${escapeHtml(botConnectionState)}</b>
-                    </div>
+                <div style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
+                    <details>
+                        <summary style="cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;background:#0284c7;color:white;padding:9px 16px;border-radius:6px;font-weight:bold;">
+                            <span>+ NEW SCRIPTS</span>
+                        </summary>
+                        <form action="/new-script" method="POST" style="margin-top:14px;">
+                            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Skriptin adi:</label>
+                            <input type="text" name="scriptName" placeholder="Skriptin adini yazin (mes: SADO DUEL)" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
+                            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Skriptin kodu:</label>
+                            <textarea name="scriptCode" rows="7" placeholder="Skriptin kodunu yazin..." required style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;font-family:monospace;margin-bottom:10px;"></textarea>
+                            <button type="submit" style="background:#10b981;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Yadda saxla</button>
+                        </form>
+                    </details>
+                    <div style="margin-top:16px;">${savedScriptsHtml}</div>
+                </div>
                     <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
                         <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
                         <span>Discord Botu Aktiv Et</span>
@@ -841,15 +896,19 @@ app.post('/new-script', (req, res) => {
     }
 });
 
-app.get('/delete-script', (req, res) => {
+app.post('/edit-script', (req, res) => {
     try {
-        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const targetId = String(req.query.id || "");
-        if (store.scripts.length > 1) {
-            store.scripts = store.scripts.filter(s => s.id !== targetId);
+        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
+        const targetId = String(req.body.scriptId || "");
+        const sName = String(req.body.scriptName || "").trim();
+        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
+        const found = store.scripts.find(s => s.id === targetId);
+        if (found && sName) {
+            found.name = sName.slice(0, 60);
+            found.code = sCode;
             saveStoreToDisk();
         }
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_deleted');
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_updated');
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
     }
