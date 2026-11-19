@@ -1115,26 +1115,15 @@ app.get('/loader', (req, res) => {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: HWID tapilmadi!")');
             }
 
-            // Əgər Discord-da Redeem olunub, amma hələ HWID bağlanmayıbsa (və ya cəmi 1 slot varsa), ilk gələn cihaza bağla
             const unboundDiscordSlot = keyEntry.users.find(u => !u.hwid);
             if (unboundDiscordSlot) {
                 unboundDiscordSlot.hwid = userHwid;
-                saveStoreToDisk();
-            } else if (keyEntry.users.length === 0) {
-                keyEntry.users.push({
-                    hwid: userHwid,
-                    discordUserId: null
-                });
                 saveStoreToDisk();
             } else if (keyEntry.users.length < maxLimit) {
                 keyEntry.users.push({
                     hwid: userHwid,
                     discordUserId: null
                 });
-                saveStoreToDisk();
-            } else if (maxLimit === 1 && keyEntry.users.length === 1) {
-                // Eyni telefon/executor-da ClientId dəyişə biləcəyi halda ilk slotu həmin cihaza yenilə
-                keyEntry.users[0].hwid = userHwid;
                 saveStoreToDisk();
             } else {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
