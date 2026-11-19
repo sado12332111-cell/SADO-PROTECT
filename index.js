@@ -547,7 +547,7 @@ async function startDiscordBot() {
                         const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
                         if (!redeemed) {
                             await interaction.reply({
-                                content: 'Key yazılmayıb! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi daxil edin.',
+                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.',
                                 flags: MessageFlags.Ephemeral
                             });
                             return;
@@ -643,36 +643,6 @@ async function startDiscordBot() {
 
                         await interaction.editReply({
                             content: `Key ugurla tesdiqlendi (\`${submittedKey}\`). Indi **Get Script** duymesine basib scripti goture bilersiniz. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
-                        });
-                        return;
-                    }
-
-                    if (modalType === 'modal_script') {
-                        const maxLimit = Math.max(1, parseInt(entry.maxUsers, 10) || 1);
-                        const alreadyClaimedByOther =
-                            entry.users.length >= maxLimit &&
-                            !entry.users.some(u => u.discordUserId === interaction.user.id);
-
-                        if (alreadyClaimedByOther) {
-                            await interaction.editReply({
-                                content: `Bu key-i basqasi isledib! (Limit: ${maxLimit} nefer)`
-                            });
-                            return;
-                        }
-
-                        if (!entry.users.some(u => u.discordUserId === interaction.user.id)) {
-                            entry.users.push({
-                                hwid: null,
-                                discordUserId: interaction.user.id
-                            });
-                            saveStoreToDisk();
-                        }
-
-                        await assignRoleToDiscordUser(interaction.user.id, entry.autoRoleId);
-
-                        const snippet = buildLoaderSnippet(submittedKey);
-                        await interaction.editReply({
-                            content: `SADOPROTECT Loader (\`${submittedKey}\` • ${entry.durationLabel || "lifetime"}):\n\`\`\`lua\n${snippet}\n\`\`\``
                         });
                         return;
                     }
@@ -1139,31 +1109,39 @@ app.get('/loader', (req, res) => {
         const maxLimit = Math.max(1, parseInt(keyEntry.maxUsers, 10) || 1);
         const matchedUser = userHwid ? keyEntry.users.find(u => u.hwid === userHwid) : null;
 
-        // Eyni key basqa telefon/cihazda (ferqli HWID) islenirse ve limit dolubsa Kick atsin
+        // Yeni yaradılmış və hələ heç bir cihazda işlədilməmiş key-i ilk girən cihaza bağla
         if (!matchedUser) {
             if (!userHwid) {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: HWID tapilmadi!")');
             }
-            // Key basqa cihazda aktivlesibse ve yalniz 1 neferlik/1 cihazliq limit varsa blokla
-            if (keyEntry.users.length >= maxLimit && keyEntry.users.some(u => u.hwid && u.hwid !== userHwid)) {
-                return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
-            }
-            // Eger istifadeci evvel Discord-da redeem edibse ve hwid bosdursa bu telefona bagla
+
+            // Əgər Discord-da Redeem olunub, amma hələ HWID bağlanmayıbsa (və ya cəmi 1 slot varsa), ilk gələn cihaza bağla
             const unboundDiscordSlot = keyEntry.users.find(u => !u.hwid);
             if (unboundDiscordSlot) {
                 unboundDiscordSlot.hwid = userHwid;
+                saveStoreToDisk();
+            } else if (keyEntry.users.length === 0) {
+                keyEntry.users.push({
+                    hwid: userHwid,
+                    discordUserId: null
+                });
+                saveStoreToDisk();
             } else if (keyEntry.users.length < maxLimit) {
                 keyEntry.users.push({
                     hwid: userHwid,
                     discordUserId: null
                 });
+                saveStoreToDisk();
+            } else if (maxLimit === 1 && keyEntry.users.length === 1) {
+                // Eyni telefon/executor-da ClientId dəyişə biləcəyi halda ilk slotu həmin cihaza yenilə
+                keyEntry.users[0].hwid = userHwid;
+                saveStoreToDisk();
             } else {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
             }
-            saveStoreToDisk();
         }
 
-        // Eyni telefon/HWID-de fərqli Roblox hesablarina icaze verilir (matchedUser artiq tapilib)
+        // Eyni telefon/HWID-də fərqli Roblox hesablarına icazə verilir
         const targetScript = getScriptById(keyEntry.scriptId);
         res.type('text/plain').send(targetScript.code);
     } catch (err) {
