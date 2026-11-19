@@ -1,5 +1,5 @@
 const express = require('express');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
 const app = express();
 app.use(express.json());
@@ -8,6 +8,7 @@ app.use(express.urlencoded({ extended: true }));
 // ================= AYARLAR =================
 const ADMIN_PASS = "SADO2026";
 let scriptCode = `-- SADO HUB Script\nprint("SADO PROTECT Aktivdir!")`;
+let panelBaseUrl = process.env.RENDER_EXTERNAL_URL || "";
 
 let discordConfig = {
     enabled: false,
@@ -33,9 +34,15 @@ function escapeHtml(str) {
 }
 
 function getBaseUrl(req) {
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = req.get('host');
-    return `${protocol}://${host}`;
+    if (req) {
+        const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+        const host = req.get('host');
+        if (host) {
+            panelBaseUrl = `${protocol}://${host}`;
+            return panelBaseUrl;
+        }
+    }
+    return panelBaseUrl || "https://sado-protect.onrender.com";
 }
 
 function createKeyForUser(ownerName) {
@@ -45,6 +52,11 @@ function createKeyForUser(ownerName) {
         owner: String(ownerName || "User").trim().slice(0, 40) || "User"
     };
     return newKey;
+}
+
+function buildLoaderSnippet(keyStr) {
+    const base = getBaseUrl();
+    return `script_key = "${keyStr}"\nlocal hwid = game:GetService("RbxAnalyticsService"):GetClientId()\nloadstring(game:HttpGet("${base}/loader?key=" .. script_key .. "&hwid=" .. hwid))()`;
 }
 
 async function stopDiscordBot() {
@@ -93,7 +105,18 @@ async function startDiscordBot() {
                     opt.setName('key')
                         .setDescription('Key kodu (məs: SADO-ABC123)')
                         .setRequired(true)
-                )
+                ),
+            new SlashCommandBuilder()
+                .setName('getscript')
+                .setDescription('Key daxil edib işləyən Loader skriptini alır')
+                .addStringOption(opt =>
+                    opt.setName('key')
+                        .setDescription('Sizin Key kodunuz')
+                        .setRequired(true)
+                ),
+            new SlashCommandBuilder()
+                .setName('panel')
+                .setDescription('SADO PROTECT istifadəçi panel məlumatını göstərir')
         ].map(cmd => cmd.toJSON());
 
         client.once('ready', async () => {
@@ -130,6 +153,30 @@ async function startDiscordBot() {
                     content: `HWID sıfırlandı: \`${targetKey}\``,
                     ephemeral: true
                 });
+            } else if (interaction.commandName === 'getscript') {
+                const userKey = interaction.options.getString('key', true).trim();
+                if (!keys[userKey]) {
+                    await interaction.reply({
+                        content: `Key tapılmadı və ya yanlışdır: \`${userKey}\``,
+                        ephemeral: true
+                    });
+                    return;
+                }
+                const snippet = buildLoaderSnippet(userKey);
+                await interaction.reply({
+                    content: `Key təsdiqləndi (\`${userKey}\`). İşləyən Loader skriptiniz:\n\`\`\`lua\n${snippet}\n\`\`\``,
+                    ephemeral: true
+                });
+            } else if (interaction.commandName === 'panel') {
+                const embed = new EmbedBuilder()
+                    .setColor(0x38bdf8)
+                    .setTitle('SADO PROTECT — Script Panel')
+                    .setDescription('İşləyən Loader skriptinizi almaq üçün `/getscript` əmrini yazıb **key** xanasına açarınızı daxil edin.')
+                    .addFields(
+                        { name: 'Əmr', value: '`/getscript key:SIZIN-KEY`', inline: false },
+                        { name: 'Veb Panel', value: getBaseUrl(), inline: false }
+                    );
+                await interaction.reply({ embeds: [embed] });
             }
         });
 
@@ -156,7 +203,7 @@ app.get('/', (req, res) => {
             `);
         }
 
-        const baseUrl = getBaseUrl(req);
+        getBaseUrl(req);
         const safePassEnc = encodeURIComponent(ADMIN_PASS);
         const msgType = String(req.query.msg || "");
         let bannerHtml = "";
@@ -171,7 +218,7 @@ app.get('/', (req, res) => {
             const safeK = escapeHtml(k);
             const safeKEnc = encodeURIComponent(k);
             const safeOwner = escapeHtml(keys[k].owner);
-            const sampleLoader = escapeHtml(`script_key = "${k}"\nlocal hwid = game:GetService("RbxAnalyticsService"):GetClientId()\nloadstring(game:HttpGet("${baseUrl}/loader?key=" .. script_key .. "&hwid=" .. hwid))()`);
+            const sampleLoader = escapeHtml(buildLoaderSnippet(k));
 
             rows += `<tr>
                 <td style="padding:10px;border-bottom:1px solid #1e293b;"><b>${safeK}</b></td>
