@@ -232,7 +232,7 @@ function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", ma
         owner: String(ownerName || "User").trim().slice(0, 40) || "User",
         scriptId: targetScript.id,
         maxUsers: parsedLimit,
-        users: [],
+        users: [], // [{ hwid: "...", discordUserId: "..." }]
         autoRoleId: roleToAssign,
         expiresAt: typeof ms === "number" ? Date.now() + ms : null,
         durationLabel: DURATION_LABEL_MAP[normDuration]
@@ -241,9 +241,25 @@ function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", ma
     return newKey;
 }
 
+function getRedeemedKeyForDiscordUser(discordUserId) {
+    if (!discordUserId) return null;
+    for (const [k, entry] of Object.entries(store.keys)) {
+        if (entry && Array.isArray(entry.users) && entry.users.some(u => u.discordUserId === discordUserId)) {
+            return { key: k, entry };
+        }
+    }
+    return null;
+}
+
 function buildLoaderSnippet(keyStr) {
     const base = getBaseUrl();
     return `script_key = "${keyStr}"\nlocal hwid = game:GetService("RbxAnalyticsService"):GetClientId()\nloadstring(game:HttpGet("${base}/loader?key=" .. script_key .. "&hwid=" .. hwid))()`;
+}
+
+function buildOneTapCopyUrl(textToCopy) {
+    const base = getBaseUrl();
+    const encoded = encodeURIComponent(textToCopy);
+    return `${base}/copy?text=${encoded}`;
 }
 
 // Discord serverindəki rolları avtomatik yeniləyir
@@ -528,17 +544,29 @@ async function startDiscordBot() {
                     }
 
                     if (actionPart === 'sado_btn_script') {
-                        const modal = new ModalBuilder()
-                            .setCustomId(`modal_script:${activeScript.id}`)
-                            .setTitle(`Get Script — ${activeScript.name.slice(0, 28)}`);
-                        const input = new TextInputBuilder()
-                            .setCustomId('key_input')
-                            .setLabel('Aktiv Key kodunuzu yazin')
-                            .setPlaceholder('Mes: SADO-ABC123')
-                            .setStyle(TextInputStyle.Short)
-                            .setRequired(true);
-                        modal.addComponents(new ActionRowBuilder().addComponents(input));
-                        await interaction.showModal(modal);
+                        const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
+                        if (!redeemed) {
+                            await interaction.reply({
+                                content: 'Key yazılmayıb! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi daxil edin.',
+                                flags: MessageFlags.Ephemeral
+                            });
+                            return;
+                        }
+
+                        const snippet = buildLoaderSnippet(redeemed.key);
+                        const copyLink = buildOneTapCopyUrl(snippet);
+                        const copyRow = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setLabel('Scripti Kopyala (1 Bas)')
+                                .setStyle(ButtonStyle.Link)
+                                .setURL(copyLink)
+                        );
+
+                        await interaction.reply({
+                            content: `SADOPROTECT Loader (\`${redeemed.key}\` • ${redeemed.entry.durationLabel || "lifetime"}):\n\`\`\`lua\n${snippet}\n\`\`\``,
+                            components: [copyRow],
+                            flags: MessageFlags.Ephemeral
+                        });
                         return;
                     }
 
@@ -592,6 +620,7 @@ async function startDiscordBot() {
                         const maxLimit = Math.max(1, parseInt(entry.maxUsers, 10) || 1);
                         const existingUser = entry.users.find(u => u.discordUserId === interaction.user.id);
 
+                        // Eyni key basqa hesaba baglanibsa yalniz limit icinde icaze ver
                         if (!existingUser && entry.users.length >= maxLimit) {
                             await interaction.editReply({
                                 content: `Bu key-i basqasi isledib! (Limit: ${maxLimit} nefer)`
@@ -613,7 +642,7 @@ async function startDiscordBot() {
                             : "";
 
                         await interaction.editReply({
-                            content: `Key aktivlesdirildi (\`${submittedKey}\`). Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}). Istifadeci limiti: **${entry.users.length}/${maxLimit}**${roleNote}`
+                            content: `Key ugurla tesdiqlendi (\`${submittedKey}\`). Indi **Get Script** duymesine basib scripti goture bilersiniz. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
                         });
                         return;
                     }
@@ -914,6 +943,137 @@ app.post('/edit-script', (req, res) => {
     }
 });
 
+// Skripti silmək üçün endpoint (əvvəllər çatışmırdı)
+app.get('/delete-script', (req, res) => {
+    try {
+        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
+        const targetId = String(req.query.id || "").trim();
+        if (targetId) {
+            store.scripts = store.scripts.filter(s => s.id !== targetId);
+            if (store.scripts.length === 0) {
+                store.scripts.push({
+                    id: "sado-hub",
+                    name: "SADO HUB",
+                    code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
+                });
+            }
+            const fallbackId = store.scripts[0].id;
+            for (const k in store.keys) {
+                if (store.keys[k].scriptId === targetId) {
+                    store.keys[k].scriptId = fallbackId;
+                }
+            }
+            saveStoreToDisk();
+        }
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_deleted');
+    } catch (err) {
+        res.status(500).send("Xeta bas verdi");
+    }
+});
+
+// Script koduna 1 dəfə basan kimi avtomatik kopyalayan səhifə
+app.get('/copy', (req, res) => {
+    const rawText = String(req.query.text || "");
+    const safeJsLiteral = JSON.stringify(rawText);
+    const safeHtmlText = escapeHtml(rawText);
+
+    res.send(`<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SADOPROTECT — Kopyala</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #090d16;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .box {
+      width: 100%;
+      max-width: 560px;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+      cursor: pointer;
+    }
+    .status {
+      font-size: 14px;
+      font-weight: 700;
+      color: #34d399;
+      margin-bottom: 10px;
+    }
+    pre {
+      margin: 0;
+      padding: 14px;
+      background: #030712;
+      border-radius: 10px;
+      color: #38bdf8;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body onclick="copyNow()">
+  <div class="box" onclick="event.stopPropagation(); copyNow();">
+    <div id="status" class="status">Kopyalanır...</div>
+    <pre id="codeBlock">${safeHtmlText}</pre>
+    <div class="hint">Kodun üstünə və ya ekrana 1 dəfə basmaqla kopyalaya bilərsiniz.</div>
+  </div>
+  <script>
+    const payloadText = ${safeJsLiteral};
+    async function copyNow() {
+      const statusEl = document.getElementById('status');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(payloadText);
+          statusEl.textContent = "Kopyalandı!";
+          statusEl.style.color = "#34d399";
+          return;
+        }
+      } catch (_) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = payloadText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        statusEl.textContent = "Kopyalandı!";
+        statusEl.style.color = "#34d399";
+      } catch (_) {
+        statusEl.textContent = "Kopyalamaq üçün kodun üstünə basıb saxlayın";
+        statusEl.style.color = "#fbbf24";
+      }
+    }
+    window.addEventListener('DOMContentLoaded', () => {
+      copyNow();
+    });
+  </script>
+</body>
+</html>`);
+});
+
 app.get('/create', (req, res) => {
     try {
         if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
@@ -979,20 +1139,31 @@ app.get('/loader', (req, res) => {
         const maxLimit = Math.max(1, parseInt(keyEntry.maxUsers, 10) || 1);
         const matchedUser = userHwid ? keyEntry.users.find(u => u.hwid === userHwid) : null;
 
+        // Eyni key basqa telefon/cihazda (ferqli HWID) islenirse ve limit dolubsa Kick atsin
         if (!matchedUser) {
             if (!userHwid) {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: HWID tapilmadi!")');
             }
-            if (keyEntry.users.length >= maxLimit) {
+            // Key basqa cihazda aktivlesibse ve yalniz 1 neferlik/1 cihazliq limit varsa blokla
+            if (keyEntry.users.length >= maxLimit && keyEntry.users.some(u => u.hwid && u.hwid !== userHwid)) {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
             }
-            keyEntry.users.push({
-                hwid: userHwid,
-                discordUserId: null
-            });
+            // Eger istifadeci evvel Discord-da redeem edibse ve hwid bosdursa bu telefona bagla
+            const unboundDiscordSlot = keyEntry.users.find(u => !u.hwid);
+            if (unboundDiscordSlot) {
+                unboundDiscordSlot.hwid = userHwid;
+            } else if (keyEntry.users.length < maxLimit) {
+                keyEntry.users.push({
+                    hwid: userHwid,
+                    discordUserId: null
+                });
+            } else {
+                return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
+            }
             saveStoreToDisk();
         }
 
+        // Eyni telefon/HWID-de fərqli Roblox hesablarina icaze verilir (matchedUser artiq tapilib)
         const targetScript = getScriptById(keyEntry.scriptId);
         res.type('text/plain').send(targetScript.code);
     } catch (err) {
