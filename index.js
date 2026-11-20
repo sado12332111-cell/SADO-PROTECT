@@ -450,6 +450,42 @@ async function stopDiscordBot() {
     botConnectionState = "Söndürülüb";
 }
 
+function buildPanelSlashCommands() {
+    const nameOption = new SlashCommandBuilder()
+        .setName('panel')
+        .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir')
+        .addStringOption(option => {
+            option
+                .setName('name')
+                .setDescription('Saytda yaratdiginiz skriptin adi')
+                .setRequired(false);
+
+            const choices = store.scripts.slice(0, 25).map(sc => ({
+                name: String(sc.name || sc.id).slice(0, 100),
+                value: String(sc.id).slice(0, 100)
+            }));
+
+            if (choices.length > 0) {
+                option.addChoices(...choices);
+            }
+            return option;
+        });
+
+    return [nameOption.toJSON()];
+}
+
+async function syncDiscordSlashCommands(tokenOverride = null) {
+    const cleanToken = String(tokenOverride || store.discordConfig.token || "").trim();
+    if (!cleanToken || !discordClient || !discordClient.user) return;
+    try {
+        const rest = new REST({ version: '10' }).setToken(cleanToken);
+        const commands = buildPanelSlashCommands();
+        await rest.put(Routes.applicationCommands(discordClient.user.id), { body: commands });
+    } catch (cmdErr) {
+        console.error("Slash command yenilənmə xətası:", cmdErr.message);
+    }
+}
+
 async function startDiscordBot() {
     await stopDiscordBot();
 
@@ -470,28 +506,11 @@ async function startDiscordBot() {
             intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
         });
 
-        const commands = [
-            new SlashCommandBuilder()
-                .setName('panel')
-                .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir')
-                .addStringOption(option =>
-                    option
-                        .setName('name')
-                        .setDescription('Saytda yaratdiginiz skriptin adi')
-                        .setRequired(false)
-                        .setAutocomplete(true)
-                )
-        ].map(cmd => cmd.toJSON());
-
         client.once('ready', async () => {
             botConnectionState = `Aktivdir (${client.user.tag})`;
+            discordClient = client;
             await refreshGuildRoles(client);
-            try {
-                const rest = new REST({ version: '10' }).setToken(cleanToken);
-                await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-            } catch (cmdErr) {
-                console.error("Slash command qeydiyyat xətası:", cmdErr.message);
-            }
+            await syncDiscordSlashCommands(cleanToken);
         });
 
         client.on('guildCreate', async () => {
@@ -1139,10 +1158,7 @@ app.post('/save-panel-style', (req, res) => {
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&tab=discord&msg=panel_style_saved');
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/new-script', (req, res) => {
+app.post('/new-script', async (req, res) => {
     try {
         if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
         const sName = String(req.body.scriptName || "").trim();
@@ -1156,13 +1172,14 @@ app.post('/new-script', (req, res) => {
             code: sCode
         });
         saveStoreToDisk();
+        await syncDiscordSlashCommands();
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_created');
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
     }
 });
 
-app.post('/edit-script', (req, res) => {
+app.post('/edit-script', async (req, res) => {
     try {
         if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
         const targetId = String(req.body.scriptId || "");
@@ -1173,6 +1190,7 @@ app.post('/edit-script', (req, res) => {
             found.name = sName.slice(0, 60);
             found.code = sCode;
             saveStoreToDisk();
+            await syncDiscordSlashCommands();
         }
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_updated');
     } catch (err) {
@@ -1180,7 +1198,7 @@ app.post('/edit-script', (req, res) => {
     }
 });
 
-app.get('/delete-script', (req, res) => {
+app.get('/delete-script', async (req, res) => {
     try {
         if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
         const targetId = String(req.query.id || "").trim();
@@ -1200,6 +1218,7 @@ app.get('/delete-script', (req, res) => {
                 }
             }
             saveStoreToDisk();
+            await syncDiscordSlashCommands();
         }
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_deleted');
     } catch (err) {
