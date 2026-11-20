@@ -521,7 +521,7 @@ function buildPanelSlashCommands() {
         .addStringOption(option =>
             option
                 .setName('action')
-                .setDescription('Emeliyyat: panel, whitelist ve ya unwhitelist')
+                .setDescription('Emeliyyat: panel, whitelist veya unwhitelist')
                 .setRequired(false)
                 .addChoices(
                     { name: 'panel (Control Panel gonder)', value: 'panel' },
@@ -578,35 +578,6 @@ function buildPanelSlashCommands() {
 
     return [panelCmd.toJSON(), whitelistCmd.toJSON(), unwhitelistCmd.toJSON()];
 }
-                );
-            return option;
-        })
-        .addStringOption(option => {
-            option
-                .setName('user')
-                .setDescription('Whitelist / Unwhitelist ucun Discord ID, @mention ve ya HWID/ad')
-                .setRequired(false);
-            return option;
-        })
-        .addStringOption(option => {
-            option
-                .setName('name')
-                .setDescription('Saytda yaratdiginiz skriptin adi')
-                .setRequired(false);
-
-            const choices = store.scripts.slice(0, 25).map(sc => ({
-                name: String(sc.name || sc.id).slice(0, 100),
-                value: String(sc.id).slice(0, 100)
-            }));
-
-            if (choices.length > 0) {
-                option.addChoices(...choices);
-            }
-            return option;
-        });
-
-    return [nameOption.toJSON()];
-}
 
 async function syncDiscordSlashCommands(tokenOverride = null) {
     const cleanToken = String(tokenOverride || store.discordConfig.token || "").trim();
@@ -615,6 +586,13 @@ async function syncDiscordSlashCommands(tokenOverride = null) {
         const rest = new REST({ version: '10' }).setToken(cleanToken);
         const commands = buildPanelSlashCommands();
         await rest.put(Routes.applicationCommands(discordClient.user.id), { body: commands });
+
+        for (const [guildId] of discordClient.guilds.cache) {
+            await rest.put(
+                Routes.applicationGuildCommands(discordClient.user.id, guildId),
+                { body: commands }
+            ).catch(() => {});
+        }
     } catch (cmdErr) {
         console.error("Slash command yenilənmə xətası:", cmdErr.message);
     }
