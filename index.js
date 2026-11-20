@@ -462,7 +462,6 @@ async function startDiscordBot() {
                         const rawNameOption = interaction.options.getString('name');
                         const channel = interaction.channel;
 
-                        // Eger /panel name:... secilibse ve ya adi yazilibsa, birbaşa hemin skripte aid paneli gonder
                         if (rawNameOption) {
                             const byId = store.scripts.find(s => s.id === rawNameOption);
                             const byName = store.scripts.find(s => s.name.toLowerCase() === rawNameOption.toLowerCase());
@@ -492,7 +491,6 @@ async function startDiscordBot() {
                             return;
                         }
 
-                        // Name secilmeyibse skript secim menyusunu goster
                         const selectorPayload = buildScriptSelectorMessage(interaction.guild?.name || "SADOPROTECT");
                         await interaction.editReply(selectorPayload);
                     }
@@ -543,6 +541,7 @@ async function startDiscordBot() {
                         return;
                     }
 
+                    // Get Script düyməsi: key yazma modalı açılmır; key aktivləşməyibsə "Key aktivləşməyib!" deyir
                     if (actionPart === 'sado_btn_script') {
                         const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
                         if (!redeemed) {
@@ -620,7 +619,6 @@ async function startDiscordBot() {
                         const maxLimit = Math.max(1, parseInt(entry.maxUsers, 10) || 1);
                         const existingUser = entry.users.find(u => u.discordUserId === interaction.user.id);
 
-                        // Eyni key basqa hesaba baglanibsa yalniz limit icinde icaze ver
                         if (!existingUser && entry.users.length >= maxLimit) {
                             await interaction.editReply({
                                 content: `Bu key-i basqasi isledib! (Limit: ${maxLimit} nefer)`
@@ -679,15 +677,17 @@ app.get('/', async (req, res) => {
         purgeExpiredKeys();
         const pass = req.query.pass;
         if (pass !== ADMIN_PASS) {
-            return res.send(`
-                <body style="background:#0b0f19;color:white;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
-                    <form method="GET" style="background:#131b2e;padding:30px;border-radius:12px;text-align:center;">
-                        <h2 style="color:#38bdf8;">SADOPROTECT PANEL</h2>
-                        <input type="password" name="pass" placeholder="Admin Sifresi" style="padding:10px;border-radius:6px;border:none;width:200px;margin-bottom:10px;"><br>
-                        <button type="submit" style="background:#0284c7;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:bold;">Daxil Ol</button>
-                    </form>
-                </body>
-            `);
+            return res.send(`<!DOCTYPE html>
+<html lang="az">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>SADOPROTECT Panel</title></head>
+<body style="background:#0b0f19;color:white;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
+    <form method="GET" style="background:#131b2e;padding:30px;border-radius:12px;text-align:center;">
+        <h2 style="color:#38bdf8;">SADOPROTECT PANEL</h2>
+        <input type="password" name="pass" placeholder="Admin Sifresi" style="padding:10px;border-radius:6px;border:none;width:200px;margin-bottom:10px;"><br>
+        <button type="submit" style="background:#0284c7;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:bold;">Daxil Ol</button>
+    </form>
+</body>
+</html>`);
         }
 
         if (discordClient) {
@@ -708,20 +708,24 @@ app.get('/', async (req, res) => {
             bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord bot ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
         }
 
-        // Rol seçim siyahısı
         const roleOptionsHtml = cachedGuildRoles.length > 0
             ? cachedGuildRoles.map(r => {
                 const selected = store.discordConfig.autoRoleId === r.id ? "selected" : "";
                 return `<option value="${escapeHtml(r.id)}" ${selected}>${escapeHtml(r.name)} (${escapeHtml(r.guildName)})</option>`;
             }).join("")
-            : `<option value="">Rol yoxdur (Botu serverə əlavə edin)</option>`;
+            : `<option value="">Rol yoxdur (Botu servere elave edin)</option>`;
 
-        // Key yaradarkən rol seçimi
         const keyRoleOptionsHtml = cachedGuildRoles.length > 0
-            ? `<option value="">Rol verilməsin</option>` + cachedGuildRoles.map(r => {
+            ? `<option value="">Rol verilmesin</option>` + cachedGuildRoles.map(r => {
                 const selected = store.discordConfig.autoRoleId === r.id ? "selected" : "";
                 return `<option value="${escapeHtml(r.id)}" ${selected}>${escapeHtml(r.name)}</option>`;
-        // Yaradilmis skriptlerin siyahisi (ustune basanda deyisdirme formasi acilir)
+            }).join("")
+            : `<option value="">Rol yoxdur</option>`;
+
+        const scriptOptionsHtml = store.scripts.map(sc =>
+            `<option value="${escapeHtml(sc.id)}">${escapeHtml(sc.name)}</option>`
+        ).join("");
+
         const savedScriptsHtml = store.scripts.map(sc => `
             <details style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;margin-bottom:10px;">
                 <summary style="cursor:pointer;font-weight:bold;color:#e2e8f0;list-style:none;display:flex;justify-content:space-between;align-items:center;">
@@ -740,7 +744,6 @@ app.get('/', async (req, res) => {
             </details>
         `).join("");
 
-        // Key cədvəli
         let rows = "";
         for (let k in store.keys) {
             const item = store.keys[k];
@@ -773,85 +776,96 @@ app.get('/', async (req, res) => {
                     <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">Istifadeci Loader Kodu:</div>
                     <pre style="margin:0;padding:8px;background:#020617;color:#38bdf8;border-radius:6px;overflow-x:auto;font-size:12px;">${sampleLoader}</pre>
                 </td>
-                <div style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
-                    <details>
-                        <summary style="cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;background:#0284c7;color:white;padding:9px 16px;border-radius:6px;font-weight:bold;">
-                            <span>+ NEW SCRIPTS</span>
-                        </summary>
-                        <form action="/new-script" method="POST" style="margin-top:14px;">
-                            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Skriptin adi:</label>
-                            <input type="text" name="scriptName" placeholder="Skriptin adini yazin (mes: SADO DUEL)" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
-                            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Skriptin kodu:</label>
-                            <textarea name="scriptCode" rows="7" placeholder="Skriptin kodunu yazin..." required style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;font-family:monospace;margin-bottom:10px;"></textarea>
-                            <button type="submit" style="background:#10b981;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Yadda saxla</button>
-                        </form>
-                    </details>
-                    <div style="margin-top:16px;">${savedScriptsHtml}</div>
-                </div>
-                    <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
-                        <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
-                        <span>Discord Botu Aktiv Et</span>
-                    </label>
-                    <input type="password" name="token" value="${escapeHtml(store.discordConfig.token)}" placeholder="Discord Bot Token-i bura yapışdırın" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
-                    <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:6px;">Server Rollari (Auto Role):</label>
-                    <select name="autoRoleId" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:12px;">
-                        <option value="">Rol seçilməyib</option>
-                        ${roleOptionsHtml}
-                    </select>
-                    <button type="submit" style="background:#6366f1;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Botu Yadda Saxla / Bağla</button>
-                </form>
+            </tr>`;
+        }
 
-                <form action="/new-script" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
-                    <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
-                    <h3 style="margin-top:0;color:#38bdf8;">New scripts</h3>
-                    <input type="text" name="scriptName" placeholder="Skriptin adı (məs: SADO DUEL)" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
-                    <textarea name="scriptCode" rows="7" placeholder="Skriptin kodu..." required style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;font-family:monospace;margin-bottom:10px;"></textarea>
-                    <button type="submit" style="background:#0284c7;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Yadda saxla</button>
-                    <div style="margin-top:16px;">${savedScriptsHtml}</div>
-                </form>
+        res.send(`<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SADOPROTECT — Idareetme Paneli</title>
+</head>
+<body style="background:#0b0f19;color:white;font-family:sans-serif;padding:20px;max-width:1040px;margin:0 auto;">
+    <h1 style="color:#38bdf8;margin-bottom:16px;">SADOPROTECT — Idareetme Paneli</h1>
+    ${bannerHtml}
 
-                <form action="/create" method="GET" style="margin-bottom:20px;background:#131b2e;padding:15px;border-radius:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-                    <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
-                    <input type="text" name="owner" placeholder="Istifadeci adi" required style="padding:8px;border-radius:6px;border:none;">
-                    <select name="scriptId" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
-                        ${scriptOptionsHtml}
-                    </select>
-                    <select name="maxUsers" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
-                        <option value="1" selected>1 nəfər (Drop / Tek)</option>
-                        <option value="2">2 nəfər</option>
-                        <option value="3">3 nəfər</option>
-                        <option value="5">5 nəfər</option>
-                        <option value="10">10 nəfər</option>
-                        <option value="50">50 nəfər</option>
-                    </select>
-                    <select name="duration" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
-                        <option value="1h">1 hour</option>
-                        <option value="5h">5 hours</option>
-                        <option value="24h">24 hours</option>
-                        <option value="3d">3 day</option>
-                        <option value="7d">7 day</option>
-                        <option value="lifetime" selected>lifetime</option>
-                    </select>
-                    <select name="autoRoleId" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
-                        ${keyRoleOptionsHtml}
-                    </select>
-                    <button type="submit" style="background:#10b981;color:white;border:none;padding:8px 15px;border-radius:6px;font-weight:bold;cursor:pointer;">+ Yeni Key Yarat</button>
-                </form>
+    <form action="/save-bot" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
+        <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+        <h3 style="margin-top:0;color:#818cf8;">Discord Bot Qosma Paneli</h3>
+        <div style="margin-bottom:10px;font-size:14px;">Bot Veziyyeti: <b>${escapeHtml(botConnectionState)}</b></div>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
+            <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
+            <span>Discord Botu Aktiv Et</span>
+        </label>
+        <input type="password" name="token" value="${escapeHtml(store.discordConfig.token)}" placeholder="Discord Bot Token-i bura yapisdirin" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
+        <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:6px;">Server Rollari (Auto Role):</label>
+        <select name="autoRoleId" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:12px;">
+            <option value="">Rol secilmeyib</option>
+            ${roleOptionsHtml}
+        </select>
+        <button type="submit" style="background:#6366f1;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Botu Yadda Saxla / Bagla</button>
+    </form>
 
-                <table style="width:100%;background:#131b2e;border-radius:10px;border-collapse:collapse;text-align:left;overflow:hidden;">
-                    <tr style="background:#1e293b;color:#38bdf8;">
-                        <th style="padding:10px;">Acar (Key)</th>
-                        <th style="padding:10px;">Sahibi</th>
-                        <th style="padding:10px;">Skript</th>
-                        <th style="padding:10px;">Limit</th>
-                        <th style="padding:10px;">Muddet</th>
-                        <th style="padding:10px;">Auto Role</th>
-                        <th style="padding:10px;">Emeliyyat</th>
-                    </tr>
-                    ${rows}
-                </table>
-            </body>
-        `);
+    <div style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
+        <details open>
+            <summary style="cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;background:#0284c7;color:white;padding:9px 16px;border-radius:6px;font-weight:bold;">
+                <span>+ NEW SCRIPTS</span>
+            </summary>
+            <form action="/new-script" method="POST" style="margin-top:14px;">
+                <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+                <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Skriptin adi:</label>
+                <input type="text" name="scriptName" placeholder="Skriptin adini yazin (mes: SADO DUEL)" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
+                <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Skriptin kodu:</label>
+                <textarea name="scriptCode" rows="7" placeholder="Skriptin kodunu yazin..." required style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;font-family:monospace;margin-bottom:10px;"></textarea>
+                <button type="submit" style="background:#10b981;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Yadda saxla</button>
+            </form>
+        </details>
+        <div style="margin-top:16px;">${savedScriptsHtml}</div>
+    </div>
+
+    <form action="/create" method="GET" style="margin-bottom:20px;background:#131b2e;padding:15px;border-radius:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+        <input type="text" name="owner" placeholder="Istifadeci adi" required style="padding:8px;border-radius:6px;border:none;">
+        <select name="scriptId" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
+            ${scriptOptionsHtml}
+        </select>
+        <select name="maxUsers" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
+            <option value="1" selected>1 nefer (Drop / Tek)</option>
+            <option value="2">2 nefer</option>
+            <option value="3">3 nefer</option>
+            <option value="5">5 nefer</option>
+            <option value="10">10 nefer</option>
+            <option value="50">50 nefer</option>
+        </select>
+        <select name="duration" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
+            <option value="1h">1 hour</option>
+            <option value="5h">5 hours</option>
+            <option value="24h">24 hours</option>
+            <option value="3d">3 day</option>
+            <option value="7d">7 day</option>
+            <option value="lifetime" selected>lifetime</option>
+        </select>
+        <select name="autoRoleId" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
+            ${keyRoleOptionsHtml}
+        </select>
+        <button type="submit" style="background:#10b981;color:white;border:none;padding:8px 15px;border-radius:6px;font-weight:bold;cursor:pointer;">+ Yeni Key Yarat</button>
+    </form>
+
+    <table style="width:100%;background:#131b2e;border-radius:10px;border-collapse:collapse;text-align:left;overflow:hidden;">
+        <tr style="background:#1e293b;color:#38bdf8;">
+            <th style="padding:10px;">Acar (Key)</th>
+            <th style="padding:10px;">Sahibi</th>
+            <th style="padding:10px;">Skript</th>
+            <th style="padding:10px;">Limit</th>
+            <th style="padding:10px;">Muddet</th>
+            <th style="padding:10px;">Auto Role</th>
+            <th style="padding:10px;">Emeliyyat</th>
+        </tr>
+        ${rows}
+    </table>
+</body>
+</html>`);
     } catch (err) {
         res.status(500).send("Server xetasi");
     }
@@ -913,7 +927,6 @@ app.post('/edit-script', (req, res) => {
     }
 });
 
-// Skripti silmək üçün endpoint (əvvəllər çatışmırdı)
 app.get('/delete-script', (req, res) => {
     try {
         if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
@@ -1109,7 +1122,6 @@ app.get('/loader', (req, res) => {
         const maxLimit = Math.max(1, parseInt(keyEntry.maxUsers, 10) || 1);
         const matchedUser = userHwid ? keyEntry.users.find(u => u.hwid === userHwid) : null;
 
-        // Yeni yaradılmış və hələ heç bir cihazda işlədilməmiş key-i ilk girən cihaza bağla
         if (!matchedUser) {
             if (!userHwid) {
                 return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: HWID tapilmadi!")');
@@ -1130,7 +1142,6 @@ app.get('/loader', (req, res) => {
             }
         }
 
-        // Eyni telefon/HWID-də fərqli Roblox hesablarına icazə verilir
         const targetScript = getScriptById(keyEntry.scriptId);
         res.type('text/plain').send(targetScript.code);
     } catch (err) {
