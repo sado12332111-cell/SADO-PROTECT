@@ -827,15 +827,17 @@ async function startDiscordBot() {
                         return;
                     }
 
+                    // Digər düymələr üçün dərhal ephemeral gözləmə cavabı verilir ki, 3 saniyə vaxt aşımı olmasın
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
                     // Get Script düyməsi: key yazma modalı açılmır; whitelist varsa və ya key aktivləşibsə skripti verir
                     if (actionPart === 'sado_btn_script') {
                         const wlEntry = isWhitelistedIdentifier(interaction.user.id);
                         const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
 
                         if (!wlEntry && !redeemed) {
-                            await interaction.reply({
-                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.',
-                                flags: MessageFlags.Ephemeral
+                            await interaction.editReply({
+                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.'
                             });
                             return;
                         }
@@ -855,10 +857,9 @@ async function startDiscordBot() {
                             ? `SADOPROTECT Whitelist Loader (\`${wlEntry.id}\`)`
                             : `SADOPROTECT Loader (\`${redeemed.key}\` • ${redeemed.entry.durationLabel || "lifetime"})`;
 
-                        await interaction.reply({
+                        await interaction.editReply({
                             content: `${headerLabel}:\n\`\`\`lua\n${snippet}\n\`\`\``,
-                            components: [copyRow],
-                            flags: MessageFlags.Ephemeral
+                            components: [copyRow]
                         });
                         return;
                     }
@@ -866,9 +867,8 @@ async function startDiscordBot() {
                     if (actionPart === 'sado_btn_hwid') {
                         const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
                         if (!redeemed) {
-                            await interaction.reply({
-                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.',
-                                flags: MessageFlags.Ephemeral
+                            await interaction.editReply({
+                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.'
                             });
                             return;
                         }
@@ -878,9 +878,8 @@ async function startDiscordBot() {
                         redeemed.entry.users = [];
                         saveStoreToDisk();
 
-                        await interaction.reply({
-                            content: `HWID sıfırlandı (\`${redeemed.key}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər (yenidən Reset atmadıqca sizin cihazda işləməyəcək).`,
-                            flags: MessageFlags.Ephemeral
+                        await interaction.editReply({
+                            content: `HWID sıfırlandı (\`${redeemed.key}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər (yenidən Reset atmadıqca sizin cihazda işləməyəcək).`
                         });
                         return;
                     }
@@ -898,7 +897,7 @@ async function startDiscordBot() {
                                 { name: 'Active Keys', value: String(activeCount), inline: true },
                                 { name: 'Used Slots', value: String(boundCount), inline: true }
                             );
-                        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                        await interaction.editReply({ embeds: [embed] });
                         return;
                     }
                 }
