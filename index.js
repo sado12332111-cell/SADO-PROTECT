@@ -41,6 +41,7 @@ const DURATION_MS_MAP = {
     "5h": 5 * 60 * 60 * 1000,
     "24h": 24 * 60 * 60 * 1000,
     "3d": 3 * 24 * 60 * 60 * 1000,
+    "5d": 5 * 24 * 60 * 60 * 1000,
     "7d": 7 * 24 * 60 * 60 * 1000,
     "lifetime": null
 };
@@ -50,6 +51,7 @@ const DURATION_LABEL_MAP = {
     "5h": "5 hours",
     "24h": "24 hours",
     "3d": "3 day",
+    "5d": "5 day",
     "7d": "7 day",
     "lifetime": "lifetime"
 };
@@ -206,7 +208,13 @@ function saveStoreToDisk() {
             whitelist: Array.isArray(store.whitelist) ? store.whitelist : [],
             keys: store.keys && typeof store.keys === 'object' ? store.keys : {}
         };
-        fs.writeFileSync(DATA_FILE, JSON.stringify(safeStore, null, 2), 'utf8');
+        const dirName = path.dirname(DATA_FILE);
+        if (!fs.existsSync(dirName)) {
+            fs.mkdirSync(dirName, { recursive: true });
+        }
+        const tempFile = `${DATA_FILE}.tmp`;
+        fs.writeFileSync(tempFile, JSON.stringify(safeStore, null, 2), 'utf8');
+        fs.renameSync(tempFile, DATA_FILE);
     } catch (err) {
         console.error("Məlumat fayla yazıla bilmədi:", err.message);
     }
@@ -232,6 +240,7 @@ function buildLoaderSnippet(keyStr, scriptId = "", discordUserId = null) {
 function loadStoreFromDisk() {
     try {
         if (!fs.existsSync(DATA_FILE)) {
+            saveStoreToDisk();
             return;
         }
         const raw = fs.readFileSync(DATA_FILE, 'utf8');
@@ -239,8 +248,11 @@ function loadStoreFromDisk() {
         if (parsed && typeof parsed === 'object') {
             if (parsed.discordConfig && typeof parsed.discordConfig === 'object') {
                 store.discordConfig.enabled = parsed.discordConfig.enabled !== false;
-                if (typeof parsed.discordConfig.token === 'string') {
-                    store.discordConfig.token = parsed.discordConfig.token.trim();
+                const diskToken = typeof parsed.discordConfig.token === 'string' ? parsed.discordConfig.token.trim() : "";
+                if (diskToken) {
+                    store.discordConfig.token = diskToken;
+                } else if (EMBEDDED_BOT_TOKEN) {
+                    store.discordConfig.token = EMBEDDED_BOT_TOKEN;
                 }
                 if (typeof parsed.discordConfig.clientId === 'string' && parsed.discordConfig.clientId.trim()) {
                     store.discordConfig.clientId = parsed.discordConfig.clientId.trim();
@@ -326,6 +338,12 @@ function loadStoreFromDisk() {
                         id: String(w.id).trim(),
                         label: String(w.label || w.id).trim(),
                         scriptId: String(w.scriptId || (store.scripts[0]?.id || "sado-hub")),
+                        durationLabel: String(w.durationLabel || "lifetime"),
+                        expiresAt: typeof w.expiresAt === "number" ? w.expiresAt : null,
+                        buyerName: String(w.buyerName || w.label || w.id).trim(),
+                        discordUserId: w.discordUserId ? String(w.discordUserId) : null,
+                        discordUsername: w.discordUsername ? String(w.discordUsername) : null,
+                        discordAvatarUrl: w.discordAvatarUrl ? String(w.discordAvatarUrl) : null,
                         addedAt: typeof w.addedAt === "number" ? w.addedAt : Date.now()
                     }));
             }
@@ -339,7 +357,9 @@ function loadStoreFromDisk() {
                     if (usersList.length === 0 && v.hwid) {
                         usersList.push({
                             hwid: String(v.hwid),
-                            discordUserId: v.discordUserId ? String(v.discordUserId) : null
+                            discordUserId: v.discordUserId ? String(v.discordUserId) : null,
+                            discordUsername: v.discordUsername ? String(v.discordUsername) : null,
+                            discordAvatarUrl: v.discordAvatarUrl ? String(v.discordAvatarUrl) : null
                         });
                     }
                     normalizedKeys[k] = {
@@ -349,12 +369,19 @@ function loadStoreFromDisk() {
                         users: usersList,
                         autoRoleId: String(v.autoRoleId || ""),
                         expiresAt: typeof v.expiresAt === "number" ? v.expiresAt : null,
-                        durationLabel: String(v.durationLabel || "lifetime")
+                        durationLabel: String(v.durationLabel || "lifetime"),
+                        redeemedBy: v.redeemedBy && typeof v.redeemedBy === 'object' ? {
+                            discordUserId: String(v.redeemedBy.discordUserId || ""),
+                            username: String(v.redeemedBy.username || ""),
+                            avatarUrl: v.redeemedBy.avatarUrl ? String(v.redeemedBy.avatarUrl) : null,
+                            redeemedAt: typeof v.redeemedBy.redeemedAt === "number" ? v.redeemedBy.redeemedAt : Date.now()
+                        } : null
                     };
                 }
                 store.keys = normalizedKeys;
             }
         }
+        saveStoreToDisk();
     } catch (err) {
         console.error("Məlumat faylı oxuna bilmədi:", err.message);
     }
@@ -395,31 +422,18 @@ function purgeExpiredKeys() {
             changed = true;
         }
     }
+    if (Array.isArray(store.whitelist)) {
+        const beforeWl = store.whitelist.length;
+        store.whitelist = store.whitelist.filter(w => !(w && typeof w.expiresAt === "number" && w.expiresAt <= now));
+        if (store.whitelist.length !== beforeWl) {
+            changed = true;
+        }
+    }
     if (changed) {
         saveStoreToDisk();
     }
 }
-
-function formatRemainingTime(keyEntry) {
-    if (!keyEntry) return "Silinib";
-    if (keyEntry.expiresAt === null || keyEntry.expiresAt === undefined) {
-        return "Lifetime";
-    }
-    const diffMs = keyEntry.expiresAt - Date.now();
-    if (diffMs <= 0) return "Vaxtı bitib";
-    const totalMinutes = Math.ceil(diffMs / 60000);
-    if (totalMinutes < 60) return `${totalMinutes} dəq qalıb`;
-    const totalHours = Math.floor(totalMinutes / 60);
-    const remMins = totalMinutes % 60;
-    if (totalHours < 24) {
-        return remMins > 0 ? `${totalHours} saat ${remMins} dəq qalıb` : `${totalHours} saat qalıb`;
-    }
-    const days = Math.floor(totalHours / 24);
-    const remHours = totalHours % 24;
-    return remHours > 0 ? `${days} gün ${remHours} saat qalıb` : `${days} gün qalıb`;
-}
-
-function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", maxUsers = 1, autoRoleId = "") {
+function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", maxUsers = 1, autoRoleId = "", profileInfo = null) {
     purgeExpiredKeys();
     const normDuration = normalizeDuration(durationKey);
     const ms = DURATION_MS_MAP[normDuration];
@@ -435,7 +449,13 @@ function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", ma
         users: [],
         autoRoleId: roleToAssign,
         expiresAt: typeof ms === "number" ? Date.now() + ms : null,
-        durationLabel: DURATION_LABEL_MAP[normDuration]
+        durationLabel: DURATION_LABEL_MAP[normDuration],
+        redeemedBy: profileInfo ? {
+            discordUserId: String(profileInfo.discordUserId || ""),
+            username: String(profileInfo.username || ""),
+            avatarUrl: profileInfo.avatarUrl || null,
+            redeemedAt: Date.now()
+        } : null
     };
     saveStoreToDisk();
     return newKey;
@@ -459,26 +479,76 @@ function normalizeWhitelistIdentifier(rawValue) {
 }
 
 function isWhitelistedIdentifier(identifier) {
+    purgeExpiredKeys();
     const clean = normalizeWhitelistIdentifier(identifier).toLowerCase();
     if (!clean) return null;
     return store.whitelist.find(item => String(item.id).toLowerCase() === clean) || null;
 }
 
-function addToWhitelist(rawIdentifier, scriptId = "") {
+async function resolveDiscordProfile(rawId) {
+    const cleanId = normalizeWhitelistIdentifier(rawId);
+    if (!/^\d{15,22}$/.test(cleanId)) {
+        return {
+            discordUserId: null,
+            username: cleanId,
+            avatarUrl: null
+        };
+    }
+    if (discordClient) {
+        try {
+            const fetchedUser = await discordClient.users.fetch(cleanId).catch(() => null);
+            if (fetchedUser) {
+                return {
+                    discordUserId: fetchedUser.id,
+                    username: fetchedUser.globalName || fetchedUser.username || cleanId,
+                    avatarUrl: typeof fetchedUser.displayAvatarURL === "function"
+                        ? fetchedUser.displayAvatarURL({ extension: "png", size: 128 })
+                        : null
+                };
+            }
+        } catch (_) {}
+    }
+    return {
+        discordUserId: cleanId,
+        username: `Discord (${cleanId})`,
+        avatarUrl: null
+    };
+}
+
+async function addToWhitelist(rawIdentifier, scriptId = "", durationKey = "lifetime") {
+    purgeExpiredKeys();
     const cleanId = normalizeWhitelistIdentifier(rawIdentifier);
     if (!cleanId) return { ok: false, reason: "Deyer bosdur" };
     const targetScript = getScriptById(scriptId);
+    const normDuration = normalizeDuration(durationKey);
+    const ms = DURATION_MS_MAP[normDuration];
+    const expiresAt = typeof ms === "number" ? Date.now() + ms : null;
+    const durationLabel = DURATION_LABEL_MAP[normDuration];
+    const profile = await resolveDiscordProfile(cleanId);
+
     const existing = store.whitelist.find(item => String(item.id).toLowerCase() === cleanId.toLowerCase());
     if (existing) {
         existing.scriptId = targetScript.id;
-        existing.label = cleanId;
+        existing.label = profile.username || cleanId;
+        existing.buyerName = profile.username || cleanId;
+        existing.discordUserId = profile.discordUserId;
+        existing.discordUsername = profile.username;
+        existing.discordAvatarUrl = profile.avatarUrl;
+        existing.durationLabel = durationLabel;
+        existing.expiresAt = expiresAt;
         saveStoreToDisk();
         return { ok: true, entry: existing, updated: true };
     }
     const created = {
         id: cleanId,
-        label: cleanId,
+        label: profile.username || cleanId,
+        buyerName: profile.username || cleanId,
+        discordUserId: profile.discordUserId,
+        discordUsername: profile.username,
+        discordAvatarUrl: profile.avatarUrl,
         scriptId: targetScript.id,
+        durationLabel,
+        expiresAt,
         addedAt: Date.now()
     };
     store.whitelist.push(created);
@@ -769,6 +839,21 @@ function buildPanelSlashCommands() {
                 .setDescription('Discord ID, @mention ve ya HWID')
                 .setRequired(true)
         )
+        .addStringOption(option =>
+            option
+                .setName('time')
+                .setDescription('Muddet secin: lifetime, 7 day, 5 day, 3 day, 24 hour, 5 hour, 1 hour')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'lifetime', value: 'lifetime' },
+                    { name: '7 day', value: '7d' },
+                    { name: '5 day', value: '5d' },
+                    { name: '3 day', value: '3d' },
+                    { name: '24 hour', value: '24h' },
+                    { name: '5 hour', value: '5h' },
+                    { name: '1 hour', value: '1h' }
+                )
+        )
         .addStringOption(option => {
             option
                 .setName('name')
@@ -894,19 +979,20 @@ async function startDiscordBot() {
                     if (interaction.commandName === 'whitelist' || interaction.commandName === 'unwhitelist') {
                         await interaction.deferReply({ ephemeral: true }).catch(() => {});
                         const rawUserOption = interaction.options.getString('user');
+                        const rawTimeOption = interaction.options.getString('time') || 'lifetime';
                         const rawNameOption = interaction.options.getString('name');
 
                         if (interaction.commandName === 'whitelist') {
                             const chosenScript = rawNameOption
                                 ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
                                 : getScriptById("");
-                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
+                            const resAdd = await addToWhitelist(rawUserOption, chosenScript.id, rawTimeOption);
                             if (!resAdd.ok) {
                                 await interaction.editReply({ content: `Xeta: ${resAdd.reason}` }).catch(() => {});
                                 return;
                             }
                             await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**).`
+                                content: `**${escapeHtml(resAdd.entry.buyerName || resAdd.entry.id)}** (\`${escapeHtml(resAdd.entry.id)}\`) whitelist-e elave olundu | Skript: **${escapeHtml(chosenScript.name)}** | Muddet: **${escapeHtml(resAdd.entry.durationLabel)}**.`
                             }).catch(() => {});
                             return;
                         }
@@ -939,13 +1025,13 @@ async function startDiscordBot() {
                             const chosenScript = rawNameOption
                                 ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
                                 : getScriptById("");
-                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
+                            const resAdd = await addToWhitelist(rawUserOption, chosenScript.id, 'lifetime');
                             if (!resAdd.ok) {
                                 await interaction.editReply({ content: `Xeta: ${resAdd.reason}` }).catch(() => {});
                                 return;
                             }
                             await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**). Bu istifadeci key ve HWID limiti olmadan skripti islede biler.`
+                                content: `**${escapeHtml(resAdd.entry.buyerName || resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**, Muddet: **${escapeHtml(resAdd.entry.durationLabel)}**).`
                             }).catch(() => {});
                             return;
                         }
@@ -1276,6 +1362,10 @@ async function startDiscordBot() {
                     if (modalType === 'modal_redeem') {
                         const maxLimit = Math.max(1, parseInt(entry.maxUsers, 10) || 1);
                         const existingUser = entry.users.find(u => u.discordUserId === interaction.user.id);
+                        const avatarUrl = typeof interaction.user.displayAvatarURL === "function"
+                            ? interaction.user.displayAvatarURL({ extension: "png", size: 128 })
+                            : null;
+                        const displayName = interaction.user.globalName || interaction.user.username || interaction.user.id;
 
                         if (!existingUser && entry.users.length >= maxLimit) {
                             await interaction.editReply({
@@ -1287,9 +1377,22 @@ async function startDiscordBot() {
                         if (!existingUser) {
                             entry.users.push({
                                 hwid: null,
-                                discordUserId: interaction.user.id
+                                discordUserId: interaction.user.id,
+                                discordUsername: displayName,
+                                discordAvatarUrl: avatarUrl
                             });
-                            saveStoreToDisk();
+                        } else {
+                            existingUser.discordUsername = displayName;
+                            existingUser.discordAvatarUrl = avatarUrl;
+                        }
+
+                        entry.redeemedBy = {
+                            discordUserId: interaction.user.id,
+                            username: displayName,
+                            avatarUrl,
+                            redeemedAt: Date.now()
+                        };
+                        saveStoreToDisk();
                         }
 
                         const roleResult = await assignRoleToDiscordUser(interaction.user.id, entry.autoRoleId);
@@ -1411,6 +1514,14 @@ app.get('/', async (req, res) => {
             const item = store.keys[k];
             const safeKEnc = encodeURIComponent(k);
             const safeOwner = escapeHtml(item.owner);
+            const redeemedProfile = item.redeemedBy || (Array.isArray(item.users) && item.users.find(u => u.discordUsername || u.discordUserId) ? {
+                discordUserId: item.users.find(u => u.discordUsername || u.discordUserId).discordUserId,
+                username: item.users.find(u => u.discordUsername || u.discordUserId).discordUsername || item.users.find(u => u.discordUsername || u.discordUserId).discordUserId,
+                avatarUrl: item.users.find(u => u.discordUsername || u.discordUserId).discordAvatarUrl || null
+            } : null);
+            const buyerHtml = redeemedProfile
+                ? `<div class="sp-profile-chip">${redeemedProfile.avatarUrl ? `<img src="${escapeHtml(redeemedProfile.avatarUrl)}" alt="avatar" class="sp-avatar-sm">` : `<span class="sp-avatar-fallback">DC</span>`}<div><div><b>${escapeHtml(redeemedProfile.username || redeemedProfile.discordUserId)}</b></div>${redeemedProfile.discordUserId ? `<a href="https://discord.com/users/${encodeURIComponent(redeemedProfile.discordUserId)}" target="_blank" rel="noopener" class="sp-profile-link">Profilə bax (${escapeHtml(redeemedProfile.discordUserId)})</a>` : ""}</div></div>`
+                : `<span class="sp-sub-muted">Hələ aktivləşdirilməyib</span>`;
             const scObj = getScriptById(item.scriptId);
             const safeScriptName = escapeHtml(scObj.name);
             const safeDuration = escapeHtml(item.durationLabel || "lifetime");
@@ -1425,6 +1536,7 @@ app.get('/', async (req, res) => {
             rows += `<tr>
                 <td class="sp-td"><code class="sp-key-chip" title="Tam açar">${fullKeyText}</code></td>
                 <td class="sp-td">${safeOwner}</td>
+                <td class="sp-td">${buyerHtml}</td>
                 <td class="sp-td">${safeScriptName}</td>
                 <td class="sp-td"><span class="sp-badge-count">${usedU}/${maxU}</span></td>
                 <td class="sp-td">${safeDuration} <span class="sp-sub-muted">(${safeRemaining})</span></td>
@@ -1435,7 +1547,7 @@ app.get('/', async (req, res) => {
                 </td>
             </tr>
             <tr>
-                <td colspan="7" class="sp-loader-cell">
+                <td colspan="8" class="sp-loader-cell">
                     <div class="sp-loader-caption">Qorunan Loader (90s Bilet + HWID Lock):</div>
                     <pre class="sp-loader-code">${sampleLoader}</pre>
                 </td>
@@ -1445,8 +1557,16 @@ app.get('/', async (req, res) => {
         const wlListHtml = store.whitelist.length
             ? store.whitelist.map(w => {
                 const sc = getScriptById(w.scriptId);
+                const whoName = w.discordUsername || w.buyerName || w.label || w.id;
+                const remText = w.expiresAt ? formatRemainingTime(w) : (w.durationLabel || "lifetime");
                 return `<div class="sp-wl-row">
-                    <div><b>${escapeHtml(formatFullKeyDisplay(w.id))}</b> <span class="sp-sub-muted">(${escapeHtml(sc.name)})</span></div>
+                    <div class="sp-profile-chip">
+                        ${w.discordAvatarUrl ? `<img src="${escapeHtml(w.discordAvatarUrl)}" alt="avatar" class="sp-avatar-sm">` : `<span class="sp-avatar-fallback">WL</span>`}
+                        <div>
+                            <div><b>${escapeHtml(whoName)}</b> <code class="sp-inline-code">${escapeHtml(formatFullKeyDisplay(w.id))}</code> <span class="sp-sub-muted">(${escapeHtml(sc.name)} • ${escapeHtml(remText)})</span></div>
+                            ${w.discordUserId ? `<a href="https://discord.com/users/${encodeURIComponent(w.discordUserId)}" target="_blank" rel="noopener" class="sp-profile-link">Discord Profili (${escapeHtml(w.discordUserId)})</a>` : ""}
+                        </div>
+                    </div>
                     <a href="/unwhitelist?id=${encodeURIComponent(w.id)}" class="sp-link-danger">[Unwhitelist]</a>
                 </div>`;
             }).join("")
@@ -1799,6 +1919,12 @@ app.get('/', async (req, res) => {
       overflow-x: auto;
     }
     .sp-sub-muted { color: var(--text-secondary); font-size: 12px; }
+    .sp-profile-chip { display: flex; align-items: center; gap: 9px; }
+    .sp-avatar-sm { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(167, 139, 250, 0.45); flex-shrink: 0; }
+    .sp-avatar-fallback { width: 28px; height: 28px; border-radius: 50%; background: rgba(124, 58, 237, 0.25); border: 1px solid rgba(167, 139, 250, 0.35); color: #ddd6fe; font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sp-profile-link { color: var(--cyan); font-size: 11.5px; text-decoration: none; }
+    .sp-profile-link:hover { text-decoration: underline; }
+    .sp-inline-code { background: rgba(15, 23, 42, 0.9); padding: 2px 6px; border-radius: 6px; font-size: 11.5px; color: #e2e8f0; }
     .sp-link-warn { color: #fbbf24; text-decoration: none; margin-right: 10px; font-weight: 700; }
     .sp-link-danger { color: #fb7185; text-decoration: none; font-weight: 700; }
     .sp-mb-8 { margin-bottom: 8px; }
@@ -2021,6 +2147,15 @@ app.get('/', async (req, res) => {
         <select name="scriptId" class="sp-inline-select">
           ${scriptOptionsHtml}
         </select>
+        <select name="duration" class="sp-inline-select">
+          <option value="lifetime" selected>lifetime</option>
+          <option value="7d">7 day</option>
+          <option value="5d">5 day</option>
+          <option value="3d">3 day</option>
+          <option value="24h">24 hour</option>
+          <option value="5h">5 hour</option>
+          <option value="1h">1 hour</option>
+        </select>
         <button type="submit" class="sp-btn sp-btn-violet">Whitelist Et</button>
       </form>
       ${wlListHtml}
@@ -2030,6 +2165,7 @@ app.get('/', async (req, res) => {
       <tr class="sp-table-head">
         <th class="sp-th">Açar (Tam)</th>
         <th class="sp-th">Sahibi</th>
+        <th class="sp-th">Alan / Profil</th>
         <th class="sp-th">Skript</th>
         <th class="sp-th">Limit</th>
         <th class="sp-th">Müddət</th>
@@ -2384,9 +2520,9 @@ app.get('/create', (req, res) => {
             req.query.owner,
             req.query.duration,
             req.query.scriptId,
-            req.query.maxUsers,
-            req.query.autoRoleId
-        );
+app.post('/whitelist', async (req, res) => {
+    try {
+        await addToWhitelist(req.body.target, req.body.scriptId, req.body.duration);
         res.redirect('/');
     } catch (err) {
         res.status(500).send("Xəta baş verdi");
