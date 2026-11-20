@@ -70,6 +70,7 @@ let store = {
             code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
         }
     ],
+    whitelist: [], // [{ id: "123...", label: "User", scriptId: "sado-hub", addedAt: 1700000000000 }]
     keys: {
         "SADO-FREE-KEY": {
             owner: "Test User",
@@ -170,6 +171,17 @@ function loadStoreFromDisk() {
                         id: String(s.id),
                         name: String(s.name),
                         code: typeof s.code === "string" ? s.code : ""
+                    }));
+            }
+
+            if (Array.isArray(parsed.whitelist)) {
+                store.whitelist = parsed.whitelist
+                    .filter(w => w && w.id)
+                    .map(w => ({
+                        id: String(w.id).trim(),
+                        label: String(w.label || w.id).trim(),
+                        scriptId: String(w.scriptId || (store.scripts[0]?.id || "sado-hub")),
+                        addedAt: typeof w.addedAt === "number" ? w.addedAt : Date.now()
                     }));
             }
 
@@ -293,6 +305,53 @@ function getRedeemedKeyForDiscordUser(discordUserId) {
         }
     }
     return null;
+}
+
+function normalizeWhitelistIdentifier(rawValue) {
+    const cleaned = String(rawValue || "").trim();
+    const mentionMatch = cleaned.match(/^<@!?(\d+)>$/);
+    if (mentionMatch) return mentionMatch[1];
+    return cleaned;
+}
+
+function isWhitelistedIdentifier(identifier) {
+    const clean = normalizeWhitelistIdentifier(identifier).toLowerCase();
+    if (!clean) return null;
+    return store.whitelist.find(item => String(item.id).toLowerCase() === clean) || null;
+}
+
+function addToWhitelist(rawIdentifier, scriptId = "") {
+    const cleanId = normalizeWhitelistIdentifier(rawIdentifier);
+    if (!cleanId) return { ok: false, reason: "Deyer bosdur" };
+    const targetScript = getScriptById(scriptId);
+    const existing = store.whitelist.find(item => String(item.id).toLowerCase() === cleanId.toLowerCase());
+    if (existing) {
+        existing.scriptId = targetScript.id;
+        existing.label = cleanId;
+        saveStoreToDisk();
+        return { ok: true, entry: existing, updated: true };
+    }
+    const created = {
+        id: cleanId,
+        label: cleanId,
+        scriptId: targetScript.id,
+        addedAt: Date.now()
+    };
+    store.whitelist.push(created);
+    saveStoreToDisk();
+    return { ok: true, entry: created, updated: false };
+}
+
+function removeFromWhitelist(rawIdentifier) {
+    const cleanId = normalizeWhitelistIdentifier(rawIdentifier);
+    if (!cleanId) return false;
+    const beforeLen = store.whitelist.length;
+    store.whitelist = store.whitelist.filter(item => String(item.id).toLowerCase() !== cleanId.toLowerCase());
+    const removed = store.whitelist.length !== beforeLen;
+    if (removed) {
+        saveStoreToDisk();
+    }
+    return removed;
 }
 
 function buildLoaderSnippet(keyStr) {
@@ -453,7 +512,26 @@ async function stopDiscordBot() {
 function buildPanelSlashCommands() {
     const nameOption = new SlashCommandBuilder()
         .setName('panel')
-        .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir')
+        .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir veya whitelist idare edir')
+        .addStringOption(option => {
+            option
+                .setName('action')
+                .setDescription('Emeliyyat: panel, whitelist ve ya unwhitelist')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'panel (Control Panel gonder)', value: 'panel' },
+                    { name: 'whitelist (Ag siyahiyaya elave et)', value: 'whitelist' },
+                    { name: 'unwhitelist (Ag siyahidan cixar)', value: 'unwhitelist' }
+                );
+            return option;
+        })
+        .addStringOption(option => {
+            option
+                .setName('user')
+                .setDescription('Whitelist / Unwhitelist ucun Discord ID, @mention ve ya HWID/ad')
+                .setRequired(false);
+            return option;
+        })
         .addStringOption(option => {
             option
                 .setName('name')
@@ -541,6 +619,47 @@ async function startDiscordBot() {
                     if (interaction.commandName === 'panel') {
                         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+                        const actionChoice = String(interaction.options.getString('action') || 'panel').toLowerCase();
+                        const rawNameOption = interaction.options.getString('name');
+                        const rawUserOption = interaction.options.getString('user');
+
+                        if (actionChoice === 'whitelist') {
+                            if (!rawUserOption || !rawUserOption.trim()) {
+                                await interaction.editReply({
+                                    content: 'Whitelist ucun `user` sahesine Discord ID, mention ve ya HWID daxil edin. Mes: `/panel action:whitelist user:123456789012345678`'
+                                });
+                                return;
+                            }
+                            const chosenScript = rawNameOption
+                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
+                                : getScriptById("");
+                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
+                            if (!resAdd.ok) {
+                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` });
+                                return;
+                            }
+                            await interaction.editReply({
+                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**). Bu istifadeci key ve HWID limiti olmadan skripti islede biler.`
+                            });
+                            return;
+                        }
+
+                        if (actionChoice === 'unwhitelist') {
+                            if (!rawUserOption || !rawUserOption.trim()) {
+                                await interaction.editReply({
+                                    content: 'Unwhitelist ucun `user` sahesine cixarilacaq ID/HWID yazin. Mes: `/panel action:unwhitelist user:123456789012345678`'
+                                });
+                                return;
+                            }
+                            const removed = removeFromWhitelist(rawUserOption);
+                            await interaction.editReply({
+                                content: removed
+                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
+                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
+                            });
+                            return;
+                        }
+
                         if (!store.scripts.length) {
                             await interaction.editReply({
                                 content: 'Hec bir skript yaradilmayib. Evvelce saytda **+ NEW SCRIPTS** ile skript yaradin.'
@@ -548,7 +667,6 @@ async function startDiscordBot() {
                             return;
                         }
 
-                        const rawNameOption = interaction.options.getString('name');
                         const channel = interaction.channel;
 
                         if (rawNameOption) {
@@ -622,18 +740,12 @@ async function startDiscordBot() {
                         const input = new TextInputBuilder()
                             .setCustomId('key_input')
                             .setLabel('Acarinizi (Key) daxil edin')
-                            .setPlaceholder('Mes: SADO-ABC123')
-                            .setStyle(TextInputStyle.Short)
-                            .setRequired(true);
-                        modal.addComponents(new ActionRowBuilder().addComponents(input));
-                        await interaction.showModal(modal);
-                        return;
-                    }
-
-                    // Get Script düyməsi: key yazma modalı açılmır; key aktivləşməyibsə "Key aktivləşməyib!" deyir
+                    // Get Script düyməsi: key yazma modalı açılmır; whitelist varsa və ya key aktivləşibsə skripti verir
                     if (actionPart === 'sado_btn_script') {
+                        const wlEntry = isWhitelistedIdentifier(interaction.user.id);
                         const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
-                        if (!redeemed) {
+
+                        if (!wlEntry && !redeemed) {
                             await interaction.reply({
                                 content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.',
                                 flags: MessageFlags.Ephemeral
@@ -641,7 +753,9 @@ async function startDiscordBot() {
                             return;
                         }
 
-                        const snippet = buildLoaderSnippet(redeemed.key);
+                        const snippet = wlEntry
+                            ? buildLoaderSnippet(`WHITELIST-${wlEntry.id}`)
+                            : buildLoaderSnippet(redeemed.key);
                         const copyLink = buildOneTapCopyUrl(snippet);
                         const copyRow = new ActionRowBuilder().addComponents(
                             new ButtonBuilder()
@@ -650,8 +764,12 @@ async function startDiscordBot() {
                                 .setURL(copyLink)
                         );
 
+                        const headerLabel = wlEntry
+                            ? `SADOPROTECT Whitelist Loader (\`${wlEntry.id}\`)`
+                            : `SADOPROTECT Loader (\`${redeemed.key}\` • ${redeemed.entry.durationLabel || "lifetime"})`;
+
                         await interaction.reply({
-                            content: `SADOPROTECT Loader (\`${redeemed.key}\` • ${redeemed.entry.durationLabel || "lifetime"}):\n\`\`\`lua\n${snippet}\n\`\`\``,
+                            content: `${headerLabel}:\n\`\`\`lua\n${snippet}\n\`\`\``,
                             components: [copyRow],
                             flags: MessageFlags.Ephemeral
                         });
@@ -865,15 +983,15 @@ app.get('/', async (req, res) => {
                 <td style="padding:10px;border-bottom:1px solid #1e293b;">
                     <a href="/reset?pass=${safePassEnc}&key=${safeKEnc}" style="color:#fbbf24;text-decoration:none;margin-right:8px;">[HWID Sifirla]</a>
                     <a href="/delete?pass=${safePassEnc}&key=${safeKEnc}" style="color:#f87171;text-decoration:none;">[Sil]</a>
-                </td>
-            </tr>
-            <tr>
-                <td colspan="7" style="padding:8px 10px 14px 10px;border-bottom:1px solid #1e293b;background:#0f172a;">
-                    <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">Istifadeci Loader Kodu:</div>
-                    <pre style="margin:0;padding:8px;background:#020617;color:#38bdf8;border-radius:6px;overflow-x:auto;font-size:12px;">${sampleLoader}</pre>
-                </td>
-            </tr>`;
-        }
+        const wlListHtml = store.whitelist.length
+            ? store.whitelist.map(w => {
+                const sc = getScriptById(w.scriptId);
+                return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#0f172a;border:1px solid #1e293b;border-radius:6px;margin-bottom:6px;">
+                    <span><b>${escapeHtml(w.id)}</b> <span style="color:#94a3b8;font-size:12px;">(${escapeHtml(sc.name)})</span></span>
+                    <a href="/unwhitelist?pass=${safePassEnc}&id=${encodeURIComponent(w.id)}" style="color:#f87171;text-decoration:none;font-size:13px;">[Unwhitelist]</a>
+                </div>`;
+            }).join("")
+            : `<div style="color:#94a3b8;font-size:13px;">Whitelist siyahisi bosdur.</div>`;
 
         res.send(`<!DOCTYPE html>
 <html lang="az">
@@ -1090,6 +1208,19 @@ app.get('/', async (req, res) => {
         </select>
         <button type="submit" style="background:#10b981;color:white;border:none;padding:8px 15px;border-radius:6px;font-weight:bold;cursor:pointer;">+ Yeni Key Yarat</button>
     </form>
+
+    <div style="margin-bottom:20px;background:#131b2e;padding:15px;border-radius:10px;">
+        <h3 style="margin:0 0 10px 0;color:#38bdf8;font-size:16px;">Whitelist (Ag Siyahi)</h3>
+        <form action="/whitelist" method="POST" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+            <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+            <input type="text" name="target" placeholder="Discord ID, @mention ve ya HWID" required style="padding:8px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;min-width:220px;">
+            <select name="scriptId" style="padding:8px;border-radius:6px;border:none;background:#020617;color:white;">
+                ${scriptOptionsHtml}
+            </select>
+            <button type="submit" style="background:#8b5cf6;color:white;border:none;padding:8px 14px;border-radius:6px;font-weight:bold;cursor:pointer;">Whitelist Et</button>
+        </form>
+        ${wlListHtml}
+    </div>
 
     <table style="width:100%;background:#131b2e;border-radius:10px;border-collapse:collapse;text-align:left;overflow:hidden;">
         <tr style="background:#1e293b;color:#38bdf8;">
@@ -1337,32 +1468,20 @@ app.get('/create', (req, res) => {
             req.query.duration,
             req.query.scriptId,
             req.query.maxUsers,
-            req.query.autoRoleId
-        );
+app.post('/whitelist', (req, res) => {
+    try {
+        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
+        addToWhitelist(req.body.target, req.body.scriptId);
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
     }
 });
 
-app.get('/reset', (req, res) => {
+app.get('/unwhitelist', (req, res) => {
     try {
         if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        if (store.keys[req.query.key]) {
-            store.keys[req.query.key].users = [];
-            saveStoreToDisk();
-        }
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/delete', (req, res) => {
-    try {
-        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        delete store.keys[req.query.key];
-        saveStoreToDisk();
+        removeFromWhitelist(req.query.id);
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
@@ -1378,6 +1497,18 @@ app.get('/loader', (req, res) => {
 
         if (!userAgent.includes("Roblox")) {
             return res.status(403).send("-- SADOPROTECT: Access Denied!");
+        }
+
+        // Whitelist yoxlamasi: key olmadan ve limit/HWID maneeleri olmadan birbasa skripti verir
+        const isWlKey = userKey.startsWith("WHITELIST-");
+        const wlCandidateId = isWlKey ? userKey.replace(/^WHITELIST-/i, "") : "";
+        const matchedWhitelist =
+            (isWlKey ? isWhitelistedIdentifier(wlCandidateId) : null) ||
+            (userHwid ? isWhitelistedIdentifier(userHwid) : null);
+
+        if (matchedWhitelist) {
+            const wlScript = getScriptById(matchedWhitelist.scriptId);
+            return res.type('text/plain').send(wlScript.code);
         }
 
         const keyEntry = userKey ? store.keys[userKey] : null;
