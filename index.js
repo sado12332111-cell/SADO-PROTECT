@@ -820,6 +820,13 @@ async function startDiscordBot() {
                         const input = new TextInputBuilder()
                             .setCustomId('key_input')
                             .setLabel('Acarinizi (Key) daxil edin')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true);
+                        modal.addComponents(new ActionRowBuilder().addComponents(input));
+                        await interaction.showModal(modal);
+                        return;
+                    }
+
                     // Get Script düyməsi: key yazma modalı açılmır; whitelist varsa və ya key aktivləşibsə skripti verir
                     if (actionPart === 'sado_btn_script') {
                         const wlEntry = isWhitelistedIdentifier(interaction.user.id);
