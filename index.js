@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const {
     Client,
     GatewayIntentBits,
@@ -19,16 +20,21 @@ const {
 } = require('discord.js');
 
 const app = express();
+app.disable('x-powered-by');
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ================= AYARLAR =================
-const ADMIN_PASS = "SADO2026";
 const DATA_FILE = path.join(__dirname, 'sado_protect_data.json');
 const DEFAULT_CLIENT_ID = "1562080654282199121";
-const DEFAULT_PERMISSIONS = "139586488320";
 const EMBEDDED_BOT_TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
+// Loader sorğularının kənar brauzer/scraper tərəfindən kopyalanmasının və key sızmasının qarşısını almaq üçün imzalama açarı
+const SIGNING_SECRET = String(process.env.SADO_SIGNING_SECRET || crypto.randomBytes(24).toString('hex')).trim();
 let panelBaseUrl = process.env.RENDER_EXTERNAL_URL || "";
+
+// Qısa müddətli loader bilet (nonce/ticket) anbarı: key birbaşa URL-də açıq qalmır və biletlər tez bitir
+const loaderTickets = new Map();
+const TICKET_TTL_MS = 90 * 1000;
 
 const DURATION_MS_MAP = {
     "1h": 1 * 60 * 60 * 1000,
@@ -52,7 +58,6 @@ let store = {
     discordConfig: {
         enabled: true,
         clientId: DEFAULT_CLIENT_ID,
-        permissions: DEFAULT_PERMISSIONS,
         autoRoleId: "",
         welcomeChannelId: "",
         panelEmbedTitle: "{script} — Control Panel",
@@ -109,6 +114,43 @@ function makeSlugId(name) {
     return (clean || "script") + "-" + Math.random().toString(36).substring(2, 6);
 }
 
+// Key-i birbaşa açıq göstərmədən maskalayır (sızma riskini azaldır)
+function maskKeyValue(rawKey) {
+    const k = String(rawKey || "");
+    if (k.length <= 6) return "******";
+    return `${k.slice(0, 5)}••••${k.slice(-2)}`;
+}
+
+// Key və script üçün qorunan qısa ömürlü loader bileti yaradır
+function issueProtectedLoaderTicket({ mode, identifier, scriptId, discordUserId }) {
+    const ticketId = crypto.randomBytes(18).toString('hex');
+    const expiresAt = Date.now() + TICKET_TTL_MS;
+    const signature = crypto
+        .createHmac('sha256', SIGNING_SECRET)
+        .update(`${ticketId}:${mode}:${identifier}:${scriptId}:${expiresAt}`)
+        .digest('hex');
+
+    loaderTickets.set(ticketId, {
+        mode,
+        identifier,
+        scriptId,
+        discordUserId: discordUserId || null,
+        expiresAt,
+        signature,
+        used: false
+    });
+    return ticketId;
+}
+
+function purgeExpiredTickets() {
+    const now = Date.now();
+    for (const [tid, tData] of loaderTickets.entries()) {
+        if (!tData || tData.expiresAt <= now || tData.used) {
+            loaderTickets.delete(tid);
+        }
+    }
+}
+
 function getRuntimeBotToken() {
     const envToken = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
     return envToken || EMBEDDED_BOT_TOKEN;
@@ -118,29 +160,57 @@ function isBotCurrentlyOnline() {
     return Boolean(discordClient && discordClient.isReady && discordClient.isReady() && discordClient.user);
 }
 
-function buildJoinDiscordUrl() {
-    const clientId = String(store.discordConfig.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
-    const perms = String(store.discordConfig.permissions || DEFAULT_PERMISSIONS).trim() || DEFAULT_PERMISSIONS;
-    return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&permissions=${encodeURIComponent(perms)}&integration_type=0&scope=bot+applications.commands`;
+function isAdminAuthorized() {
+    // Admin şifrəsi deaktivdir — birbaşa daxil olma aktivdir
+    return true;
 }
 
-function isAdminAuthorized(req) {
-    const candidatePass = String((req.query && req.query.pass) || (req.body && req.body.pass) || "").trim();
-    if (!ADMIN_PASS || !candidatePass) return true;
-    return candidatePass === ADMIN_PASS;
-}
+function saveStoreToDisk() {
+    try {
+        const safeStore = {
+            discordConfig: {
+                enabled: Boolean(store.discordConfig.enabled),
+                clientId: String(store.discordConfig.clientId || DEFAULT_CLIENT_ID),
+                autoRoleId: String(store.discordConfig.autoRoleId || ""),
+                welcomeChannelId: String(store.discordConfig.welcomeChannelId || ""),
+                panelEmbedTitle: String(store.discordConfig.panelEmbedTitle || "{script} — Control Panel"),
+                panelEmbedDesc: String(store.discordConfig.panelEmbedDesc || ""),
+                panelEmbedColor: String(store.discordConfig.panelEmbedColor || "#7c3aed"),
+                btnRedeemLabel: String(store.discordConfig.btnRedeemLabel || "Redeem Key"),
+                btnRedeemStyle: String(store.discordConfig.btnRedeemStyle || "Success"),
+                btnScriptLabel: String(store.discordConfig.btnScriptLabel || "Get Script"),
+                btnScriptStyle: String(store.discordConfig.btnScriptStyle || "Primary"),
+                btnHwidLabel: String(store.discordConfig.btnHwidLabel || "Reset HWID"),
+                btnHwidStyle: String(store.discordConfig.btnHwidStyle || "Secondary"),
+                btnStatsLabel: String(store.discordConfig.btnStatsLabel || "Get Stats"),
+                btnStatsStyle: String(store.discordConfig.btnStatsStyle || "Secondary")
+            },
+            scripts: Array.isArray(store.scripts) ? store.scripts : [],
+            whitelist: Array.isArray(store.whitelist) ? store.whitelist : [],
+            keys: store.keys && typeof store.keys === 'object' ? store.keys : {}
+        };
         fs.writeFileSync(DATA_FILE, JSON.stringify(safeStore, null, 2), 'utf8');
     } catch (err) {
         console.error("Məlumat fayla yazıla bilmədi:", err.message);
     }
 }
+function buildLoaderSnippet(keyStr, scriptId = "", discordUserId = null) {
+    const base = getBaseUrl();
+    const cleanKey = String(keyStr || "").trim();
+    const isWl = cleanKey.toUpperCase().startsWith("WHITELIST-");
+    const identifier = isWl ? cleanKey.replace(/^WHITELIST-/i, "") : cleanKey;
+    const mode = isWl ? "whitelist" : "key";
+    const resolvedScriptId = scriptId || (store.keys[cleanKey] && store.keys[cleanKey].scriptId) || getScriptById("").id;
 
-function loadStoreFromDisk() {
-    try {
-        if (!fs.existsSync(DATA_FILE)) {
-            saveStoreToDisk();
-            return;
-        }
+    const ticket = issueProtectedLoaderTicket({
+        mode,
+        identifier,
+        scriptId: resolvedScriptId,
+        discordUserId
+    });
+
+    return `local hwid = game:GetService("RbxAnalyticsService"):GetClientId()\nloadstring(game:HttpGet("${base}/loader?ticket=${ticket}&hwid=" .. hwid))()`;
+}
         const raw = fs.readFileSync(DATA_FILE, 'utf8');
         const parsed = JSON.parse(raw);
 
@@ -549,6 +619,7 @@ async function postOnboardingPanelToGuild(guild) {
 
 setInterval(() => {
     purgeExpiredKeys();
+    purgeExpiredTickets();
 }, 15000);
 
 async function stopDiscordBot() {
@@ -904,8 +975,8 @@ async function startDiscordBot() {
                         }
 
                         const snippet = wlEntry
-                            ? buildLoaderSnippet(`WHITELIST-${wlEntry.id}`)
-                            : buildLoaderSnippet(redeemed.key);
+                            ? buildLoaderSnippet(`WHITELIST-${wlEntry.id}`, wlEntry.scriptId || activeScript.id, interaction.user.id)
+                            : buildLoaderSnippet(redeemed.key, redeemed.entry.scriptId || activeScript.id, interaction.user.id);
                         const copyLink = buildOneTapCopyUrl(snippet);
                         const copyRow = new ActionRowBuilder().addComponents(
                             new ButtonBuilder()
@@ -915,12 +986,30 @@ async function startDiscordBot() {
                         );
 
                         const headerLabel = wlEntry
-                            ? `SADOPROTECT Whitelist Loader (\`${wlEntry.id}\`)`
-                            : `SADOPROTECT Loader (\`${redeemed.key}\` • ${redeemed.entry.durationLabel || "lifetime"})`;
+                            ? `SADOPROTECT Qorunan Loader (\`${maskKeyValue(wlEntry.id)}\`)`
+                            : `SADOPROTECT Qorunan Loader (\`${maskKeyValue(redeemed.key)}\` • ${redeemed.entry.durationLabel || "lifetime"})`;
 
                         await interaction.editReply({
-                            content: `${headerLabel}:\n\`\`\`lua\n${snippet}\n\`\`\``,
+                            content: `${headerLabel}\n*Qeyd: Key və bilet təhlükəsizlik üçün maskalanıb və 90 saniyə ərzində etibarlıdır.*\n\`\`\`lua\n${snippet}\n\`\`\``,
                             components: [copyRow]
+                        });
+                        return;
+                    }
+
+                    if (actionPart === 'sado_btn_hwid') {
+                        const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
+                        if (!redeemed) {
+                            await interaction.editReply({
+                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.'
+                            });
+                            return;
+                        }
+
+                        redeemed.entry.users = [];
+                        saveStoreToDisk();
+
+                        await interaction.editReply({
+                            content: `HWID sıfırlandı (\`${maskKeyValue(redeemed.key)}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər.`
                         });
                         return;
                     }
@@ -999,7 +1088,7 @@ async function startDiscordBot() {
                             : "";
 
                         await interaction.editReply({
-                            content: `Key ugurla tesdiqlendi (\`${submittedKey}\`). Indi **Get Script** ve **Reset HWID** duymeleri aktivdir. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
+                            content: `Key ugurla tesdiqlendi (\`${maskKeyValue(submittedKey)}\`). Indi **Get Script** ve **Reset HWID** duymeleri aktivdir. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
                         });
                         return;
                     }
@@ -1025,52 +1114,35 @@ async function startDiscordBot() {
 app.get('/', async (req, res) => {
     try {
         purgeExpiredKeys();
+        purgeExpiredTickets();
         if (discordClient) {
             await refreshGuildRoles(discordClient);
         }
 
         getBaseUrl(req);
-        const viewMode = String(req.query.view || "hub").toLowerCase();
-        const isPanelView = viewMode === "panel";
         const activeTab = req.query.tab === "discord" ? "discord" : "main";
         const msgType = String(req.query.msg || "");
         let bannerHtml = "";
         if (msgType === "script_created") {
-            bannerHtml = `<div class="sp-banner sp-banner-success">Yeni skript yadda saxlanildi!</div>`;
+            bannerHtml = `<div class="sp-toast sp-toast-ok">Yeni skript qorunan rejimdə yadda saxlanıldı!</div>`;
         } else if (msgType === "script_updated") {
-            bannerHtml = `<div class="sp-banner sp-banner-info">Skript deyisdirildi ve yadda saxlanildi!</div>`;
+            bannerHtml = `<div class="sp-toast sp-toast-info">Skript yeniləndi və yadda saxlanıldı!</div>`;
         } else if (msgType === "script_deleted") {
-            bannerHtml = `<div class="sp-banner sp-banner-danger">Skript silindi!</div>`;
+            bannerHtml = `<div class="sp-toast sp-toast-err">Skript silindi!</div>`;
         } else if (msgType === "bot_saved") {
-            bannerHtml = `<div class="sp-banner sp-banner-info">Join Discord ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
+            bannerHtml = `<div class="sp-toast sp-toast-info">Bot ayarları saxlanıldı. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
         } else if (msgType === "panel_style_saved") {
-            bannerHtml = `<div class="sp-banner sp-banner-violet">Discord panel buton adlari ve rengleri yadda saxlanildi!</div>`;
+            bannerHtml = `<div class="sp-toast sp-toast-violet">Discord panel görünüşü və buton ayarları yadda saxlanıldı!</div>`;
         }
-
-        const joinDiscordUrl = buildJoinDiscordUrl();
-        const panelHref = "/?view=panel";
-        const hubHref = "/";
-            bannerHtml = `<div style="background:#065f46;color:#d1fae5;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Yeni skript yadda saxlanildi!</div>`;
-        } else if (msgType === "script_updated") {
-            bannerHtml = `<div style="background:#1d4ed8;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Skript deyisdirildi ve yadda saxlanildi!</div>`;
-        } else if (msgType === "script_deleted") {
-            bannerHtml = `<div style="background:#7f1d1d;color:#fecaca;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Skript silindi!</div>`;
-        } else if (msgType === "bot_saved") {
-            bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Join Discord ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
-        } else if (msgType === "panel_style_saved") {
-            bannerHtml = `<div style="background:#5b21b6;color:#ede9fe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord panel buton adlari ve rengleri yadda saxlanildi!</div>`;
-        }
-
-        const joinDiscordUrl = buildJoinDiscordUrl();
 
         const renderStyleSelect = (fieldName, currentVal) => {
             const opts = [
-                { val: "Success", label: "Yasil (Success)" },
+                { val: "Success", label: "Yaşıl (Success)" },
                 { val: "Primary", label: "Mavi (Primary)" },
                 { val: "Secondary", label: "Boz (Secondary)" },
-                { val: "Danger", label: "Qirmizi (Danger)" }
+                { val: "Danger", label: "Qırmızı (Danger)" }
             ];
-            return `<select name="${fieldName}" style="padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;">
+            return `<select name="${fieldName}" class="sp-select-mini">
                 ${opts.map(o => `<option value="${o.val}" ${currentVal === o.val ? "selected" : ""}>${o.label}</option>`).join("")}
             </select>`;
         };
@@ -1088,18 +1160,21 @@ app.get('/', async (req, res) => {
         ).join("");
 
         const savedScriptsHtml = store.scripts.map(sc => `
-            <details class="sp-script-item">
-                <summary class="sp-script-summary">
-                    <span><b>${escapeHtml(sc.name)}</b> <span class="sp-muted-tag">(Deyisdirmek ucun basin)</span></span>
-                    <a href="/delete-script?id=${encodeURIComponent(sc.id)}" class="sp-danger-link">[Sil]</a>
+            <details class="sp-script-card">
+                <summary class="sp-script-head">
+                    <div class="sp-script-meta">
+                        <span class="sp-dot"></span>
+                        <b>${escapeHtml(sc.name)}</b>
+                        <span class="sp-pill-muted">ID: ${escapeHtml(sc.id)}</span>
+                    </div>
+                    <a href="/delete-script?id=${encodeURIComponent(sc.id)}" class="sp-link-danger">[Sil]</a>
                 </summary>
-                <form action="/edit-script" method="POST" class="sp-mt-3">
-                    <input type="hidden" name="scriptId" value="${escapeHtml(sc.id)}">
-                    <label class="sp-label">Skriptin adi:</label>
-                    <input type="text" name="scriptName" value="${escapeHtml(sc.name)}" required class="sp-input sp-mb-2">
-                    <label class="sp-label">Skriptin kodu:</label>
-                    <textarea name="scriptCode" rows="6" required class="sp-textarea sp-mb-2">${escapeHtml(sc.code)}</textarea>
-                    <button type="submit" class="sp-btn sp-btn-blue">Skripti Deyisdir</button>
+                <form action="/edit-script" method="POST" class="sp-mt-12">
+                    <label class="sp-label">Skriptin adı:</label>
+                    <input type="text" name="scriptName" value="${escapeHtml(sc.name)}" required class="sp-input sp-mb-8">
+                    <label class="sp-label">Skriptin kodu (yalnız icazəli loader biletinə ötürülür):</label>
+                    <textarea name="scriptCode" rows="6" required class="sp-textarea sp-mb-8">${escapeHtml(sc.code)}</textarea>
+                    <button type="submit" class="sp-btn sp-btn-blue">Skripti Dəyişdir</button>
                 </form>
             </details>
         `).join("");
@@ -1107,7 +1182,6 @@ app.get('/', async (req, res) => {
         let rows = "";
         for (let k in store.keys) {
             const item = store.keys[k];
-            const safeK = escapeHtml(k);
             const safeKEnc = encodeURIComponent(k);
             const safeOwner = escapeHtml(item.owner);
             const scObj = getScriptById(item.scriptId);
@@ -1117,24 +1191,26 @@ app.get('/', async (req, res) => {
             const maxU = Math.max(1, parseInt(item.maxUsers, 10) || 1);
             const usedU = Array.isArray(item.users) ? item.users.length : 0;
             const roleBadge = item.autoRoleId ? escapeHtml(item.autoRoleId) : "Yoxdur";
-            const sampleLoader = escapeHtml(buildLoaderSnippet(k));
+            // Panel cədvəlində açar sızmasının qarşısını almaq üçün maskalanmış açar və təhlükəsiz loader göstərilir
+            const protectedDisplayKey = escapeHtml(maskKeyValue(k));
+            const sampleLoader = escapeHtml(buildLoaderSnippet(k, item.scriptId));
 
             rows += `<tr>
-                <td class="sp-td"><b>${safeK}</b></td>
+                <td class="sp-td"><code class="sp-key-chip" title="Qorunan açar görünüşü">${protectedDisplayKey}</code></td>
                 <td class="sp-td">${safeOwner}</td>
                 <td class="sp-td">${safeScriptName}</td>
-                <td class="sp-td">${usedU}/${maxU}</td>
-                <td class="sp-td">${safeDuration} <span class="sp-muted-tag">(${safeRemaining})</span></td>
+                <td class="sp-td"><span class="sp-badge-count">${usedU}/${maxU}</span></td>
+                <td class="sp-td">${safeDuration} <span class="sp-sub-muted">(${safeRemaining})</span></td>
                 <td class="sp-td">${roleBadge}</td>
                 <td class="sp-td">
-                    <a href="/reset?key=${safeKEnc}" class="sp-warn-link">[HWID Sifirla]</a>
-                    <a href="/delete?key=${safeKEnc}" class="sp-danger-link">[Sil]</a>
+                    <a href="/reset?key=${safeKEnc}" class="sp-link-warn">[HWID Sıfırla]</a>
+                    <a href="/delete?key=${safeKEnc}" class="sp-link-danger">[Sil]</a>
                 </td>
             </tr>
             <tr>
-                <td colspan="7" class="sp-loader-row">
-                    <div class="sp-loader-title">Loader Kodu:</div>
-                    <pre class="sp-loader-pre">${sampleLoader}</pre>
+                <td colspan="7" class="sp-loader-cell">
+                    <div class="sp-loader-caption">Qorunan Loader (90s Bilet + HWID Lock):</div>
+                    <pre class="sp-loader-code">${sampleLoader}</pre>
                 </td>
             </tr>`;
         }
@@ -1142,746 +1218,593 @@ app.get('/', async (req, res) => {
         const wlListHtml = store.whitelist.length
             ? store.whitelist.map(w => {
                 const sc = getScriptById(w.scriptId);
-                return `<div class="sp-wl-item">
-                    <span><b>${escapeHtml(w.id)}</b> <span class="sp-muted-tag">(${escapeHtml(sc.name)})</span></span>
-                    <a href="/unwhitelist?id=${encodeURIComponent(w.id)}" class="sp-danger-link">[Unwhitelist]</a>
+                return `<div class="sp-wl-row">
+                    <div><b>${escapeHtml(maskKeyValue(w.id))}</b> <span class="sp-sub-muted">(${escapeHtml(sc.name)})</span></div>
+                    <a href="/unwhitelist?id=${encodeURIComponent(w.id)}" class="sp-link-danger">[Unwhitelist]</a>
                 </div>`;
             }).join("")
-            : `<div class="sp-muted-text">Whitelist siyahisi bosdur.</div>`;
+            : `<div class="sp-sub-muted">Whitelist siyahısı boşdur.</div>`;
+
+        const totalScripts = store.scripts.length;
+        const totalKeys = Object.keys(store.keys).length;
+        const totalWhitelist = store.whitelist.length;
+        const botOnline = isBotCurrentlyOnline();
 
         res.send(`<!DOCTYPE html>
 <html lang="az">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SADOPROTECT — LuaProtect &amp; Control Suite</title>
+  <title>SADOPROTECT — Control Dashboard</title>
   <style>
     :root {
-      --bg-0: #05070e;
-      --bg-1: #0b1020;
-      --bg-2: #11182e;
-      --line: rgba(148, 163, 184, 0.16);
-      --line-glow: rgba(124, 58, 237, 0.45);
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --accent-violet: #8b5cf6;
-      --accent-cyan: #22d3ee;
-      --accent-indigo: #5865F2;
-      --accent-emerald: #10b981;
+      --bg-base: #060913;
+      --bg-surface: #0d1324;
+      --bg-elevated: #131c34;
+      --border-subtle: rgba(148, 163, 184, 0.14);
+      --border-accent: rgba(124, 58, 237, 0.42);
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --violet: #7c3aed;
+      --violet-bright: #a78bfa;
+      --cyan: #22d3ee;
+      --emerald: #10b981;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       background:
-        radial-gradient(circle at 15% 10%, rgba(139, 92, 246, 0.18), transparent 42%),
-        radial-gradient(circle at 85% 18%, rgba(34, 211, 238, 0.14), transparent 40%),
-        linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 100%);
-      color: var(--text-main);
-      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        radial-gradient(ellipse 70% 45% at 12% 0%, rgba(124, 58, 237, 0.18), transparent 65%),
+        radial-gradient(ellipse 60% 40% at 88% 8%, rgba(34, 211, 238, 0.13), transparent 65%),
+        var(--bg-base);
+      color: var(--text-primary);
+      font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       padding: 20px;
-      overflow-x: hidden;
     }
-    .sp-intro-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 9999;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      text-align: center;
-      background:
-        radial-gradient(circle at 50% 42%, rgba(139, 92, 246, 0.28), transparent 55%),
-        radial-gradient(circle at 25% 75%, rgba(34, 211, 238, 0.16), transparent 45%),
-        #05070e;
-      transition: opacity 0.55s ease, visibility 0.55s ease, transform 0.55s ease;
-    }
-    .sp-intro-overlay.sp-intro-hide {
-      opacity: 0;
-      visibility: hidden;
-      transform: scale(1.04);
-      pointer-events: none;
-    }
-    .sp-intro-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 14px;
-      border-radius: 999px;
-      border: 1px solid rgba(139, 92, 246, 0.45);
-      background: rgba(139, 92, 246, 0.14);
-      color: #c4b5fd;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      margin-bottom: 16px;
-      animation: spFloatBadge 2.4s ease-in-out infinite;
-    }
-    .sp-intro-title {
-      margin: 0;
-      font-size: clamp(28px, 6.2vw, 56px);
-      font-weight: 900;
-      letter-spacing: 0.04em;
-      background: linear-gradient(90deg, #ffffff 0%, #c4b5fd 42%, #22d3ee 100%);
-      background-size: 200% auto;
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      animation: spShineText 3s linear infinite, spPopIn 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
-      text-shadow: 0 0 36px rgba(139, 92, 246, 0.35);
-    }
-    .sp-intro-sub {
-      margin-top: 12px;
-      color: var(--text-muted);
-      font-size: clamp(13px, 2.5vw, 16px);
-      max-width: 520px;
-      line-height: 1.5;
-      animation: spFadeUp 0.95s ease 0.18s both;
-    }
-    .sp-intro-bar {
-      margin-top: 24px;
-      width: min(280px, 75vw);
-      height: 4px;
-      border-radius: 999px;
-      background: rgba(148, 163, 184, 0.16);
-      overflow: hidden;
-    }
-    .sp-intro-bar > span {
-      display: block;
-      height: 100%;
-      width: 100%;
-      border-radius: 999px;
-      background: linear-gradient(90deg, var(--accent-violet), var(--accent-cyan));
-      transform-origin: left center;
-      animation: spProgressSweep 1.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-    }
-    .sp-intro-skip {
-      margin-top: 16px;
-      background: transparent;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      color: var(--text-muted);
-      padding: 6px 14px;
-      border-radius: 8px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: color 0.2s ease, border-color 0.2s ease;
-    }
-    .sp-intro-skip:hover {
-      color: #ffffff;
-      border-color: rgba(139, 92, 246, 0.6);
-    }
-    @keyframes spShineText {
-      0% { background-position: 0% center; }
-      100% { background-position: 200% center; }
-    }
-    @keyframes spPopIn {
-      0% { opacity: 0; transform: translateY(18px) scale(0.94); }
-      100% { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    @keyframes spFadeUp {
-      0% { opacity: 0; transform: translateY(12px); }
-      100% { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes spFloatBadge {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-4px); }
-    }
-    @keyframes spProgressSweep {
-      0% { transform: scaleX(0); }
-      100% { transform: scaleX(1); }
-    }
-
-    .sp-shell {
-      max-width: 1040px;
+    .sp-container {
+      max-width: 1060px;
       margin: 0 auto;
-      animation: spFadeUp 0.6s ease both;
     }
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      background: rgba(17, 24, 46, 0.85);
-      backdrop-filter: blur(14px);
-      padding: 12px 16px;
-      border-radius: 14px;
-      margin-bottom: 18px;
-      border: 1px solid var(--line);
-      position: relative;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-    }
-    .hamburger-btn {
-      background: rgba(30, 41, 59, 0.85);
-      border: 1px solid rgba(148, 163, 184, 0.24);
-      color: var(--accent-cyan);
-      width: 42px;
-      height: 40px;
-      border-radius: 10px;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      gap: 5px;
-      padding: 0;
-      transition: transform 0.18s ease, border-color 0.2s ease;
-    }
-    .hamburger-btn:hover {
-      transform: translateY(-1px);
-      border-color: var(--accent-violet);
-    }
-    .hamburger-btn span {
-      display: block;
-      width: 20px;
-      height: 2px;
-      background: var(--accent-cyan);
-      border-radius: 2px;
-    }
-    .drawer-menu {
-      display: none;
-      position: absolute;
-      top: 64px;
-      left: 0;
-      width: 260px;
-      background: #0d1426;
-      border: 1px solid rgba(139, 92, 246, 0.35);
-      border-radius: 12px;
-      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65);
-      z-index: 120;
-      overflow: hidden;
-    }
-    .drawer-menu.open {
-      display: block;
-      animation: spFadeUp 0.2s ease both;
-    }
-    .drawer-menu a {
-      display: block;
-      padding: 13px 16px;
-      color: #e2e8f0;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 14px;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-      transition: background 0.18s ease, color 0.18s ease;
-    }
-    .drawer-menu a:last-child { border-bottom: none; }
-    .drawer-menu a:hover, .drawer-menu a.active {
-      background: rgba(139, 92, 246, 0.16);
-      color: var(--accent-cyan);
-    }
-
-    .sp-hero-card {
-      position: relative;
-      background: linear-gradient(145deg, rgba(17, 24, 46, 0.92), rgba(10, 15, 30, 0.95));
-      border: 1px solid rgba(139, 92, 246, 0.34);
-      border-radius: 18px;
-      padding: 28px 24px;
-      margin-bottom: 20px;
-      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    }
-    .sp-hero-kicker {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--accent-cyan);
-      background: rgba(34, 211, 238, 0.1);
-      border: 1px solid rgba(34, 211, 238, 0.28);
-      padding: 5px 12px;
-      border-radius: 999px;
-      margin-bottom: 12px;
-    }
-    .sp-hero-title {
-      margin: 0 0 8px 0;
-      font-size: clamp(24px, 4.5vw, 36px);
-      font-weight: 900;
-      letter-spacing: -0.01em;
-      color: #ffffff;
-    }
-    .sp-hero-desc {
-      margin: 0 0 22px 0;
-      color: var(--text-muted);
-      font-size: 14px;
-      line-height: 1.6;
-      max-width: 660px;
-    }
-    .sp-stack-actions {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 12px;
-      max-width: 340px;
-    }
-    .join-discord-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      background: linear-gradient(135deg, #5865F2 0%, #4752C4 100%);
-      color: #ffffff;
-      text-decoration: none;
-      padding: 13px 20px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      box-shadow: 0 10px 24px rgba(88, 101, 242, 0.35);
-      transition: transform 0.18s ease, box-shadow 0.2s ease, filter 0.2s ease;
-    }
-    .join-discord-btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 14px 28px rgba(88, 101, 242, 0.48);
-      filter: brightness(1.06);
-    }
-    .sp-panel-launch-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      background: linear-gradient(135deg, rgba(139, 92, 246, 0.22) 0%, rgba(34, 211, 238, 0.16) 100%);
-      color: #f8fafc;
-      text-decoration: none;
-      padding: 13px 20px;
-      border-radius: 12px;
-      font-weight: 700;
-      font-size: 14px;
-      border: 1px solid rgba(139, 92, 246, 0.5);
-      box-shadow: 0 8px 22px rgba(124, 58, 237, 0.22);
-      transition: transform 0.18s ease, border-color 0.2s ease, background 0.2s ease;
-    }
-    .sp-panel-launch-btn:hover {
-      transform: translateY(-2px);
-      border-color: var(--accent-cyan);
-      background: linear-gradient(135deg, rgba(139, 92, 246, 0.34) 0%, rgba(34, 211, 238, 0.24) 100%);
-    }
-    .sp-feature-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 14px;
-      margin-top: 22px;
-    }
-    .sp-feature-box {
-      background: rgba(11, 16, 32, 0.72);
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 16px;
-    }
-    .sp-feature-box h4 {
-      margin: 0 0 6px 0;
-      font-size: 14px;
-      color: #ffffff;
-    }
-    .sp-feature-box p {
-      margin: 0;
-      font-size: 12.5px;
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-
-    .sp-card {
-      margin-bottom: 20px;
-      background: rgba(17, 24, 46, 0.86);
-      border: 1px solid var(--line);
-      padding: 18px;
-      border-radius: 14px;
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
-    }
-    .sp-subbar {
+    .sp-header {
       display: flex;
       flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      background: rgba(13, 19, 36, 0.88);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 14px 18px;
+      margin-bottom: 18px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.4);
+    }
+    .sp-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+    .sp-brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+      background: linear-gradient(135deg, var(--violet), var(--cyan));
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      font-size: 16px;
+      color: #ffffff;
+      box-shadow: 0 8px 20px rgba(124, 58, 237, 0.35);
+    }
+    .sp-brand-title {
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      color: #ffffff;
+    }
+    .sp-brand-sub {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+    }
+    .sp-nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .sp-nav-btn {
+      text-decoration: none;
+      padding: 9px 15px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      background: rgba(19, 28, 52, 0.85);
+      border: 1px solid var(--border-subtle);
+      transition: all 0.16s ease;
+    }
+    .sp-nav-btn:hover, .sp-nav-btn.active {
+      color: #ffffff;
+      border-color: var(--border-accent);
+      background: linear-gradient(135deg, rgba(124, 58, 237, 0.25), rgba(34, 211, 238, 0.12));
+    }
+    .sp-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--border-subtle);
+      background: rgba(6, 9, 19, 0.75);
+    }
+    .sp-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: ${botOnline ? "#10b981" : "#f59e0b"};
+      box-shadow: 0 0 10px ${botOnline ? "#10b981" : "#f59e0b"};
+    }
+
+    .sp-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .sp-stat-card {
+      background: rgba(13, 19, 36, 0.85);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+    .sp-stat-label {
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    .sp-stat-value {
+      font-size: 20px;
+      font-weight: 800;
+      color: #ffffff;
+    }
+    .sp-stat-hint {
+      font-size: 11.5px;
+      color: var(--cyan);
+      margin-top: 4px;
+    }
+
+    .sp-panel {
+      background: rgba(13, 19, 36, 0.88);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 18px 20px;
+      margin-bottom: 18px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+    }
+    .sp-panel-title {
+      margin: 0 0 12px 0;
+      font-size: 16px;
+      font-weight: 800;
+      color: #ffffff;
+      display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      margin-bottom: 16px;
     }
-    .sp-pill-nav {
-      display: inline-flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .sp-pill-link {
-      text-decoration: none;
-      padding: 8px 14px;
-      border-radius: 10px;
-      font-size: 13px;
+    .sp-shield-tag {
+      font-size: 11px;
       font-weight: 700;
-      color: var(--text-muted);
-      background: rgba(15, 23, 42, 0.8);
-      border: 1px solid var(--line);
-      transition: all 0.18s ease;
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.14);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      padding: 4px 10px;
+      border-radius: 999px;
     }
-    .sp-pill-link.active, .sp-pill-link:hover {
-      color: #ffffff;
-      border-color: var(--accent-violet);
-      background: rgba(139, 92, 246, 0.2);
+    .sp-label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 6px;
     }
-
-    .sp-label { display: block; font-size: 13px; color: #cbd5e1; margin-bottom: 5px; }
     .sp-input, .sp-textarea, .sp-select {
       width: 100%;
-      padding: 9px 11px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      background: #040814;
-      color: #e2e8f0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: #060913;
+      color: #f8fafc;
       font-size: 13.5px;
+      transition: border-color 0.15s ease;
+    }
+    .sp-input:focus, .sp-textarea:focus, .sp-select:focus {
+      outline: none;
+      border-color: var(--violet-bright);
     }
     .sp-inline-input, .sp-inline-select {
-      padding: 9px 11px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      background: #040814;
-      color: #e2e8f0;
+      padding: 9px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: #060913;
+      color: #f8fafc;
       font-size: 13px;
     }
-    .sp-textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .sp-select-mini {
+      padding: 9px 10px;
+      border-radius: 9px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: #060913;
+      color: #f8fafc;
+      font-size: 12.5px;
+    }
+    .sp-textarea {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      line-height: 1.5;
+    }
     .sp-btn {
       border: none;
-      padding: 9px 16px;
-      border-radius: 9px;
+      padding: 10px 16px;
+      border-radius: 10px;
       font-weight: 700;
       font-size: 13px;
       color: #ffffff;
       cursor: pointer;
-      transition: transform 0.15s ease, filter 0.18s ease;
+      transition: transform 0.15s ease, filter 0.15s ease;
     }
-    .sp-btn:hover { transform: translateY(-1px); filter: brightness(1.06); }
-    .sp-btn-emerald { background: #10b981; }
-    .sp-btn-blue { background: #2563eb; }
-    .sp-btn-indigo { background: #6366f1; }
-    .sp-btn-violet { background: #8b5cf6; }
+    .sp-btn:hover { transform: translateY(-1px); filter: brightness(1.08); }
+    .sp-btn-emerald { background: linear-gradient(135deg, #10b981, #059669); }
+    .sp-btn-blue { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+    .sp-btn-violet { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
 
-    .sp-script-item {
-      background: #0b1122;
-      border: 1px solid #1e293b;
-      border-radius: 10px;
-      padding: 12px;
+    .sp-script-card {
+      background: rgba(6, 9, 19, 0.72);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 12px 14px;
       margin-bottom: 10px;
     }
-    .sp-script-summary {
+    .sp-script-head {
       cursor: pointer;
-      font-weight: 700;
-      color: #e2e8f0;
       list-style: none;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 10px;
     }
-    .sp-wl-item {
+    .sp-script-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .sp-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+    }
+    .sp-pill-muted {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      background: rgba(148, 163, 184, 0.1);
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .sp-wl-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 9px 12px;
-      background: #0b1122;
-      border: 1px solid #1e293b;
-      border-radius: 8px;
-      margin-bottom: 6px;
+      padding: 10px 12px;
+      background: rgba(6, 9, 19, 0.72);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
     }
     .sp-table {
       width: 100%;
-      background: rgba(17, 24, 46, 0.9);
-      border-radius: 12px;
       border-collapse: collapse;
-      text-align: left;
+      background: rgba(13, 19, 36, 0.9);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
       overflow: hidden;
-      border: 1px solid var(--line);
+      text-align: left;
     }
-    .sp-table-head { background: #172038; color: var(--accent-cyan); font-size: 13px; }
-    .sp-th, .sp-td { padding: 10px; border-bottom: 1px solid #1e293b; font-size: 13px; }
-    .sp-loader-row { padding: 8px 10px 12px 10px; border-bottom: 1px solid #1e293b; background: #0b1122; }
-    .sp-loader-title { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-    .sp-loader-pre {
+    .sp-table-head {
+      background: rgba(19, 28, 52, 0.96);
+      color: var(--cyan);
+      font-size: 12.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .sp-th, .sp-td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 13px;
+    }
+    .sp-key-chip {
+      background: rgba(124, 58, 237, 0.18);
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      color: #ddd6fe;
+      padding: 4px 8px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .sp-badge-count {
+      background: rgba(34, 211, 238, 0.12);
+      color: var(--cyan);
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .sp-loader-cell {
+      padding: 9px 12px 13px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(6, 9, 19, 0.78);
+    }
+    .sp-loader-caption {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+    .sp-loader-code {
       margin: 0;
-      padding: 8px 10px;
-      background: #030712;
-      border-radius: 8px;
-      color: var(--accent-cyan);
+      padding: 10px 12px;
+      background: #03050b;
+      border: 1px solid rgba(34, 211, 238, 0.18);
+      border-radius: 9px;
+      color: var(--cyan);
       font-size: 12px;
       overflow-x: auto;
     }
-    .sp-muted-tag { color: var(--text-muted); font-size: 12px; font-weight: 400; }
-    .sp-muted-text { color: var(--text-muted); font-size: 13px; }
-    .sp-warn-link { color: #fbbf24; text-decoration: none; margin-right: 8px; font-weight: 600; }
-    .sp-danger-link { color: #f87171; text-decoration: none; font-weight: 600; }
-    .sp-mb-2 { margin-bottom: 8px; }
-    .sp-mb-3 { margin-bottom: 12px; }
-    .sp-mt-3 { margin-top: 12px; }
-    .sp-banner { padding: 11px 14px; border-radius: 10px; margin-bottom: 16px; font-size: 13.5px; font-weight: 600; }
-    .sp-banner-success { background: rgba(6, 95, 70, 0.55); border: 1px solid #10b981; color: #d1fae5; }
-    .sp-banner-info { background: rgba(30, 58, 138, 0.55); border: 1px solid #3b82f6; color: #dbeafe; }
-    .sp-banner-danger { background: rgba(127, 29, 29, 0.55); border: 1px solid #ef4444; color: #fecaca; }
-    .sp-banner-violet { background: rgba(91, 33, 182, 0.55); border: 1px solid #8b5cf6; color: #ede9fe; }
+    .sp-sub-muted { color: var(--text-secondary); font-size: 12px; }
+    .sp-link-warn { color: #fbbf24; text-decoration: none; margin-right: 10px; font-weight: 700; }
+    .sp-link-danger { color: #fb7185; text-decoration: none; font-weight: 700; }
+    .sp-mb-8 { margin-bottom: 8px; }
+    .sp-mb-12 { margin-bottom: 12px; }
+    .sp-mt-12 { margin-top: 12px; }
+
+    .sp-toast {
+      padding: 11px 15px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .sp-toast-ok { background: rgba(16, 185, 129, 0.16); border: 1px solid rgba(16, 185, 129, 0.4); color: #a7f3d0; }
+    .sp-toast-info { background: rgba(59, 130, 246, 0.16); border: 1px solid rgba(59, 130, 246, 0.4); color: #bfdbfe; }
+    .sp-toast-err { background: rgba(244, 63, 94, 0.16); border: 1px solid rgba(244, 63, 94, 0.4); color: #fecdd3; }
+    .sp-toast-violet { background: rgba(139, 92, 246, 0.18); border: 1px solid rgba(139, 92, 246, 0.45); color: #ddd6fe; }
 
     .btn-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 10px;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
-    .sp-btn-slot {
-      background: #0b1122;
-      padding: 10px;
-      border-radius: 10px;
-      border: 1px solid #1e293b;
+    .sp-btn-box {
+      background: rgba(6, 9, 19, 0.72);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 11px;
     }
-    @media (max-width: 720px) {
-      .sp-feature-grid, .btn-grid {
-        grid-template-columns: 1fr;
-      }
-      .sp-stack-actions {
-        max-width: 100%;
-      }
+    @media (max-width: 820px) {
+      .sp-stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .sp-stats-grid, .btn-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div id="spIntro" class="sp-intro-overlay" role="dialog" aria-label="Welcome to Sado Protect">
-    <div class="sp-intro-badge">LuaProtect • Luarmor • Junkie Suite</div>
-    <h1 class="sp-intro-title">WELCOME TO SADO PROTECT</h1>
-    <p class="sp-intro-sub">Sürətli skript qorunması, Join Discord dəvəti və bir kliklə idarəetmə paneli.</p>
-    <div class="sp-intro-bar"><span></span></div>
-    <button type="button" class="sp-intro-skip" onclick="dismissIntro()">Daxil ol</button>
-  </div>
+  <div class="sp-container">
+    <header class="sp-header">
+      <a href="/" class="sp-brand">
+        <div class="sp-brand-mark">SP</div>
+        <div>
+          <div class="sp-brand-title">SADOPROTECT</div>
+          <div class="sp-brand-sub">Şifrəsiz Birbaşa Panel • Key &amp; Script Shield</div>
+        </div>
+      </a>
+      <nav class="sp-nav">
+        <a href="/?tab=main" class="sp-nav-btn ${activeTab === "main" ? "active" : ""}">Skript &amp; Key Paneli</a>
+        <a href="/?tab=discord" class="sp-nav-btn ${activeTab === "discord" ? "active" : ""}">Discord Bot Ayarları</a>
+        <span class="sp-status-pill"><span class="sp-status-dot"></span>${escapeHtml(botConnectionState)}</span>
+      </nav>
+    </header>
 
-  <div class="sp-shell">
-    <div class="topbar">
-        <div style="display:flex;align-items:center;gap:12px;">
-            <button type="button" class="hamburger-btn" aria-label="Menyu" onclick="document.getElementById('navDrawer').classList.toggle('open')">
-                <span></span>
-                <span></span>
-                <span></span>
-            </button>
-            <a href="${hubHref}" style="text-decoration:none;"><h1 style="color:var(--accent-cyan);margin:0;font-size:19px;font-weight:900;letter-spacing:0.03em;">SADOPROTECT</h1></a>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-            <a href="${panelHref}" class="sp-pill-link ${isPanelView ? "active" : ""}">İdarəetmə Paneli</a>
-        </div>
-        <div id="navDrawer" class="drawer-menu">
-            <a href="${hubHref}" class="${!isPanelView ? "active" : ""}">Ana Ekran (Join Discord)</a>
-            <a href="${panelHref}&tab=main" class="${isPanelView && activeTab === "main" ? "active" : ""}">İdarəetmə Paneli — Skript &amp; Key</a>
-            <a href="${panelHref}&tab=discord" class="${isPanelView && activeTab === "discord" ? "active" : ""}">İdarəetmə Paneli — Discord Ayarları</a>
-        </div>
-    </div>
     ${bannerHtml}
 
-    ${!isPanelView ? `
-    <div class="sp-hero-card">
-        <span class="sp-hero-kicker">Script Protection &amp; Discord Control</span>
-        <h2 class="sp-hero-title">WELCOME TO SADO PROTECT</h2>
-        <p class="sp-hero-desc">
-            Əvvəlcə <b>Join Discord</b> ilə botu serverinizə əlavə edin, sonra aşağıdakı <b>İdarəetmə Paneli</b> düyməsinə basaraq skriptlərinizi, açarları (Key), whitelist siyahısını və panel görünüşünü idarə edin.
-        </p>
-        <div class="sp-stack-actions">
-            <a href="${escapeHtml(joinDiscordUrl)}" target="_blank" rel="noopener noreferrer" class="join-discord-btn">Join Discord</a>
-            <a href="${panelHref}" class="sp-panel-launch-btn">İdarəetmə Paneli</a>
-        </div>
-        <div class="sp-feature-grid">
-            <div class="sp-feature-box">
-                <h4>1. Join Discord</h4>
-                <p>Botu serverinizə birbaşa dəvət edin və avtomatik Control Panel / slash əmrlərlə istifadəyə başlayın.</p>
-            </div>
-            <div class="sp-feature-box">
-                <h4>2. İdarəetmə Paneli</h4>
-                <p>Skript əlavə edin, vaxtlı və ya lifetime key yaradın, HWID sıfırlayın və whitelist idarə edin.</p>
-            </div>
-            <div class="sp-feature-box">
-                <h4>3. Loader &amp; HWID Lock</h4>
-                <p>Hər skript və key üçün avtomatik Roblox loader kodu və HWID qoruma sistemi hazırdır.</p>
-            </div>
-        </div>
-    </div>
-    ` : `
-    <div class="sp-subbar">
-        <div class="sp-pill-nav">
-            <a href="${hubHref}" class="sp-pill-link">← Join Discord Ekranı</a>
-            <a href="${panelHref}&tab=main" class="sp-pill-link ${activeTab === "main" ? "active" : ""}">Skriptlər &amp; Key Paneli</a>
-            <a href="${panelHref}&tab=discord" class="sp-pill-link ${activeTab === "discord" ? "active" : ""}">Discord &amp; Buton Ayarları</a>
-        </div>
-        <a href="${escapeHtml(joinDiscordUrl)}" target="_blank" rel="noopener noreferrer" class="join-discord-btn" style="width:auto;padding:9px 16px;">Join Discord</a>
+    <div class="sp-stats-grid">
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Qorunan Skriptlər</div>
+        <div class="sp-stat-value">${totalScripts}</div>
+        <div class="sp-stat-hint">90s Bilet Qoruması Aktiv</div>
+      </div>
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Aktiv Açarlar (Keys)</div>
+        <div class="sp-stat-value">${totalKeys}</div>
+        <div class="sp-stat-hint">Paneldə Maskalanmış</div>
+      </div>
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Whitelist</div>
+        <div class="sp-stat-value">${totalWhitelist}</div>
+        <div class="sp-stat-hint">HWID / Discord ID</div>
+      </div>
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Giriş Rejimi</div>
+        <div class="sp-stat-value">Birbaşa</div>
+        <div class="sp-stat-hint">Admin Şifrəsi Yoxdur</div>
+      </div>
     </div>
 
     ${activeTab === "discord" ? `
-    <div class="sp-card">
-        <h3 style="margin-top:0;color:#a5b4fc;">Join Discord (LuaProtect Üslubu — Dəvət Et &amp; İdarə Et)</h3>
-        <div class="sp-mb-3" style="font-size:14px;">Bot Veziyyeti: <b>${escapeHtml(botConnectionState)}</b></div>
-        <div class="sp-mb-3">
-            <a href="${escapeHtml(joinDiscordUrl)}" target="_blank" rel="noopener noreferrer" class="join-discord-btn" style="width:auto;padding:10px 18px;">Join Discord Server</a>
-        </div>
-        <form action="/save-bot" method="POST">
-            <input type="hidden" name="returnTab" value="discord">
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
-                <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
-                <span>Join Discord &amp; Avtomatik Panel Aktiv Et</span>
-            </label>
-            <label class="sp-label">Discord Bot Client ID:</label>
-            <input type="text" name="clientId" value="${escapeHtml(store.discordConfig.clientId)}" required class="sp-input sp-mb-2">
-            <label class="sp-label">Avtomatik Panel Kanal ID (istəyə bağlı):</label>
-            <input type="text" name="welcomeChannelId" value="${escapeHtml(store.discordConfig.welcomeChannelId)}" placeholder="Boş buraxılsa bot girdiyi ilk uyğun kanala panel atar" class="sp-input sp-mb-2">
-            <label class="sp-label">Server Rollari (Auto Role):</label>
-            <select name="autoRoleId" class="sp-select sp-mb-3">
-                <option value="">Rol secilmeyib</option>
-                ${roleOptionsHtml}
-            </select>
-            <button type="submit" class="sp-btn sp-btn-indigo">Dəvət &amp; Panel Ayarını Saxla</button>
-        </form>
+    <div class="sp-panel">
+      <div class="sp-panel-title">
+        <span>Discord Bot (Token Rejimi)</span>
+        <span class="sp-shield-tag">Token Mühitdən Oxunur</span>
+      </div>
+      <p class="sp-sub-muted sp-mb-12">
+        Bot <code>DISCORD_BOT_TOKEN</code> mühit dəyişəni ilə qoşulur. Serverə daxil olanda avtomatik panel göndərir və <code>/panel</code>, <code>/whitelist</code>, <code>/unwhitelist</code> əmrlərini dəstəkləyir.
+      </p>
+      <form action="/save-bot" method="POST">
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;font-size:13.5px;">
+          <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
+          <span>Discord Botu Aktiv Et</span>
+        </label>
+        <label class="sp-label">Bot Client ID:</label>
+        <input type="text" name="clientId" value="${escapeHtml(store.discordConfig.clientId)}" required class="sp-input sp-mb-8">
+        <label class="sp-label">Avtomatik Panel Kanal ID (istəyə bağlı):</label>
+        <input type="text" name="welcomeChannelId" value="${escapeHtml(store.discordConfig.welcomeChannelId)}" placeholder="Boş buraxılsa ilk uyğun kanala panel atar" class="sp-input sp-mb-8">
+        <label class="sp-label">Avtomatik Rol (Auto Role):</label>
+        <select name="autoRoleId" class="sp-select sp-mb-12">
+          <option value="">Rol seçilməyib</option>
+          ${roleOptionsHtml}
+        </select>
+        <button type="submit" class="sp-btn sp-btn-violet">Bot Ayarlarını Saxla</button>
+      </form>
     </div>
 
-    <form action="/save-panel-style" method="POST" class="sp-card">
-        <h3 style="margin-top:0;color:var(--accent-cyan);">Discord Panel Gorunusu &amp; Buton Ayarlari</h3>
-        <p class="sp-muted-text" style="margin-top:0;">Basliq ve aciqlamada <code>{script}</code> yazsaniz avtomatik secilen skriptin adi ile evez olunacaq.</p>
+    <form action="/save-panel-style" method="POST" class="sp-panel">
+      <div class="sp-panel-title">
+        <span>Discord Panel Görünüşü &amp; Butonları</span>
+        <span class="sp-shield-tag">Key Leak Guard Aktiv</span>
+      </div>
+      <p class="sp-sub-muted" style="margin-top:0;">Başlıq və açıqlamada <code>{script}</code> dəyişəni seçilən skriptin adı ilə əvəz olunur.</p>
 
-        <label class="sp-label">Panel Basligi (Title):</label>
-        <input type="text" name="panelEmbedTitle" value="${escapeHtml(store.discordConfig.panelEmbedTitle)}" required class="sp-input sp-mb-2">
+      <label class="sp-label">Panel Başlığı (Title):</label>
+      <input type="text" name="panelEmbedTitle" value="${escapeHtml(store.discordConfig.panelEmbedTitle)}" required class="sp-input sp-mb-8">
 
-        <label class="sp-label">Panel Aciqlamasi (Description):</label>
-        <textarea name="panelEmbedDesc" rows="3" required class="sp-textarea sp-mb-2">${escapeHtml(store.discordConfig.panelEmbedDesc)}</textarea>
+      <label class="sp-label">Panel Açıqlaması (Description):</label>
+      <textarea name="panelEmbedDesc" rows="3" required class="sp-textarea sp-mb-8">${escapeHtml(store.discordConfig.panelEmbedDesc)}</textarea>
 
-        <label class="sp-label">Panel Kenar Rengi (Embed Color):</label>
-        <input type="color" name="panelEmbedColor" value="${escapeHtml(store.discordConfig.panelEmbedColor || "#7c3aed")}" style="width:80px;height:38px;padding:2px;border-radius:8px;border:1px solid #334155;background:#040814;cursor:pointer;margin-bottom:14px;">
+      <label class="sp-label">Embed Rəngi:</label>
+      <input type="color" name="panelEmbedColor" value="${escapeHtml(store.discordConfig.panelEmbedColor || "#7c3aed")}" style="width:76px;height:38px;padding:2px;border-radius:8px;border:1px solid #334155;background:#060913;cursor:pointer;margin-bottom:14px;">
 
-        <h4 style="margin:6px 0 10px 0;color:#cbd5e1;">Buton Adlari ve Rengleri</h4>
-        <div class="btn-grid">
-            <div class="sp-btn-slot">
-                <label class="sp-label">1-ci Buton (Redeem Key) Adi &amp; Rengi:</label>
-                <div style="display:flex;gap:8px;">
-                    <input type="text" name="btnRedeemLabel" value="${escapeHtml(store.discordConfig.btnRedeemLabel)}" required class="sp-inline-input" style="flex:1;">
-                    ${renderStyleSelect("btnRedeemStyle", store.discordConfig.btnRedeemStyle)}
-                </div>
-            </div>
-            <div class="sp-btn-slot">
-                <label class="sp-label">2-ci Buton (Get Script) Adi &amp; Rengi:</label>
-                <div style="display:flex;gap:8px;">
-                    <input type="text" name="btnScriptLabel" value="${escapeHtml(store.discordConfig.btnScriptLabel)}" required class="sp-inline-input" style="flex:1;">
-                    ${renderStyleSelect("btnScriptStyle", store.discordConfig.btnScriptStyle)}
-                </div>
-            </div>
-            <div class="sp-btn-slot">
-                <label class="sp-label">3-cu Buton (Reset HWID) Adi &amp; Rengi:</label>
-                <div style="display:flex;gap:8px;">
-                    <input type="text" name="btnHwidLabel" value="${escapeHtml(store.discordConfig.btnHwidLabel)}" required class="sp-inline-input" style="flex:1;">
-                    ${renderStyleSelect("btnHwidStyle", store.discordConfig.btnHwidStyle)}
-                </div>
-            </div>
-            <div class="sp-btn-slot">
-                <label class="sp-label">4-cu Buton (Get Stats) Adi &amp; Rengi:</label>
-                <div style="display:flex;gap:8px;">
-                    <input type="text" name="btnStatsLabel" value="${escapeHtml(store.discordConfig.btnStatsLabel)}" required class="sp-inline-input" style="flex:1;">
-                    ${renderStyleSelect("btnStatsStyle", store.discordConfig.btnStatsStyle)}
-                </div>
-            </div>
+      <div class="btn-grid">
+        <div class="sp-btn-box">
+          <label class="sp-label">1-ci Buton (Redeem Key):</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" name="btnRedeemLabel" value="${escapeHtml(store.discordConfig.btnRedeemLabel)}" required class="sp-inline-input" style="flex:1;">
+            ${renderStyleSelect("btnRedeemStyle", store.discordConfig.btnRedeemStyle)}
+          </div>
         </div>
+        <div class="sp-btn-box">
+          <label class="sp-label">2-ci Buton (Get Script):</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" name="btnScriptLabel" value="${escapeHtml(store.discordConfig.btnScriptLabel)}" required class="sp-inline-input" style="flex:1;">
+            ${renderStyleSelect("btnScriptStyle", store.discordConfig.btnScriptStyle)}
+          </div>
+        </div>
+        <div class="sp-btn-box">
+          <label class="sp-label">3-cü Buton (Reset HWID):</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" name="btnHwidLabel" value="${escapeHtml(store.discordConfig.btnHwidLabel)}" required class="sp-inline-input" style="flex:1;">
+            ${renderStyleSelect("btnHwidStyle", store.discordConfig.btnHwidStyle)}
+          </div>
+        </div>
+        <div class="sp-btn-box">
+          <label class="sp-label">4-cü Buton (Get Stats):</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" name="btnStatsLabel" value="${escapeHtml(store.discordConfig.btnStatsLabel)}" required class="sp-inline-input" style="flex:1;">
+            ${renderStyleSelect("btnStatsStyle", store.discordConfig.btnStatsStyle)}
+          </div>
+        </div>
+      </div>
 
-        <button type="submit" class="sp-btn sp-btn-emerald">Butonlari ve Paneli Yadda Saxla</button>
+      <button type="submit" class="sp-btn sp-btn-emerald">Panel Ayarlarını Saxla</button>
     </form>
     ` : `
-    <div class="sp-card">
-        <details open>
-            <summary style="cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;background:#0284c7;color:white;padding:9px 16px;border-radius:9px;font-weight:700;">
-                <span>+ NEW SCRIPTS</span>
-            </summary>
-            <form action="/new-script" method="POST" class="sp-mt-3">
-                <label class="sp-label">Skriptin adi:</label>
-                <input type="text" name="scriptName" placeholder="Skriptin adini yazin (mes: SADO DUEL)" required class="sp-input sp-mb-2">
-                <label class="sp-label">Skriptin kodu:</label>
-                <textarea name="scriptCode" rows="7" placeholder="Skriptin kodunu yazin..." required class="sp-textarea sp-mb-2"></textarea>
-                <button type="submit" class="sp-btn sp-btn-emerald">Yadda saxla</button>
-            </form>
-        </details>
-        <div style="margin-top:16px;">${savedScriptsHtml}</div>
+    <div class="sp-panel">
+      <div class="sp-panel-title">
+        <span>Skript İdarəetməsi</span>
+        <span class="sp-shield-tag">Anti-Leak Loader</span>
+      </div>
+      <details open>
+        <summary style="cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#0284c7,#0369a1);color:white;padding:9px 15px;border-radius:10px;font-weight:700;font-size:13px;">
+          <span>+ NEW SCRIPTS</span>
+        </summary>
+        <form action="/new-script" method="POST" class="sp-mt-12">
+          <label class="sp-label">Skriptin adı:</label>
+          <input type="text" name="scriptName" placeholder="Məs: SADO DUEL" required class="sp-input sp-mb-8">
+          <label class="sp-label">Skriptin kodu:</label>
+          <textarea name="scriptCode" rows="6" placeholder="Lua skript kodunu yazın..." required class="sp-textarea sp-mb-8"></textarea>
+          <button type="submit" class="sp-btn sp-btn-emerald">Yadda Saxla</button>
+        </form>
+      </details>
+      <div class="sp-mt-12">${savedScriptsHtml}</div>
     </div>
 
-    <form action="/create" method="GET" class="sp-card" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-        <input type="text" name="owner" placeholder="Istifadeci adi" required class="sp-inline-input">
-        <select name="scriptId" class="sp-inline-select">
-            ${scriptOptionsHtml}
-        </select>
-        <select name="maxUsers" class="sp-inline-select">
-            <option value="1" selected>1 nefer (Drop / Tek)</option>
-            <option value="2">2 nefer</option>
-            <option value="3">3 nefer</option>
-            <option value="5">5 nefer</option>
-            <option value="10">10 nefer</option>
-            <option value="50">50 nefer</option>
-        </select>
-        <select name="duration" class="sp-inline-select">
-            <option value="1h">1 hour</option>
-            <option value="5h">5 hours</option>
-            <option value="24h">24 hours</option>
-            <option value="3d">3 day</option>
-            <option value="7d">7 day</option>
-            <option value="lifetime" selected>lifetime</option>
-        </select>
-        <select name="autoRoleId" class="sp-inline-select">
-            ${keyRoleOptionsHtml}
-        </select>
-        <button type="submit" class="sp-btn sp-btn-emerald">+ Yeni Key Yarat</button>
+    <form action="/create" method="GET" class="sp-panel" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+      <input type="text" name="owner" placeholder="İstifadəçi adı" required class="sp-inline-input">
+      <select name="scriptId" class="sp-inline-select">
+        ${scriptOptionsHtml}
+      </select>
+      <select name="maxUsers" class="sp-inline-select">
+        <option value="1" selected>1 nəfər (Tek HWID)</option>
+        <option value="2">2 nəfər</option>
+        <option value="3">3 nəfər</option>
+        <option value="5">5 nəfər</option>
+        <option value="10">10 nəfər</option>
+        <option value="50">50 nəfər</option>
+      </select>
+      <select name="duration" class="sp-inline-select">
+        <option value="1h">1 hour</option>
+        <option value="5h">5 hours</option>
+        <option value="24h">24 hours</option>
+        <option value="3d">3 day</option>
+        <option value="7d">7 day</option>
+        <option value="lifetime" selected>lifetime</option>
+      </select>
+      <select name="autoRoleId" class="sp-inline-select">
+        ${keyRoleOptionsHtml}
+      </select>
+      <button type="submit" class="sp-btn sp-btn-emerald">+ Yeni Key Yarat</button>
     </form>
 
-    <div class="sp-card">
-        <h3 style="margin:0 0 10px 0;color:var(--accent-cyan);font-size:16px;">Whitelist (Ag Siyahi)</h3>
-        <form action="/whitelist" method="POST" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-            <input type="text" name="target" placeholder="Discord ID, @mention ve ya HWID" required class="sp-inline-input" style="min-width:220px;">
-            <select name="scriptId" class="sp-inline-select">
-                ${scriptOptionsHtml}
-            </select>
-            <button type="submit" class="sp-btn sp-btn-violet">Whitelist Et</button>
-        </form>
-        ${wlListHtml}
+    <div class="sp-panel">
+      <div class="sp-panel-title">
+        <span>Whitelist (Ağ Siyahı)</span>
+        <span class="sp-shield-tag">HWID / Discord Guard</span>
+      </div>
+      <form action="/whitelist" method="POST" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+        <input type="text" name="target" placeholder="Discord ID, @mention və ya HWID" required class="sp-inline-input" style="min-width:220px;">
+        <select name="scriptId" class="sp-inline-select">
+          ${scriptOptionsHtml}
+        </select>
+        <button type="submit" class="sp-btn sp-btn-violet">Whitelist Et</button>
+      </form>
+      ${wlListHtml}
     </div>
 
     <table class="sp-table">
-        <tr class="sp-table-head">
-            <th class="sp-th">Acar (Key)</th>
-            <th class="sp-th">Sahibi</th>
-            <th class="sp-th">Skript</th>
-            <th class="sp-th">Limit</th>
-            <th class="sp-th">Muddet</th>
-            <th class="sp-th">Auto Role</th>
-            <th class="sp-th">Emeliyyat</th>
-        </tr>
-        ${rows}
+      <tr class="sp-table-head">
+        <th class="sp-th">Açar (Qorunan)</th>
+        <th class="sp-th">Sahibi</th>
+        <th class="sp-th">Skript</th>
+        <th class="sp-th">Limit</th>
+        <th class="sp-th">Müddət</th>
+        <th class="sp-th">Auto Role</th>
+        <th class="sp-th">Əməliyyat</th>
+      </tr>
+      ${rows}
     </table>
     `}
-    `}
   </div>
-
-  <script>
-    function dismissIntro() {
-      const intro = document.getElementById('spIntro');
-      if (!intro) return;
-      intro.classList.add('sp-intro-hide');
-      try { sessionStorage.setItem('sadoIntroSeen', '1'); } catch (_) {}
-      setTimeout(() => {
-        if (intro && intro.parentNode) intro.parentNode.removeChild(intro);
-      }, 600);
-    }
-    window.addEventListener('DOMContentLoaded', () => {
-      let alreadySeen = false;
-      try { alreadySeen = sessionStorage.getItem('sadoIntroSeen') === '1'; } catch (_) {}
-      const intro = document.getElementById('spIntro');
-      if (alreadySeen && intro) {
-        intro.remove();
-        return;
-      }
-      setTimeout(() => {
-        dismissIntro();
-      }, 1750);
-    });
-  </script>
 </body>
 </html>`);
     } catch (err) {
-        res.status(500).send("Server xetasi");
+        res.status(500).send("Server xətası");
     }
 });
 
 app.post('/save-bot', async (req, res) => {
     try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
         store.discordConfig.enabled = req.body.enabled === "1";
         if (typeof req.body.clientId === "string" && req.body.clientId.trim()) {
             store.discordConfig.clientId = req.body.clientId.trim();
@@ -1894,9 +1817,105 @@ app.post('/save-bot', async (req, res) => {
         }
         saveStoreToDisk();
         await startDiscordBot();
-        res.redirect('/?view=panel&tab=discord&msg=bot_saved');
+        res.redirect('/?tab=discord&msg=bot_saved');
     } catch (err) {
-        res.status(500).send("Xeta bas verdi");
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.post('/save-panel-style', (req, res) => {
+    try {
+        const allowedStyles = new Set(["Success", "Primary", "Secondary", "Danger"]);
+        const cleanStyle = (val, def) => allowedStyles.has(String(val || "")) ? String(val) : def;
+
+        store.discordConfig.panelEmbedTitle = String(req.body.panelEmbedTitle || "{script} — Control Panel").trim().slice(0, 200);
+        store.discordConfig.panelEmbedDesc = String(req.body.panelEmbedDesc || "").trim().slice(0, 2000) || store.discordConfig.panelEmbedDesc;
+        const hex = String(req.body.panelEmbedColor || "#7c3aed").trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+            store.discordConfig.panelEmbedColor = hex;
+        }
+
+        store.discordConfig.btnRedeemLabel = String(req.body.btnRedeemLabel || "Redeem Key").trim().slice(0, 80);
+        store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Success");
+
+        store.discordConfig.btnScriptLabel = String(req.body.btnScriptLabel || "Get Script").trim().slice(0, 80);
+        store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Primary");
+
+        store.discordConfig.btnHwidLabel = String(req.body.btnHwidLabel || "Reset HWID").trim().slice(0, 80);
+        store.discordConfig.btnHwidStyle = cleanStyle(req.body.btnHwidStyle, "Secondary");
+
+        store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Get Stats").trim().slice(0, 80);
+        store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Secondary");
+
+        saveStoreToDisk();
+        res.redirect('/?tab=discord&msg=panel_style_saved');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.post('/new-script', async (req, res) => {
+    try {
+        const sName = String(req.body.scriptName || "").trim();
+        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
+        if (!sName) {
+            return res.redirect('/');
+        }
+        store.scripts.push({
+            id: makeSlugId(sName),
+            name: sName.slice(0, 60),
+            code: sCode
+        });
+        saveStoreToDisk();
+        await syncDiscordSlashCommands();
+        res.redirect('/?msg=script_created');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.post('/edit-script', async (req, res) => {
+    try {
+        const targetId = String(req.body.scriptId || "");
+        const sName = String(req.body.scriptName || "").trim();
+        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
+        const found = store.scripts.find(s => s.id === targetId);
+        if (found && sName) {
+            found.name = sName.slice(0, 60);
+            found.code = sCode;
+            saveStoreToDisk();
+            await syncDiscordSlashCommands();
+        }
+        res.redirect('/?msg=script_updated');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.get('/delete-script', async (req, res) => {
+    try {
+        const targetId = String(req.query.id || "").trim();
+        if (targetId) {
+            store.scripts = store.scripts.filter(s => s.id !== targetId);
+            if (store.scripts.length === 0) {
+                store.scripts.push({
+                    id: "sado-hub",
+                    name: "SADO HUB",
+                    code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
+                });
+            }
+            const fallbackId = store.scripts[0].id;
+            for (const k in store.keys) {
+                if (store.keys[k].scriptId === targetId) {
+                    store.keys[k].scriptId = fallbackId;
+                }
+            }
+            saveStoreToDisk();
+            await syncDiscordSlashCommands();
+        }
+        res.redirect('/?msg=script_deleted');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
     }
 });
 
@@ -2204,7 +2223,6 @@ app.get('/copy', (req, res) => {
 
 app.get('/create', (req, res) => {
     try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
         createKeyForUser(
             req.query.owner,
             req.query.duration,
@@ -2212,9 +2230,147 @@ app.get('/create', (req, res) => {
             req.query.maxUsers,
             req.query.autoRoleId
         );
-        res.redirect('/?view=panel');
+        res.redirect('/');
     } catch (err) {
-        res.status(500).send("Xeta bas verdi");
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.get('/reset', (req, res) => {
+    try {
+        const k = req.query.key;
+        if (k && store.keys[k]) {
+            store.keys[k].users = [];
+            saveStoreToDisk();
+        }
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.get('/delete', (req, res) => {
+    try {
+        const k = req.query.key;
+        if (k && store.keys[k]) {
+            delete store.keys[k];
+            saveStoreToDisk();
+        }
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.post('/whitelist', (req, res) => {
+    try {
+        addToWhitelist(req.body.target, req.body.scriptId);
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.get('/unwhitelist', (req, res) => {
+    try {
+        removeFromWhitelist(req.query.id);
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.get('/loader', (req, res) => {
+    try {
+        purgeExpiredKeys();
+        purgeExpiredTickets();
+
+        const ticketId = String(req.query.ticket || "").trim();
+        const userHwid = String(req.query.hwid || "").trim();
+        const userAgent = String(req.headers['user-agent'] || "");
+
+        // Yalnız Roblox sorğularına icazə verilir; brauzer/curl/scraper sorğularında heç bir key və ya kod sızdırılmır
+        if (!userAgent.includes("Roblox")) {
+            return res.status(403).type('text/plain').send('-- SADOPROTECT: Access Denied!');
+        }
+
+        if (!ticketId || !loaderTickets.has(ticketId)) {
+            return res.status(401).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Etibarsiz veya vaxti bitmis loader bileti!")');
+        }
+
+        const ticketData = loaderTickets.get(ticketId);
+        const expectedSig = crypto
+            .createHmac('sha256', SIGNING_SECRET)
+            .update(`${ticketId}:${ticketData.mode}:${ticketData.identifier}:${ticketData.scriptId}:${ticketData.expiresAt}`)
+            .digest('hex');
+
+        const sigBuf = Buffer.from(ticketData.signature || "", "utf8");
+        const expBuf = Buffer.from(expectedSig, "utf8");
+        if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+            loaderTickets.delete(ticketId);
+            return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Imza dogrulanmadi!")');
+        }
+
+        if (ticketData.used || ticketData.expiresAt <= Date.now()) {
+            loaderTickets.delete(ticketId);
+            return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Loader biletinin vaxti bitib! Yeniden Get Script basin.")');
+        }
+
+        // Bilet bir dəfə istifadə olunur ki, link başqasına ötürülsə belə təkrar kod sızdırmasın
+        ticketData.used = true;
+        loaderTickets.delete(ticketId);
+
+        if (ticketData.mode === "whitelist") {
+            const matchedWhitelist =
+                isWhitelistedIdentifier(ticketData.identifier) ||
+                (userHwid ? isWhitelistedIdentifier(userHwid) : null);
+
+            if (!matchedWhitelist) {
+                return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Whitelist tapilmadi!")');
+            }
+            const wlScript = getScriptById(matchedWhitelist.scriptId || ticketData.scriptId);
+            return res.type('text/plain').send(wlScript.code || `print("SADOPROTECT Whitelist: ${wlScript.name}")`);
+        }
+
+        const userKey = String(ticketData.identifier || "").trim();
+        const keyEntry = userKey ? store.keys[userKey] : null;
+        if (!keyEntry) {
+            return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Key vaxti bitib ve ya silinib!")');
+        }
+
+        if (typeof keyEntry.expiresAt === "number" && keyEntry.expiresAt <= Date.now()) {
+            delete store.keys[userKey];
+            saveStoreToDisk();
+            return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Key vaxti bitib! Key silindi.")');
+        }
+
+        if (!userHwid || userHwid.length < 6) {
+            return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: HWID tapilmadi!")');
+        }
+
+        const maxLimit = Math.max(1, parseInt(keyEntry.maxUsers, 10) || 1);
+        const matchedUser = keyEntry.users.find(u => u.hwid === userHwid);
+
+        if (!matchedUser) {
+            const unboundDiscordSlot = keyEntry.users.find(u => !u.hwid);
+            if (unboundDiscordSlot) {
+                unboundDiscordSlot.hwid = userHwid;
+                saveStoreToDisk();
+            } else if (keyEntry.users.length < maxLimit) {
+                keyEntry.users.push({
+                    hwid: userHwid,
+                    discordUserId: ticketData.discordUserId || null
+                });
+                saveStoreToDisk();
+            } else {
+                return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
+            }
+        }
+
+        const targetScript = getScriptById(keyEntry.scriptId || ticketData.scriptId);
+        res.type('text/plain').send(targetScript.code);
+    } catch (err) {
+        res.status(500).type('text/plain').send('-- SADOPROTECT: Server Error');
     }
 });
 
