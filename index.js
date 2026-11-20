@@ -462,9 +462,14 @@ function buildOneTapCopyUrl(textToCopy) {
 
 async function refreshGuildRoles(client) {
     try {
+        if (!client || !client.guilds || !client.guilds.cache) return;
         const rolesMap = new Map();
         for (const [, guild] of client.guilds.cache) {
-            await guild.roles.fetch();
+            try {
+                await guild.roles.fetch();
+            } catch (_) {
+                // Bəzi keşlənmiş rollar fetch olmadan da mövcud ola bilər
+            }
             for (const [, role] of guild.roles.cache) {
                 if (!role.managed && role.id !== guild.id) {
                     rolesMap.set(role.id, {
@@ -475,7 +480,9 @@ async function refreshGuildRoles(client) {
                 }
             }
         }
-        cachedGuildRoles = Array.from(rolesMap.values());
+        if (rolesMap.size > 0) {
+            cachedGuildRoles = Array.from(rolesMap.values());
+        }
     } catch (err) {
         console.error("Rol siyahısı yenilənmədi:", err.message);
     }
@@ -771,6 +778,18 @@ async function startDiscordBot() {
             discordClient = client;
             await refreshGuildRoles(client);
             await syncDiscordSlashCommands(cleanToken);
+        });
+
+        client.on('roleCreate', async () => {
+            await refreshGuildRoles(client);
+        });
+
+        client.on('roleUpdate', async () => {
+            await refreshGuildRoles(client);
+        });
+
+        client.on('roleDelete', async () => {
+            await refreshGuildRoles(client);
         });
 
         client.on('guildCreate', async (guild) => {
@@ -1097,7 +1116,7 @@ app.get('/', async (req, res) => {
     try {
         purgeExpiredKeys();
         purgeExpiredTickets();
-        if (discordClient) {
+        if (isBotCurrentlyOnline()) {
             await refreshGuildRoles(discordClient);
         }
 
@@ -1133,9 +1152,16 @@ app.get('/', async (req, res) => {
             `<option value="${escapeHtml(r.id)}" ${store.discordConfig.autoRoleId === r.id ? "selected" : ""}>@${escapeHtml(r.name)} (${escapeHtml(r.guildName)})</option>`
         ).join("");
 
-        const keyRoleOptionsHtml = `<option value="">Default Auto Role</option>` + cachedGuildRoles.map(r =>
-            `<option value="${escapeHtml(r.id)}">@${escapeHtml(r.name)}</option>`
-        ).join("");
+        const manualRoleNotInList = store.discordConfig.autoRoleId &&
+            !cachedGuildRoles.some(r => r.id === store.discordConfig.autoRoleId);
+
+        const keyRoleOptionsHtml = `<option value="">Default Auto Role</option>` +
+            (manualRoleNotInList
+                ? `<option value="${escapeHtml(store.discordConfig.autoRoleId)}" selected>Rol ID: ${escapeHtml(store.discordConfig.autoRoleId)}</option>`
+                : "") +
+            cachedGuildRoles.map(r =>
+                `<option value="${escapeHtml(r.id)}">@${escapeHtml(r.name)}</option>`
+            ).join("");
 
         const scriptOptionsHtml = store.scripts.map(sc =>
             `<option value="${escapeHtml(sc.id)}">${escapeHtml(sc.name)}</option>`
@@ -1642,12 +1668,15 @@ app.get('/', async (req, res) => {
         <label class="sp-label">Bot Client ID:</label>
         <input type="text" name="clientId" value="${escapeHtml(store.discordConfig.clientId)}" required class="sp-input sp-mb-8">
         <label class="sp-label">Avtomatik Panel Kanal ID (istəyə bağlı):</label>
-        <input type="text" name="welcomeChannelId" value="${escapeHtml(store.discordConfig.welcomeChannelId)}" placeholder="Boş buraxılsa ilk uyğun kanala panel atar" class="sp-input sp-mb-8">
+        <input type="text" name="welcomeChannelId" value="${escapeHtml(store.discordConfig.welcomeChannelId)}" placeholder="Yalnız rəqəmli Kanal ID (məs: 123456789012345678)" class="sp-input sp-mb-8">
         <label class="sp-label">Avtomatik Rol (Auto Role):</label>
-        <select name="autoRoleId" class="sp-select sp-mb-12">
+        <select name="autoRoleId" class="sp-select sp-mb-8">
           <option value="">Rol seçilməyib</option>
+          ${manualRoleNotInList ? `<option value="${escapeHtml(store.discordConfig.autoRoleId)}" selected>Seçilmiş Rol ID: ${escapeHtml(store.discordConfig.autoRoleId)}</option>` : ""}
           ${roleOptionsHtml}
         </select>
+        <label class="sp-label">Və ya Rol ID-ni birbaşa yazın (siyahı boşdursa):</label>
+        <input type="text" name="manualRoleId" value="${escapeHtml(store.discordConfig.autoRoleId)}" placeholder="Məs: 123456789012345678" class="sp-input sp-mb-12">
         <button type="submit" class="sp-btn sp-btn-violet">Bot Ayarlarını Saxla</button>
       </form>
     </div>
@@ -1792,13 +1821,18 @@ app.post('/save-bot', async (req, res) => {
             store.discordConfig.clientId = req.body.clientId.trim();
         }
         if (typeof req.body.welcomeChannelId === "string") {
-            store.discordConfig.welcomeChannelId = req.body.welcomeChannelId.trim();
+            const rawCh = req.body.welcomeChannelId.trim();
+            store.discordConfig.welcomeChannelId = /^\d+$/.test(rawCh) ? rawCh : "";
         }
-        if (typeof req.body.autoRoleId === "string") {
-            store.discordConfig.autoRoleId = req.body.autoRoleId.trim();
-        }
+        const manualRole = typeof req.body.manualRoleId === "string" ? req.body.manualRoleId.trim() : "";
+        const selectedRole = typeof req.body.autoRoleId === "string" ? req.body.autoRoleId.trim() : "";
+        const finalRole = manualRole || selectedRole;
+        store.discordConfig.autoRoleId = /^\d+$/.test(finalRole) ? finalRole : "";
         saveStoreToDisk();
         await startDiscordBot();
+        if (isBotCurrentlyOnline()) {
+            await refreshGuildRoles(discordClient);
+        }
         res.redirect('/?tab=discord&msg=bot_saved');
     } catch (err) {
         res.status(500).send("Xəta baş verdi");
