@@ -64,13 +64,13 @@ let store = {
         panelEmbedDesc: "This control panel is for the project:\n**{script}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID",
         panelEmbedColor: "#7c3aed",
         btnRedeemLabel: "Redeem Key",
-        btnRedeemStyle: "Success",
+        btnRedeemStyle: "Primary",
         btnScriptLabel: "Get Script",
-        btnScriptStyle: "Primary",
+        btnScriptStyle: "Success",
         btnHwidLabel: "Reset HWID",
         btnHwidStyle: "Secondary",
-        btnStatsLabel: "Get Stats",
-        btnStatsStyle: "Secondary"
+        btnStatsLabel: "Key Info",
+        btnStatsStyle: "Primary"
     },
     scripts: [
         {
@@ -114,11 +114,9 @@ function makeSlugId(name) {
     return (clean || "script") + "-" + Math.random().toString(36).substring(2, 6);
 }
 
-// Key-i birbaşa açıq göstərmədən maskalayır (sızma riskini azaldır)
-function maskKeyValue(rawKey) {
-    const k = String(rawKey || "");
-    if (k.length <= 6) return "******";
-    return `${k.slice(0, 5)}••••${k.slice(-2)}`;
+// Açarları tam şəkildə qaytarır (istifadəçi açarları tam görmək istəyir)
+function formatFullKeyDisplay(rawKey) {
+    return String(rawKey || "").trim();
 }
 
 // Key və script üçün qorunan qısa ömürlü loader bileti yaradır
@@ -552,17 +550,18 @@ function parseHexColorInt(hexStr, fallbackInt = 0x7c3aed) {
 
 function buildScriptControlPanelMessage(scriptObj, guildName = "SADOPROTECT") {
     const cfg = store.discordConfig;
-    const rawTitle = String(cfg.panelEmbedTitle || "{script} — Control Panel");
+    const rawTitle = String(cfg.panelEmbedTitle || "SADOPROTECT Panel");
     const rawDesc = String(
         cfg.panelEmbedDesc ||
-        "This control panel is for the project:\n**{script}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID"
+        "Welcome to the management panel for **{script}**.\n\nClick the buttons below to redeem a key, reset your HWID, or get your loadscript."
     );
 
     const finalTitle = rawTitle.replace(/\{script\}/gi, scriptObj.name).slice(0, 256);
     const finalDesc = rawDesc.replace(/\{script\}/gi, scriptObj.name).slice(0, 4000);
-    const embedColor = parseHexColorInt(cfg.panelEmbedColor, 0x7c3aed);
+    const embedColor = parseHexColorInt(cfg.panelEmbedColor, 0x3b82f6);
 
     const embed = new EmbedBuilder()
+        .setAuthor({ name: "SADOPROTECT" })
         .setColor(embedColor)
         .setTitle(finalTitle)
         .setDescription(finalDesc)
@@ -571,23 +570,27 @@ function buildScriptControlPanelMessage(scriptObj, guildName = "SADOPROTECT") {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`sado_btn_redeem:${scriptObj.id}`)
+            .setEmoji("🔑")
             .setLabel(String(cfg.btnRedeemLabel || "Redeem Key").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnRedeemStyle, ButtonStyle.Success)),
+            .setStyle(resolveButtonStyle(cfg.btnRedeemStyle, ButtonStyle.Primary)),
         new ButtonBuilder()
-            .setCustomId(`sado_btn_script:${scriptObj.id}`)
-            .setLabel(String(cfg.btnScriptLabel || "Get Script").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnScriptStyle, ButtonStyle.Primary))
+            .setCustomId(`sado_btn_hwid:${scriptObj.id}`)
+            .setEmoji("🔄")
+            .setLabel(String(cfg.btnHwidLabel || "Reset HWID").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnHwidStyle, ButtonStyle.Secondary))
     );
 
     const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-            .setCustomId(`sado_btn_hwid:${scriptObj.id}`)
-            .setLabel(String(cfg.btnHwidLabel || "Reset HWID").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnHwidStyle, ButtonStyle.Secondary)),
+            .setCustomId(`sado_btn_script:${scriptObj.id}`)
+            .setEmoji("📜")
+            .setLabel(String(cfg.btnScriptLabel || "Get Script").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnScriptStyle, ButtonStyle.Success)),
         new ButtonBuilder()
             .setCustomId(`sado_btn_stats:${scriptObj.id}`)
-            .setLabel(String(cfg.btnStatsLabel || "Get Stats").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnStatsStyle, ButtonStyle.Secondary))
+            .setEmoji("ℹ️")
+            .setLabel(String(cfg.btnStatsLabel || "Key Info").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnStatsStyle, ButtonStyle.Primary))
     );
 
     return { embeds: [embed], components: [row1, row2] };
@@ -804,15 +807,89 @@ async function startDiscordBot() {
 
                 if (interaction.isAutocomplete()) {
                     if (interaction.commandName === 'panel') {
-                        const focused = String(interaction.options.getFocused() || "").toLowerCase();
-                        const matched = store.scripts
-                            .filter(sc => !focused || sc.name.toLowerCase().includes(focused) || sc.id.toLowerCase().includes(focused))
-                            .slice(0, 25)
-                            .map(sc => ({
-                                name: sc.name.slice(0, 100),
-                                value: sc.id
-                            }));
-                        await interaction.respond(matched).catch(() => {});
+                        if (!interaction.deferred && !interaction.replied) {
+                            await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+                        }
+
+                        const actionChoice = String(interaction.options.getString('action') || 'panel').toLowerCase();
+                        const rawNameOption = interaction.options.getString('name');
+                        const rawUserOption = interaction.options.getString('user');
+
+                        if (actionChoice === 'whitelist') {
+                            if (!rawUserOption || !rawUserOption.trim()) {
+                                await interaction.editReply({
+                                    content: 'Whitelist ucun `user` sahesine Discord ID, mention ve ya HWID daxil edin. Mes: `/panel action:whitelist user:123456789012345678`'
+                                }).catch(() => {});
+                                return;
+                            }
+                            const chosenScript = rawNameOption
+                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
+                                : getScriptById("");
+                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
+                            if (!resAdd.ok) {
+                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` }).catch(() => {});
+                                return;
+                            }
+                            await interaction.editReply({
+                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**).`
+                            }).catch(() => {});
+                            return;
+                        }
+
+                        if (actionChoice === 'unwhitelist') {
+                            if (!rawUserOption || !rawUserOption.trim()) {
+                                await interaction.editReply({
+                                    content: 'Unwhitelist ucun `user` sahesine cixarilacaq ID/HWID yazin. Mes: `/panel action:unwhitelist user:123456789012345678`'
+                                }).catch(() => {});
+                                return;
+                            }
+                            const removed = removeFromWhitelist(rawUserOption);
+                            await interaction.editReply({
+                                content: removed
+                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
+                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
+                            }).catch(() => {});
+                            return;
+                        }
+
+                        if (!store.scripts.length) {
+                            store.scripts.push({
+                                id: "sado-hub",
+                                name: "SADO HUB",
+                                code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
+                            });
+                            saveStoreToDisk();
+                        }
+
+                        const channel = interaction.channel || (interaction.guild && interaction.channelId ? await interaction.guild.channels.fetch(interaction.channelId).catch(() => null) : null);
+
+                        if (rawNameOption) {
+                            const byId = store.scripts.find(s => s.id === rawNameOption);
+                            const byName = store.scripts.find(s => s.name.toLowerCase() === rawNameOption.toLowerCase());
+                            const partialName = store.scripts.find(s => s.name.toLowerCase().includes(rawNameOption.toLowerCase()));
+                            const targetScript = byId || byName || partialName || getScriptById("");
+
+                            if (!channel || typeof channel.send !== 'function') {
+                                await interaction.editReply({
+                                    content: 'Bu kanalda panel gonderile bilmedi (botun kanal icazelerini yoxlayin).'
+                                }).catch(() => {});
+                                return;
+                            }
+
+                            const panelMsg = buildScriptControlPanelMessage(targetScript, interaction.guild?.name || "SADOPROTECT");
+                            await channel.send(panelMsg);
+                            await interaction.editReply({
+                                content: `**${targetScript.name}** skriptine aid panel kanala gonderildi.`
+                            }).catch(() => {});
+                            return;
+                        }
+
+                        if (channel && typeof channel.send === 'function') {
+                            const primaryScript = getScriptById("");
+                            await channel.send(buildScriptControlPanelMessage(primaryScript, interaction.guild?.name || "SADOPROTECT"));
+                        }
+                        const selectorPayload = buildScriptSelectorMessage(interaction.guild?.name || "SADOPROTECT");
+                        await interaction.editReply(selectorPayload).catch(() => {});
                     }
                     return;
                 }
@@ -1005,12 +1082,30 @@ async function startDiscordBot() {
                         );
 
                         const headerLabel = wlEntry
-                            ? `SADOPROTECT Qorunan Loader (\`${maskKeyValue(wlEntry.id)}\`)`
-                            : `SADOPROTECT Qorunan Loader (\`${maskKeyValue(redeemed.key)}\` • ${redeemed.entry.durationLabel || "lifetime"})`;
+                            ? `SADOPROTECT Qorunan Loader (\`${formatFullKeyDisplay(wlEntry.id)}\`)`
+                            : `SADOPROTECT Qorunan Loader (\`${formatFullKeyDisplay(redeemed.key)}\` • ${redeemed.entry.durationLabel || "lifetime"})`;
 
                         await interaction.editReply({
-                            content: `${headerLabel}\n*Qeyd: Key və bilet təhlükəsizlik üçün maskalanıb və 90 saniyə ərzində etibarlıdır.*\n\`\`\`lua\n${snippet}\n\`\`\``,
+                            content: `${headerLabel}\n*Qeyd: Bilet 90 saniyə ərzində etibarlıdır.*\n\`\`\`lua\n${snippet}\n\`\`\``,
                             components: [copyRow]
+                        });
+                        return;
+                    }
+
+                    if (actionPart === 'sado_btn_hwid') {
+                        const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
+                        if (!redeemed) {
+                            await interaction.editReply({
+                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.'
+                            });
+                            return;
+                        }
+
+                        redeemed.entry.users = [];
+                        saveStoreToDisk();
+
+                        await interaction.editReply({
+                            content: `HWID sıfırlandı (\`${formatFullKeyDisplay(redeemed.key)}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər.`
                         });
                         return;
                     }
@@ -1089,7 +1184,7 @@ async function startDiscordBot() {
                             : "";
 
                         await interaction.editReply({
-                            content: `Key ugurla tesdiqlendi (\`${maskKeyValue(submittedKey)}\`). Indi **Get Script** ve **Reset HWID** duymeleri aktivdir. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
+                            content: `Key ugurla tesdiqlendi (\`${formatFullKeyDisplay(submittedKey)}\`). Indi **Get Script** ve **Reset HWID** duymeleri aktivdir. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
                         });
                         return;
                     }
@@ -1199,12 +1294,12 @@ app.get('/', async (req, res) => {
             const maxU = Math.max(1, parseInt(item.maxUsers, 10) || 1);
             const usedU = Array.isArray(item.users) ? item.users.length : 0;
             const roleBadge = item.autoRoleId ? escapeHtml(item.autoRoleId) : "Yoxdur";
-            // Panel cədvəlində açar sızmasının qarşısını almaq üçün maskalanmış açar və təhlükəsiz loader göstərilir
-            const protectedDisplayKey = escapeHtml(maskKeyValue(k));
+            // İstifadəçi açarları tam şəkildə görmək istədiyi üçün maskalanmadan göstərilir
+            const fullKeyText = escapeHtml(formatFullKeyDisplay(k));
             const sampleLoader = escapeHtml(buildLoaderSnippet(k, item.scriptId));
 
             rows += `<tr>
-                <td class="sp-td"><code class="sp-key-chip" title="Qorunan açar görünüşü">${protectedDisplayKey}</code></td>
+                <td class="sp-td"><code class="sp-key-chip" title="Tam açar">${fullKeyText}</code></td>
                 <td class="sp-td">${safeOwner}</td>
                 <td class="sp-td">${safeScriptName}</td>
                 <td class="sp-td"><span class="sp-badge-count">${usedU}/${maxU}</span></td>
@@ -1227,7 +1322,7 @@ app.get('/', async (req, res) => {
             ? store.whitelist.map(w => {
                 const sc = getScriptById(w.scriptId);
                 return `<div class="sp-wl-row">
-                    <div><b>${escapeHtml(maskKeyValue(w.id))}</b> <span class="sp-sub-muted">(${escapeHtml(sc.name)})</span></div>
+                    <div><b>${escapeHtml(formatFullKeyDisplay(w.id))}</b> <span class="sp-sub-muted">(${escapeHtml(sc.name)})</span></div>
                     <a href="/unwhitelist?id=${encodeURIComponent(w.id)}" class="sp-link-danger">[Unwhitelist]</a>
                 </div>`;
             }).join("")
@@ -1637,7 +1732,7 @@ app.get('/', async (req, res) => {
       <div class="sp-stat-card">
         <div class="sp-stat-label">Aktiv Açarlar (Keys)</div>
         <div class="sp-stat-value">${totalKeys}</div>
-        <div class="sp-stat-hint">Paneldə Maskalanmış</div>
+        <div class="sp-stat-hint">Tam Açar Görünüşü</div>
       </div>
       <div class="sp-stat-card">
         <div class="sp-stat-label">Whitelist</div>
@@ -1795,7 +1890,7 @@ app.get('/', async (req, res) => {
 
     <table class="sp-table">
       <tr class="sp-table-head">
-        <th class="sp-th">Açar (Qorunan)</th>
+        <th class="sp-th">Açar (Tam)</th>
         <th class="sp-th">Sahibi</th>
         <th class="sp-th">Skript</th>
         <th class="sp-th">Limit</th>
