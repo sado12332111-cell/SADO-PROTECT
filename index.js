@@ -640,17 +640,24 @@ async function startDiscordBot() {
                     }
 
                     if (actionPart === 'sado_btn_hwid') {
-                        const modal = new ModalBuilder()
-                            .setCustomId(`modal_hwid:${activeScript.id}`)
-                            .setTitle(`Reset HWID — ${activeScript.name.slice(0, 28)}`);
-                        const input = new TextInputBuilder()
-                            .setCustomId('key_input')
-                            .setLabel('HWID sifirlanacaq Key kodunu yazin')
-                            .setPlaceholder('Mes: SADO-ABC123')
-                            .setStyle(TextInputStyle.Short)
-                            .setRequired(true);
-                        modal.addComponents(new ActionRowBuilder().addComponents(input));
-                        await interaction.showModal(modal);
+                        const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
+                        if (!redeemed) {
+                            await interaction.reply({
+                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.',
+                                flags: MessageFlags.Ephemeral
+                            });
+                            return;
+                        }
+
+                        // Cari sahibinin cihaz baglantisi (HWID) sifirlanir ki, verdiyiniz adam islede bilsin
+                        // ve siz yeniden Reset HWID etmedikce oz cihazinizda islede bilmeyesiniz
+                        redeemed.entry.users = [];
+                        saveStoreToDisk();
+
+                        await interaction.reply({
+                            content: `HWID sıfırlandı (\`${redeemed.key}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər (yenidən Reset atmadıqca sizin cihazda işləməyəcək).`,
+                            flags: MessageFlags.Ephemeral
+                        });
                         return;
                     }
 
@@ -710,16 +717,7 @@ async function startDiscordBot() {
                             : "";
 
                         await interaction.editReply({
-                            content: `Key ugurla tesdiqlendi (\`${submittedKey}\`). Indi **Get Script** duymesine basib scripti goture bilersiniz. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
-                        });
-                        return;
-                    }
-
-                    if (modalType === 'modal_hwid') {
-                        entry.users = [];
-                        saveStoreToDisk();
-                        await interaction.editReply({
-                            content: `HWID ugurla sifirlandi: \`${submittedKey}\``
+                            content: `Key ugurla tesdiqlendi (\`${submittedKey}\`). Indi **Get Script** ve **Reset HWID** duymeleri aktivdir. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
                         });
                         return;
                     }
