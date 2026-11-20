@@ -57,6 +57,7 @@ const DURATION_LABEL_MAP = {
 let store = {
     discordConfig: {
         enabled: true,
+        token: "",
         clientId: DEFAULT_CLIENT_ID,
         autoRoleId: "",
         welcomeChannelId: "",
@@ -150,8 +151,9 @@ function purgeExpiredTickets() {
 }
 
 function getRuntimeBotToken() {
+    const cfgToken = String((store.discordConfig && store.discordConfig.token) || "").trim();
     const envToken = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
-    return envToken || EMBEDDED_BOT_TOKEN;
+    return cfgToken || envToken || EMBEDDED_BOT_TOKEN;
 }
 
 function isBotCurrentlyOnline() {
@@ -168,6 +170,7 @@ function saveStoreToDisk() {
         const safeStore = {
             discordConfig: {
                 enabled: Boolean(store.discordConfig.enabled),
+                token: String(store.discordConfig.token || "").trim(),
                 clientId: String(store.discordConfig.clientId || DEFAULT_CLIENT_ID),
                 autoRoleId: String(store.discordConfig.autoRoleId || ""),
                 welcomeChannelId: String(store.discordConfig.welcomeChannelId || ""),
@@ -213,8 +216,16 @@ function buildLoaderSnippet(keyStr, scriptId = "", discordUserId = null) {
 function loadStoreFromDisk() {
     try {
         if (!fs.existsSync(DATA_FILE)) {
+            return;
+        }
+        const raw = fs.readFileSync(DATA_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
             if (parsed.discordConfig && typeof parsed.discordConfig === 'object') {
                 store.discordConfig.enabled = parsed.discordConfig.enabled !== false;
+                if (typeof parsed.discordConfig.token === 'string') {
+                    store.discordConfig.token = parsed.discordConfig.token.trim();
+                }
                 if (typeof parsed.discordConfig.clientId === 'string' && parsed.discordConfig.clientId.trim()) {
                     store.discordConfig.clientId = parsed.discordConfig.clientId.trim();
                 }
@@ -806,10 +817,43 @@ async function startDiscordBot() {
                 purgeExpiredKeys();
 
                 if (interaction.isAutocomplete()) {
-                    if (interaction.commandName === 'panel') {
-                        if (!interaction.deferred && !interaction.replied) {
-                            await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+                    return;
+                }
+
+                if (interaction.isChatInputCommand()) {
+                    if (interaction.commandName === 'whitelist' || interaction.commandName === 'unwhitelist') {
+                        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+                        const rawUserOption = interaction.options.getString('user');
+                        const rawNameOption = interaction.options.getString('name');
+
+                        if (interaction.commandName === 'whitelist') {
+                            const chosenScript = rawNameOption
+                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
+                                : getScriptById("");
+                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
+                            if (!resAdd.ok) {
+                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` }).catch(() => {});
+                                return;
+                            }
+                            await interaction.editReply({
+                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**).`
+                            }).catch(() => {});
+                            return;
                         }
+
+                        if (interaction.commandName === 'unwhitelist') {
+                            const removed = removeFromWhitelist(rawUserOption);
+                            await interaction.editReply({
+                                content: removed
+                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
+                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
+                            }).catch(() => {});
+                            return;
+                        }
+                    }
+
+                    if (interaction.commandName === 'panel') {
+                        await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
                         const actionChoice = String(interaction.options.getString('action') || 'panel').toLowerCase();
                         const rawNameOption = interaction.options.getString('name');
@@ -831,7 +875,7 @@ async function startDiscordBot() {
                                 return;
                             }
                             await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**).`
+                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**). Bu istifadeci key ve HWID limiti olmadan skripti islede biler.`
                             }).catch(() => {});
                             return;
                         }
@@ -884,8 +928,8 @@ async function startDiscordBot() {
                             return;
                         }
 
+                        const primaryScript = getScriptById("");
                         if (channel && typeof channel.send === 'function') {
-                            const primaryScript = getScriptById("");
                             await channel.send(buildScriptControlPanelMessage(primaryScript, interaction.guild?.name || "SADOPROTECT"));
                         }
                         const selectorPayload = buildScriptSelectorMessage(interaction.guild?.name || "SADOPROTECT");
@@ -1749,28 +1793,25 @@ app.get('/', async (req, res) => {
     ${activeTab === "discord" ? `
     <div class="sp-panel">
       <div class="sp-panel-title">
-        <span>Discord Bot (Token Rejimi)</span>
-        <span class="sp-shield-tag">Token Mühitdən Oxunur</span>
+        <span>Discord Bot Ayarları</span>
+        <span class="sp-shield-tag">Token Rejimi</span>
       </div>
-      <p class="sp-sub-muted sp-mb-12">
-        Bot <code>DISCORD_BOT_TOKEN</code> mühit dəyişəni ilə qoşulur. Serverə daxil olanda avtomatik panel göndərir və <code>/panel</code>, <code>/whitelist</code>, <code>/unwhitelist</code> əmrlərini dəstəkləyir.
-      </p>
       <form action="/save-bot" method="POST">
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;font-size:13.5px;">
           <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
           <span>Discord Botu Aktiv Et</span>
         </label>
+        <label class="sp-label">Bot Token:</label>
+        <input type="password" name="token" value="${escapeHtml(store.discordConfig.token || "")}" placeholder="Discord Bot Token daxil edin" class="sp-input sp-mb-8">
         <label class="sp-label">Bot Client ID:</label>
         <input type="text" name="clientId" value="${escapeHtml(store.discordConfig.clientId)}" required class="sp-input sp-mb-8">
-        <label class="sp-label">Avtomatik Panel Kanal ID (istəyə bağlı):</label>
-        <input type="text" name="welcomeChannelId" value="${escapeHtml(store.discordConfig.welcomeChannelId)}" placeholder="Yalnız rəqəmli Kanal ID (məs: 123456789012345678)" class="sp-input sp-mb-8">
         <label class="sp-label">Avtomatik Rol (Auto Role):</label>
         <select name="autoRoleId" class="sp-select sp-mb-8">
           <option value="">Rol seçilməyib</option>
           ${manualRoleNotInList ? `<option value="${escapeHtml(store.discordConfig.autoRoleId)}" selected>Seçilmiş Rol ID: ${escapeHtml(store.discordConfig.autoRoleId)}</option>` : ""}
           ${roleOptionsHtml}
         </select>
-        <label class="sp-label">Və ya Rol ID-ni birbaşa yazın (siyahı boşdursa):</label>
+        <label class="sp-label">Rol ID (əllə daxil etmək üçün):</label>
         <input type="text" name="manualRoleId" value="${escapeHtml(store.discordConfig.autoRoleId)}" placeholder="Məs: 123456789012345678" class="sp-input sp-mb-12">
         <button type="submit" class="sp-btn sp-btn-violet">Bot Ayarlarını Saxla</button>
       </form>
@@ -1912,12 +1953,11 @@ app.get('/', async (req, res) => {
 app.post('/save-bot', async (req, res) => {
     try {
         store.discordConfig.enabled = req.body.enabled === "1";
+        if (typeof req.body.token === "string") {
+            store.discordConfig.token = req.body.token.trim();
+        }
         if (typeof req.body.clientId === "string" && req.body.clientId.trim()) {
             store.discordConfig.clientId = req.body.clientId.trim();
-        }
-        if (typeof req.body.welcomeChannelId === "string") {
-            const rawCh = req.body.welcomeChannelId.trim();
-            store.discordConfig.welcomeChannelId = /^\d+$/.test(rawCh) ? rawCh : "";
         }
         const manualRole = typeof req.body.manualRoleId === "string" ? req.body.manualRoleId.trim() : "";
         const selectedRole = typeof req.body.autoRoleId === "string" ? req.body.autoRoleId.trim() : "";
