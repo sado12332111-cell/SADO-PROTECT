@@ -25,6 +25,8 @@ app.use(express.urlencoded({ extended: true }));
 // ================= AYARLAR =================
 const ADMIN_PASS = "SADO2026";
 const DATA_FILE = path.join(__dirname, 'sado_protect_data.json');
+const DEFAULT_CLIENT_ID = "1562080654282199121";
+const DEFAULT_PERMISSIONS = "139586488320";
 let panelBaseUrl = process.env.RENDER_EXTERNAL_URL || "";
 
 const DURATION_MS_MAP = {
@@ -45,12 +47,13 @@ const DURATION_LABEL_MAP = {
     "lifetime": "lifetime"
 };
 
-// Davamlı məlumat strukturu (sayt bağlanıb-açılanda silinməsin deyə faylda saxlanılır)
 let store = {
     discordConfig: {
-        enabled: false,
-        token: "",
+        enabled: true,
+        clientId: DEFAULT_CLIENT_ID,
+        permissions: DEFAULT_PERMISSIONS,
         autoRoleId: "",
+        welcomeChannelId: "",
         panelEmbedTitle: "{script} — Control Panel",
         panelEmbedDesc: "This control panel is for the project:\n**{script}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID",
         panelEmbedColor: "#7c3aed",
@@ -70,13 +73,13 @@ let store = {
             code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
         }
     ],
-    whitelist: [], // [{ id: "123...", label: "User", scriptId: "sado-hub", addedAt: 1700000000000 }]
+    whitelist: [],
     keys: {
         "SADO-FREE-KEY": {
             owner: "Test User",
             scriptId: "sado-hub",
             maxUsers: 1,
-            users: [], // [{ hwid: "...", discordUserId: "..." }]
+            users: [],
             autoRoleId: "",
             expiresAt: null,
             durationLabel: "lifetime"
@@ -86,7 +89,7 @@ let store = {
 
 let discordClient = null;
 let botConnectionState = "Söndürülüb";
-let cachedGuildRoles = []; // Server rollarının avtomatik siyahısı
+let cachedGuildRoles = [];
 
 function escapeHtml(str) {
     return String(str || "")
@@ -105,9 +108,23 @@ function makeSlugId(name) {
     return (clean || "script") + "-" + Math.random().toString(36).substring(2, 6);
 }
 
+function getRuntimeBotToken() {
+    return String(process.env.DISCORD_BOT_TOKEN || "").trim();
+}
+
+function buildJoinDiscordUrl() {
+    const clientId = String(store.discordConfig.clientId || DEFAULT_CLIENT_ID).trim() || DEFAULT_CLIENT_ID;
+    const perms = String(store.discordConfig.permissions || DEFAULT_PERMISSIONS).trim() || DEFAULT_PERMISSIONS;
+    return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&permissions=${encodeURIComponent(perms)}&integration_type=0&scope=bot+applications.commands`;
+}
+
 function saveStoreToDisk() {
     try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2), 'utf8');
+        const safeStore = JSON.parse(JSON.stringify(store));
+        if (safeStore.discordConfig && Object.prototype.hasOwnProperty.call(safeStore.discordConfig, "token")) {
+            delete safeStore.discordConfig.token;
+        }
+        fs.writeFileSync(DATA_FILE, JSON.stringify(safeStore, null, 2), 'utf8');
     } catch (err) {
         console.error("Məlumat fayla yazıla bilmədi:", err.message);
     }
@@ -124,11 +141,15 @@ function loadStoreFromDisk() {
 
         if (parsed && typeof parsed === 'object') {
             if (parsed.discordConfig && typeof parsed.discordConfig === 'object') {
-                store.discordConfig.enabled = Boolean(parsed.discordConfig.enabled);
-                if (typeof parsed.discordConfig.token === 'string' && parsed.discordConfig.token.trim()) {
-                    store.discordConfig.token = parsed.discordConfig.token.trim();
+                store.discordConfig.enabled = parsed.discordConfig.enabled !== false;
+                if (typeof parsed.discordConfig.clientId === 'string' && parsed.discordConfig.clientId.trim()) {
+                    store.discordConfig.clientId = parsed.discordConfig.clientId.trim();
+                }
+                if (typeof parsed.discordConfig.permissions === 'string' && parsed.discordConfig.permissions.trim()) {
+                    store.discordConfig.permissions = parsed.discordConfig.permissions.trim();
                 }
                 store.discordConfig.autoRoleId = String(parsed.discordConfig.autoRoleId || "").trim();
+                store.discordConfig.welcomeChannelId = String(parsed.discordConfig.welcomeChannelId || "").trim();
                 if (typeof parsed.discordConfig.panelEmbedTitle === 'string' && parsed.discordConfig.panelEmbedTitle.trim()) {
                     store.discordConfig.panelEmbedTitle = parsed.discordConfig.panelEmbedTitle.trim();
                 }
@@ -240,7 +261,6 @@ function normalizeDuration(durationKey) {
     return Object.prototype.hasOwnProperty.call(DURATION_MS_MAP, key) ? key : "lifetime";
 }
 
-// Vaxtı bitmiş key-ləri avtomatik silir və faylı yeniləyir
 function purgeExpiredKeys() {
     const now = Date.now();
     let changed = false;
@@ -288,7 +308,7 @@ function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", ma
         owner: String(ownerName || "User").trim().slice(0, 40) || "User",
         scriptId: targetScript.id,
         maxUsers: parsedLimit,
-        users: [], // [{ hwid: "...", discordUserId: "..." }]
+        users: [],
         autoRoleId: roleToAssign,
         expiresAt: typeof ms === "number" ? Date.now() + ms : null,
         durationLabel: DURATION_LABEL_MAP[normDuration]
@@ -365,7 +385,6 @@ function buildOneTapCopyUrl(textToCopy) {
     return `${base}/copy?text=${encoded}`;
 }
 
-// Discord serverindəki rolları avtomatik yeniləyir
 async function refreshGuildRoles(client) {
     try {
         const rolesMap = new Map();
@@ -387,7 +406,6 @@ async function refreshGuildRoles(client) {
     }
 }
 
-// Key işlədiləndə bağlı rolu istifadəçiyə avtomatik verir
 async function assignRoleToDiscordUser(discordUserId, roleId) {
     const targetRoleId = String(roleId || store.discordConfig.autoRoleId || "").trim();
     if (!discordClient || !discordUserId || !targetRoleId) return { ok: false, reason: "Rol təyin edilməyib" };
@@ -406,7 +424,6 @@ async function assignRoleToDiscordUser(discordUserId, roleId) {
     return { ok: false, reason: "İstifadəçi serverdə tapılmadı" };
 }
 
-// /panel basanda açılan skript seçim menyusu
 function buildScriptSelectorMessage(guildName = "SADOPROTECT") {
     const embed = new EmbedBuilder()
         .setColor(0x7c3aed)
@@ -433,7 +450,6 @@ function buildScriptSelectorMessage(guildName = "SADOPROTECT") {
     return { embeds: [embed], components: [selectRow] };
 }
 
-// Seçilmiş skriptə aid Control Panel mesajı
 function resolveButtonStyle(styleName, fallbackStyle) {
     switch (String(styleName || "").trim()) {
         case "Success": return ButtonStyle.Success;
@@ -493,6 +509,37 @@ function buildScriptControlPanelMessage(scriptObj, guildName = "SADOPROTECT") {
     );
 
     return { embeds: [embed], components: [row1, row2] };
+}
+
+function findAutoPanelChannel(guild) {
+    if (!guild) return null;
+    if (store.discordConfig.welcomeChannelId) {
+        const configured = guild.channels.cache.get(store.discordConfig.welcomeChannelId);
+        if (configured && typeof configured.send === 'function') {
+            return configured;
+        }
+    }
+    if (guild.systemChannel && typeof guild.systemChannel.send === 'function') {
+        return guild.systemChannel;
+    }
+    return guild.channels.cache.find(
+        ch => ch && ch.isTextBased && ch.isTextBased() && typeof ch.send === 'function'
+    ) || null;
+}
+
+async function postOnboardingPanelToGuild(guild) {
+    try {
+        const targetChannel = findAutoPanelChannel(guild);
+        if (!targetChannel) return;
+        const primaryScript = getScriptById("");
+        const panelPayload = buildScriptControlPanelMessage(primaryScript, guild.name || "SADOPROTECT");
+        await targetChannel.send({
+            content: `**SADOPROTECT** serverə qoşuldu! Paneli yenidən göndərmək üçün \`/panel\` əmrindən istifadə edə bilərsiniz.`,
+            ...panelPayload
+        });
+    } catch (err) {
+        console.error("Avtomatik panel göndərilə bilmədi:", err.message);
+    }
 }
 
 setInterval(() => {
@@ -580,11 +627,11 @@ function buildPanelSlashCommands() {
 }
 
 async function syncDiscordSlashCommands(tokenOverride = null) {
-    const cleanToken = String(tokenOverride || store.discordConfig.token || "").trim();
+    const cleanToken = String(tokenOverride || getRuntimeBotToken() || "").trim();
     if (!cleanToken) return;
 
     try {
-        let appId = discordClient && discordClient.user ? discordClient.user.id : null;
+        let appId = (discordClient && discordClient.user ? discordClient.user.id : null) || store.discordConfig.clientId;
         if (!appId) {
             const meRes = await fetch('https://discord.com/api/v10/users/@me', {
                 headers: { Authorization: `Bot ${cleanToken}` }
@@ -616,13 +663,14 @@ async function syncDiscordSlashCommands(tokenOverride = null) {
 async function startDiscordBot() {
     await stopDiscordBot();
 
-    const cleanToken = String(store.discordConfig.token || "").trim();
     if (!store.discordConfig.enabled) {
         botConnectionState = "Söndürülüb";
         return;
     }
+
+    const cleanToken = getRuntimeBotToken();
     if (!cleanToken) {
-        botConnectionState = "Xəta: Bot Token daxil edilməyib";
+        botConnectionState = "Join Discord Hazırdır (DISCORD_BOT_TOKEN mühit dəyişəni əlavə olunmayıb)";
         return;
     }
 
@@ -635,20 +683,25 @@ async function startDiscordBot() {
 
         client.once('ready', async () => {
             botConnectionState = `Aktivdir (${client.user.tag})`;
+            if (client.user && client.user.id) {
+                store.discordConfig.clientId = client.user.id;
+                saveStoreToDisk();
+            }
             discordClient = client;
             await refreshGuildRoles(client);
             await syncDiscordSlashCommands(cleanToken);
         });
 
-        client.on('guildCreate', async () => {
+        client.on('guildCreate', async (guild) => {
             await refreshGuildRoles(client);
+            await syncDiscordSlashCommands(cleanToken);
+            await postOnboardingPanelToGuild(guild);
         });
 
         client.on('interactionCreate', async (interaction) => {
             try {
                 purgeExpiredKeys();
 
-                // /panel name secimi ucun avtomatik tamamlama (autocomplete)
                 if (interaction.isAutocomplete()) {
                     if (interaction.commandName === 'panel') {
                         const focused = String(interaction.options.getFocused() || "").toLowerCase();
@@ -827,10 +880,8 @@ async function startDiscordBot() {
                         return;
                     }
 
-                    // Digər düymələr üçün dərhal ephemeral gözləmə cavabı verilir ki, 3 saniyə vaxt aşımı olmasın
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-                    // Get Script düyməsi: key yazma modalı açılmır; whitelist varsa və ya key aktivləşibsə skripti verir
                     if (actionPart === 'sado_btn_script') {
                         const wlEntry = isWhitelistedIdentifier(interaction.user.id);
                         const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
@@ -873,8 +924,6 @@ async function startDiscordBot() {
                             return;
                         }
 
-                        // Cari sahibinin cihaz baglantisi (HWID) sifirlanir ki, verdiyiniz adam islede bilsin
-                        // ve siz yeniden Reset HWID etmedikce oz cihazinizda islede bilmeyesiniz
                         redeemed.entry.users = [];
                         saveStoreToDisk();
 
@@ -997,10 +1046,12 @@ app.get('/', async (req, res) => {
         } else if (msgType === "script_deleted") {
             bannerHtml = `<div style="background:#7f1d1d;color:#fecaca;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Skript silindi!</div>`;
         } else if (msgType === "bot_saved") {
-            bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord bot ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
+            bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Join Discord ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
         } else if (msgType === "panel_style_saved") {
             bannerHtml = `<div style="background:#5b21b6;color:#ede9fe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord panel buton adlari ve rengleri yadda saxlanildi!</div>`;
         }
+
+        const joinDiscordUrl = buildJoinDiscordUrl();
 
         const renderStyleSelect = (fieldName, currentVal) => {
             const opts = [
@@ -1167,6 +1218,16 @@ app.get('/', async (req, res) => {
       gap: 10px;
       margin-bottom: 12px;
     }
+    .join-discord-btn {
+      display: inline-block;
+      background: #5865F2;
+      color: #ffffff;
+      text-decoration: none;
+      padding: 11px 18px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 14px;
+    }
     @media (max-width: 640px) {
       .btn-grid {
         grid-template-columns: 1fr;
@@ -1184,32 +1245,42 @@ app.get('/', async (req, res) => {
             </button>
             <h1 style="color:#38bdf8;margin:0;font-size:20px;">SADOPROTECT</h1>
         </div>
-        <span style="font-size:12px;color:#94a3b8;">${activeTab === "discord" ? "Discord Bot Ayarlari" : "Esas Panel"}</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+            <a href="${escapeHtml(joinDiscordUrl)}" target="_blank" rel="noopener noreferrer" class="join-discord-btn">Join Discord</a>
+        </div>
         <div id="navDrawer" class="drawer-menu">
             <a href="/?pass=${safePassEnc}&tab=main" class="${activeTab === "main" ? "active" : ""}">1. Skriptler &amp; Key Paneli</a>
-            <a href="/?pass=${safePassEnc}&tab=discord" class="${activeTab === "discord" ? "active" : ""}">2. Discord bot</a>
+            <a href="/?pass=${safePassEnc}&tab=discord" class="${activeTab === "discord" ? "active" : ""}">2. Join Discord &amp; Panel</a>
         </div>
     </div>
     ${bannerHtml}
 
     ${activeTab === "discord" ? `
-    <form action="/save-bot" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
-        <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
-        <input type="hidden" name="returnTab" value="discord">
-        <h3 style="margin-top:0;color:#818cf8;">Discord Bot Qosma Paneli</h3>
-        <div style="margin-bottom:10px;font-size:14px;">Bot Veziyyeti: <b>${escapeHtml(botConnectionState)}</b></div>
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
-            <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
-            <span>Discord Botu Aktiv Et</span>
-        </label>
-        <input type="password" name="token" value="${escapeHtml(store.discordConfig.token)}" placeholder="Discord Bot Token-i bura yapisdirin" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
-        <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:6px;">Server Rollari (Auto Role):</label>
-        <select name="autoRoleId" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:12px;">
-            <option value="">Rol secilmeyib</option>
-            ${roleOptionsHtml}
-        </select>
-        <button type="submit" style="background:#6366f1;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Botu Yadda Saxla / Bagla</button>
-    </form>
+    <div style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
+        <h3 style="margin-top:0;color:#818cf8;">Join Discord (Tokensiz Dəvət &amp; Avtomatik Panel)</h3>
+        <div style="margin-bottom:12px;font-size:14px;">Bot Veziyyeti: <b>${escapeHtml(botConnectionState)}</b></div>
+        <div style="margin-bottom:14px;">
+            <a href="${escapeHtml(joinDiscordUrl)}" target="_blank" rel="noopener noreferrer" class="join-discord-btn">Join Discord Server</a>
+        </div>
+        <form action="/save-bot" method="POST">
+            <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+            <input type="hidden" name="returnTab" value="discord">
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
+                <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
+                <span>Discord Bot &amp; Avtomatik Panel Aktiv Et</span>
+            </label>
+            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Discord Bot Client ID:</label>
+            <input type="text" name="clientId" value="${escapeHtml(store.discordConfig.clientId)}" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
+            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Avtomatik Panel Kanal ID (istəyə bağlı):</label>
+            <input type="text" name="welcomeChannelId" value="${escapeHtml(store.discordConfig.welcomeChannelId)}" placeholder="Boş buraxılsa bot girdiyi ilk uyğun kanala panel atar" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
+            <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:6px;">Server Rollari (Auto Role):</label>
+            <select name="autoRoleId" style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:12px;">
+                <option value="">Rol secilmeyib</option>
+                ${roleOptionsHtml}
+            </select>
+            <button type="submit" style="background:#6366f1;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Dəvət &amp; Panel Ayarını Saxla</button>
+        </form>
+    </div>
 
     <form action="/save-panel-style" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
         <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
@@ -1342,8 +1413,11 @@ app.post('/save-bot', async (req, res) => {
     try {
         if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
         store.discordConfig.enabled = req.body.enabled === "1";
-        if (typeof req.body.token === "string" && req.body.token.trim()) {
-            store.discordConfig.token = req.body.token.trim();
+        if (typeof req.body.clientId === "string" && req.body.clientId.trim()) {
+            store.discordConfig.clientId = req.body.clientId.trim();
+        }
+        if (typeof req.body.welcomeChannelId === "string") {
+            store.discordConfig.welcomeChannelId = req.body.welcomeChannelId.trim();
         }
         if (typeof req.body.autoRoleId === "string") {
             store.discordConfig.autoRoleId = req.body.autoRoleId.trim();
@@ -1456,7 +1530,6 @@ app.get('/delete-script', async (req, res) => {
     }
 });
 
-// Script koduna 1 dəfə basan kimi avtomatik kopyalayan səhifə
 app.get('/copy', (req, res) => {
     const rawText = String(req.query.text || "");
     const safeJsLiteral = JSON.stringify(rawText);
@@ -1634,7 +1707,6 @@ app.get('/loader', (req, res) => {
             return res.status(403).send("-- SADOPROTECT: Access Denied!");
         }
 
-        // Whitelist yoxlamasi: key olmadan ve limit/HWID maneeleri olmadan birbasa skripti verir
         const isWlKey = userKey.startsWith("WHITELIST-");
         const wlCandidateId = isWlKey ? userKey.replace(/^WHITELIST-/i, "") : "";
         const matchedWhitelist =
@@ -1687,13 +1759,12 @@ app.get('/loader', (req, res) => {
     }
 });
 
-// Serverin yuxuya getməməsi üçün yüngül ping endpoint-i
 app.get('/ping', (req, res) => {
     res.status(200).send("OK");
 });
 
 loadStoreFromDisk();
-if (store.discordConfig.enabled && store.discordConfig.token) {
+if (store.discordConfig.enabled) {
     startDiscordBot();
 }
 
@@ -1701,7 +1772,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log("SADOPROTECT Aktivdir!");
 
-    // Hər 9 dəqiqədən bir özünə sorğu atır ki, Render botu yuxuya verməsin
     setInterval(() => {
         const targetUrl = (panelBaseUrl || process.env.RENDER_EXTERNAL_URL || "").replace(/\/+$/, "");
         if (targetUrl) {
