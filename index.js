@@ -792,6 +792,15 @@ app.get('/', async (req, res) => {
                 ${opts.map(o => `<option value="${o.val}" ${currentVal === o.val ? "selected" : ""}>${o.label}</option>`).join("")}
             </select>`;
         };
+
+        const roleOptionsHtml = cachedGuildRoles.map(r =>
+            `<option value="${escapeHtml(r.id)}" ${store.discordConfig.autoRoleId === r.id ? "selected" : ""}>@${escapeHtml(r.name)} (${escapeHtml(r.guildName)})</option>`
+        ).join("");
+
+        const keyRoleOptionsHtml = `<option value="">Default Auto Role</option>` + cachedGuildRoles.map(r =>
+            `<option value="${escapeHtml(r.id)}">@${escapeHtml(r.name)}</option>`
+        ).join("");
+
         const scriptOptionsHtml = store.scripts.map(sc =>
             `<option value="${escapeHtml(sc.id)}">${escapeHtml(sc.name)}</option>`
         ).join("");
