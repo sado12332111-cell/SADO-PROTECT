@@ -27,6 +27,7 @@ const ADMIN_PASS = "SADO2026";
 const DATA_FILE = path.join(__dirname, 'sado_protect_data.json');
 const DEFAULT_CLIENT_ID = "1562080654282199121";
 const DEFAULT_PERMISSIONS = "139586488320";
+const EMBEDDED_BOT_TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
 let panelBaseUrl = process.env.RENDER_EXTERNAL_URL || "";
 
 const DURATION_MS_MAP = {
@@ -109,7 +110,12 @@ function makeSlugId(name) {
 }
 
 function getRuntimeBotToken() {
-    return String(process.env.DISCORD_BOT_TOKEN || "").trim();
+    const envToken = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
+    return envToken || EMBEDDED_BOT_TOKEN;
+}
+
+function isBotCurrentlyOnline() {
+    return Boolean(discordClient && discordClient.isReady && discordClient.isReady() && discordClient.user);
 }
 
 function buildJoinDiscordUrl() {
@@ -661,6 +667,11 @@ async function syncDiscordSlashCommands(tokenOverride = null) {
 }
 
 async function startDiscordBot() {
+    if (isBotCurrentlyOnline()) {
+        botConnectionState = `Aktivdir (${discordClient.user.tag})`;
+        return;
+    }
+
     await stopDiscordBot();
 
     if (!store.discordConfig.enabled) {
@@ -670,7 +681,7 @@ async function startDiscordBot() {
 
     const cleanToken = getRuntimeBotToken();
     if (!cleanToken) {
-        botConnectionState = "Join Discord Hazırdır (DISCORD_BOT_TOKEN mühit dəyişəni əlavə olunmayıb)";
+        botConnectionState = "Join Discord Hazırdır (Bot Token mühitdə təyin edilməyib)";
         return;
     }
 
@@ -1257,7 +1268,7 @@ app.get('/', async (req, res) => {
 
     ${activeTab === "discord" ? `
     <div style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
-        <h3 style="margin-top:0;color:#818cf8;">Join Discord (Tokensiz Dəvət &amp; Avtomatik Panel)</h3>
+        <h3 style="margin-top:0;color:#818cf8;">Join Discord (LuaProtect Üslubu — Dəvət Et &amp; İdarə Et)</h3>
         <div style="margin-bottom:12px;font-size:14px;">Bot Veziyyeti: <b>${escapeHtml(botConnectionState)}</b></div>
         <div style="margin-bottom:14px;">
             <a href="${escapeHtml(joinDiscordUrl)}" target="_blank" rel="noopener noreferrer" class="join-discord-btn">Join Discord Server</a>
@@ -1267,7 +1278,7 @@ app.get('/', async (req, res) => {
             <input type="hidden" name="returnTab" value="discord">
             <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
                 <input type="checkbox" name="enabled" value="1" ${store.discordConfig.enabled ? "checked" : ""}>
-                <span>Discord Bot &amp; Avtomatik Panel Aktiv Et</span>
+                <span>Join Discord &amp; Avtomatik Panel Aktiv Et</span>
             </label>
             <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Discord Bot Client ID:</label>
             <input type="text" name="clientId" value="${escapeHtml(store.discordConfig.clientId)}" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
