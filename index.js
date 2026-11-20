@@ -50,7 +50,18 @@ let store = {
     discordConfig: {
         enabled: false,
         token: "",
-        autoRoleId: ""
+        autoRoleId: "",
+        panelEmbedTitle: "{script} — Control Panel",
+        panelEmbedDesc: "This control panel is for the project:\n**{script}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID",
+        panelEmbedColor: "#7c3aed",
+        btnRedeemLabel: "Redeem Key",
+        btnRedeemStyle: "Success",
+        btnScriptLabel: "Get Script",
+        btnScriptStyle: "Primary",
+        btnHwidLabel: "Reset HWID",
+        btnHwidStyle: "Secondary",
+        btnStatsLabel: "Get Stats",
+        btnStatsStyle: "Secondary"
     },
     scripts: [
         {
@@ -117,6 +128,39 @@ function loadStoreFromDisk() {
                     store.discordConfig.token = parsed.discordConfig.token.trim();
                 }
                 store.discordConfig.autoRoleId = String(parsed.discordConfig.autoRoleId || "").trim();
+                if (typeof parsed.discordConfig.panelEmbedTitle === 'string' && parsed.discordConfig.panelEmbedTitle.trim()) {
+                    store.discordConfig.panelEmbedTitle = parsed.discordConfig.panelEmbedTitle.trim();
+                }
+                if (typeof parsed.discordConfig.panelEmbedDesc === 'string' && parsed.discordConfig.panelEmbedDesc.trim()) {
+                    store.discordConfig.panelEmbedDesc = parsed.discordConfig.panelEmbedDesc;
+                }
+                if (typeof parsed.discordConfig.panelEmbedColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(parsed.discordConfig.panelEmbedColor.trim())) {
+                    store.discordConfig.panelEmbedColor = parsed.discordConfig.panelEmbedColor.trim();
+                }
+                if (typeof parsed.discordConfig.btnRedeemLabel === 'string' && parsed.discordConfig.btnRedeemLabel.trim()) {
+                    store.discordConfig.btnRedeemLabel = parsed.discordConfig.btnRedeemLabel.trim().slice(0, 80);
+                }
+                if (typeof parsed.discordConfig.btnRedeemStyle === 'string') {
+                    store.discordConfig.btnRedeemStyle = parsed.discordConfig.btnRedeemStyle;
+                }
+                if (typeof parsed.discordConfig.btnScriptLabel === 'string' && parsed.discordConfig.btnScriptLabel.trim()) {
+                    store.discordConfig.btnScriptLabel = parsed.discordConfig.btnScriptLabel.trim().slice(0, 80);
+                }
+                if (typeof parsed.discordConfig.btnScriptStyle === 'string') {
+                    store.discordConfig.btnScriptStyle = parsed.discordConfig.btnScriptStyle;
+                }
+                if (typeof parsed.discordConfig.btnHwidLabel === 'string' && parsed.discordConfig.btnHwidLabel.trim()) {
+                    store.discordConfig.btnHwidLabel = parsed.discordConfig.btnHwidLabel.trim().slice(0, 80);
+                }
+                if (typeof parsed.discordConfig.btnHwidStyle === 'string') {
+                    store.discordConfig.btnHwidStyle = parsed.discordConfig.btnHwidStyle;
+                }
+                if (typeof parsed.discordConfig.btnStatsLabel === 'string' && parsed.discordConfig.btnStatsLabel.trim()) {
+                    store.discordConfig.btnStatsLabel = parsed.discordConfig.btnStatsLabel.trim().slice(0, 80);
+                }
+                if (typeof parsed.discordConfig.btnStatsStyle === 'string') {
+                    store.discordConfig.btnStatsStyle = parsed.discordConfig.btnStatsStyle;
+                }
             }
 
             if (Array.isArray(parsed.scripts) && parsed.scripts.length > 0) {
@@ -331,36 +375,62 @@ function buildScriptSelectorMessage(guildName = "SADOPROTECT") {
 }
 
 // Seçilmiş skriptə aid Control Panel mesajı
+function resolveButtonStyle(styleName, fallbackStyle) {
+    switch (String(styleName || "").trim()) {
+        case "Success": return ButtonStyle.Success;
+        case "Primary": return ButtonStyle.Primary;
+        case "Secondary": return ButtonStyle.Secondary;
+        case "Danger": return ButtonStyle.Danger;
+        default: return fallbackStyle;
+    }
+}
+
+function parseHexColorInt(hexStr, fallbackInt = 0x7c3aed) {
+    const clean = String(hexStr || "").trim().replace(/^#/, "");
+    if (/^[0-9a-fA-F]{6}$/.test(clean)) {
+        return parseInt(clean, 16);
+    }
+    return fallbackInt;
+}
+
 function buildScriptControlPanelMessage(scriptObj, guildName = "SADOPROTECT") {
+    const cfg = store.discordConfig;
+    const rawTitle = String(cfg.panelEmbedTitle || "{script} — Control Panel");
+    const rawDesc = String(
+        cfg.panelEmbedDesc ||
+        "This control panel is for the project:\n**{script}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID"
+    );
+
+    const finalTitle = rawTitle.replace(/\{script\}/gi, scriptObj.name).slice(0, 256);
+    const finalDesc = rawDesc.replace(/\{script\}/gi, scriptObj.name).slice(0, 4000);
+    const embedColor = parseHexColorInt(cfg.panelEmbedColor, 0x7c3aed);
+
     const embed = new EmbedBuilder()
-        .setColor(0x7c3aed)
-        .setTitle(`${scriptObj.name} — Control Panel`)
-        .setDescription(
-            `This control panel is for the project:\n**${scriptObj.name}**\n` +
-            `If you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID`
-        )
+        .setColor(embedColor)
+        .setTitle(finalTitle)
+        .setDescription(finalDesc)
         .setFooter({ text: `${guildName} • SADOPROTECT (${scriptObj.id})` });
 
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`sado_btn_redeem:${scriptObj.id}`)
-            .setLabel('Redeem Key')
-            .setStyle(ButtonStyle.Success),
+            .setLabel(String(cfg.btnRedeemLabel || "Redeem Key").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnRedeemStyle, ButtonStyle.Success)),
         new ButtonBuilder()
             .setCustomId(`sado_btn_script:${scriptObj.id}`)
-            .setLabel('Get Script')
-            .setStyle(ButtonStyle.Primary)
+            .setLabel(String(cfg.btnScriptLabel || "Get Script").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnScriptStyle, ButtonStyle.Primary))
     );
 
     const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`sado_btn_hwid:${scriptObj.id}`)
-            .setLabel('Reset HWID')
-            .setStyle(ButtonStyle.Secondary),
+            .setLabel(String(cfg.btnHwidLabel || "Reset HWID").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnHwidStyle, ButtonStyle.Secondary)),
         new ButtonBuilder()
             .setCustomId(`sado_btn_stats:${scriptObj.id}`)
-            .setLabel('Get Stats')
-            .setStyle(ButtonStyle.Secondary)
+            .setLabel(String(cfg.btnStatsLabel || "Get Stats").slice(0, 80))
+            .setStyle(resolveButtonStyle(cfg.btnStatsStyle, ButtonStyle.Secondary))
     );
 
     return { embeds: [embed], components: [row1, row2] };
@@ -696,6 +766,7 @@ app.get('/', async (req, res) => {
 
         getBaseUrl(req);
         const safePassEnc = encodeURIComponent(ADMIN_PASS);
+        const activeTab = req.query.tab === "discord" ? "discord" : "main";
         const msgType = String(req.query.msg || "");
         let bannerHtml = "";
         if (msgType === "script_created") {
@@ -706,22 +777,21 @@ app.get('/', async (req, res) => {
             bannerHtml = `<div style="background:#7f1d1d;color:#fecaca;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Skript silindi!</div>`;
         } else if (msgType === "bot_saved") {
             bannerHtml = `<div style="background:#1e3a8a;color:#dbeafe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord bot ayarlari saxlanildi. Status: <b>${escapeHtml(botConnectionState)}</b></div>`;
+        } else if (msgType === "panel_style_saved") {
+            bannerHtml = `<div style="background:#5b21b6;color:#ede9fe;padding:10px 14px;border-radius:8px;margin-bottom:16px;">Discord panel buton adlari ve rengleri yadda saxlanildi!</div>`;
         }
 
-        const roleOptionsHtml = cachedGuildRoles.length > 0
-            ? cachedGuildRoles.map(r => {
-                const selected = store.discordConfig.autoRoleId === r.id ? "selected" : "";
-                return `<option value="${escapeHtml(r.id)}" ${selected}>${escapeHtml(r.name)} (${escapeHtml(r.guildName)})</option>`;
-            }).join("")
-            : `<option value="">Rol yoxdur (Botu servere elave edin)</option>`;
-
-        const keyRoleOptionsHtml = cachedGuildRoles.length > 0
-            ? `<option value="">Rol verilmesin</option>` + cachedGuildRoles.map(r => {
-                const selected = store.discordConfig.autoRoleId === r.id ? "selected" : "";
-                return `<option value="${escapeHtml(r.id)}" ${selected}>${escapeHtml(r.name)}</option>`;
-            }).join("")
-            : `<option value="">Rol yoxdur</option>`;
-
+        const renderStyleSelect = (fieldName, currentVal) => {
+            const opts = [
+                { val: "Success", label: "Yasil (Success)" },
+                { val: "Primary", label: "Mavi (Primary)" },
+                { val: "Secondary", label: "Boz (Secondary)" },
+                { val: "Danger", label: "Qirmizi (Danger)" }
+            ];
+            return `<select name="${fieldName}" style="padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;">
+                ${opts.map(o => `<option value="${o.val}" ${currentVal === o.val ? "selected" : ""}>${o.label}</option>`).join("")}
+            </select>`;
+        };
         const scriptOptionsHtml = store.scripts.map(sc =>
             `<option value="${escapeHtml(sc.id)}">${escapeHtml(sc.name)}</option>`
         ).join("");
@@ -785,13 +855,107 @@ app.get('/', async (req, res) => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SADOPROTECT — Idareetme Paneli</title>
+  <style>
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #131b2e;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      border: 1px solid #1e293b;
+      position: relative;
+    }
+    .hamburger-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #38bdf8;
+      width: 42px;
+      height: 40px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 5px;
+      padding: 0;
+    }
+    .hamburger-btn span {
+      display: block;
+      width: 20px;
+      height: 2px;
+      background: #38bdf8;
+      border-radius: 2px;
+    }
+    .drawer-menu {
+      display: none;
+      position: absolute;
+      top: 62px;
+      left: 0;
+      width: 240px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.6);
+      z-index: 100;
+      overflow: hidden;
+    }
+    .drawer-menu.open {
+      display: block;
+    }
+    .drawer-menu a {
+      display: block;
+      padding: 13px 16px;
+      color: #e2e8f0;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .drawer-menu a:last-child {
+      border-bottom: none;
+    }
+    .drawer-menu a.active {
+      background: #1e293b;
+      color: #38bdf8;
+    }
+    .btn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 640px) {
+      .btn-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
 </head>
 <body style="background:#0b0f19;color:white;font-family:sans-serif;padding:20px;max-width:1040px;margin:0 auto;">
-    <h1 style="color:#38bdf8;margin-bottom:16px;">SADOPROTECT — Idareetme Paneli</h1>
+    <div class="topbar">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <button type="button" class="hamburger-btn" aria-label="Menyu" onclick="document.getElementById('navDrawer').classList.toggle('open')">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <h1 style="color:#38bdf8;margin:0;font-size:20px;">SADOPROTECT</h1>
+        </div>
+        <span style="font-size:12px;color:#94a3b8;">${activeTab === "discord" ? "Discord Bot Ayarlari" : "Esas Panel"}</span>
+        <div id="navDrawer" class="drawer-menu">
+            <a href="/?pass=${safePassEnc}&tab=main" class="${activeTab === "main" ? "active" : ""}">1. Skriptler &amp; Key Paneli</a>
+            <a href="/?pass=${safePassEnc}&tab=discord" class="${activeTab === "discord" ? "active" : ""}">2. Discord bot</a>
+        </div>
+    </div>
     ${bannerHtml}
 
+    ${activeTab === "discord" ? `
     <form action="/save-bot" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
         <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+        <input type="hidden" name="returnTab" value="discord">
         <h3 style="margin-top:0;color:#818cf8;">Discord Bot Qosma Paneli</h3>
         <div style="margin-bottom:10px;font-size:14px;">Bot Veziyyeti: <b>${escapeHtml(botConnectionState)}</b></div>
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
@@ -807,6 +971,55 @@ app.get('/', async (req, res) => {
         <button type="submit" style="background:#6366f1;color:white;border:none;padding:9px 16px;border-radius:6px;font-weight:bold;cursor:pointer;">Botu Yadda Saxla / Bagla</button>
     </form>
 
+    <form action="/save-panel-style" method="POST" style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
+        <input type="hidden" name="pass" value="${escapeHtml(ADMIN_PASS)}">
+        <h3 style="margin-top:0;color:#38bdf8;">Discord Panel Gorunusu &amp; Buton Ayarlari</h3>
+        <p style="font-size:12px;color:#94a3b8;margin-top:0;">Basliq ve aciqlamada <code>{script}</code> yazsaniz avtomatik secilen skriptin adi ile evez olunacaq.</p>
+
+        <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Panel Basligi (Title):</label>
+        <input type="text" name="panelEmbedTitle" value="${escapeHtml(store.discordConfig.panelEmbedTitle)}" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">
+
+        <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Panel Aciqlamasi (Description):</label>
+        <textarea name="panelEmbedDesc" rows="3" required style="width:100%;box-sizing:border-box;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:10px;">${escapeHtml(store.discordConfig.panelEmbedDesc)}</textarea>
+
+        <label style="display:block;font-size:13px;color:#cbd5e1;margin-bottom:5px;">Panel Kenar Rengi (Embed Color):</label>
+        <input type="color" name="panelEmbedColor" value="${escapeHtml(store.discordConfig.panelEmbedColor || "#7c3aed")}" style="width:80px;height:38px;padding:2px;border-radius:6px;border:1px solid #334155;background:#020617;cursor:pointer;margin-bottom:14px;">
+
+        <h4 style="margin:6px 0 10px 0;color:#cbd5e1;">Buton Adlari ve Rengleri</h4>
+        <div class="btn-grid">
+            <div style="background:#0f172a;padding:10px;border-radius:8px;border:1px solid #1e293b;">
+                <label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px;">1-ci Buton (Redeem Key) Adi &amp; Rengi:</label>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" name="btnRedeemLabel" value="${escapeHtml(store.discordConfig.btnRedeemLabel)}" required style="flex:1;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;">
+                    ${renderStyleSelect("btnRedeemStyle", store.discordConfig.btnRedeemStyle)}
+                </div>
+            </div>
+            <div style="background:#0f172a;padding:10px;border-radius:8px;border:1px solid #1e293b;">
+                <label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px;">2-ci Buton (Get Script) Adi &amp; Rengi:</label>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" name="btnScriptLabel" value="${escapeHtml(store.discordConfig.btnScriptLabel)}" required style="flex:1;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;">
+                    ${renderStyleSelect("btnScriptStyle", store.discordConfig.btnScriptStyle)}
+                </div>
+            </div>
+            <div style="background:#0f172a;padding:10px;border-radius:8px;border:1px solid #1e293b;">
+                <label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px;">3-cu Buton (Reset HWID) Adi &amp; Rengi:</label>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" name="btnHwidLabel" value="${escapeHtml(store.discordConfig.btnHwidLabel)}" required style="flex:1;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;">
+                    ${renderStyleSelect("btnHwidStyle", store.discordConfig.btnHwidStyle)}
+                </div>
+            </div>
+            <div style="background:#0f172a;padding:10px;border-radius:8px;border:1px solid #1e293b;">
+                <label style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px;">4-cu Buton (Get Stats) Adi &amp; Rengi:</label>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" name="btnStatsLabel" value="${escapeHtml(store.discordConfig.btnStatsLabel)}" required style="flex:1;padding:9px;border-radius:6px;border:1px solid #334155;background:#020617;color:#e2e8f0;">
+                    ${renderStyleSelect("btnStatsStyle", store.discordConfig.btnStatsStyle)}
+                </div>
+            </div>
+        </div>
+
+        <button type="submit" style="background:#10b981;color:white;border:none;padding:10px 18px;border-radius:6px;font-weight:bold;cursor:pointer;">Butonlari ve Paneli Yadda Saxla</button>
+    </form>
+    ` : `
     <div style="margin-bottom:20px;background:#131b2e;padding:16px;border-radius:10px;">
         <details open>
             <summary style="cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;background:#0284c7;color:white;padding:9px 16px;border-radius:6px;font-weight:bold;">
@@ -864,6 +1077,7 @@ app.get('/', async (req, res) => {
         </tr>
         ${rows}
     </table>
+    `}
 </body>
 </html>`);
     } catch (err) {
@@ -883,7 +1097,39 @@ app.post('/save-bot', async (req, res) => {
         }
         saveStoreToDisk();
         await startDiscordBot();
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=bot_saved');
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&tab=discord&msg=bot_saved');
+    } catch (err) {
+        res.status(500).send("Xeta bas verdi");
+    }
+});
+
+app.post('/save-panel-style', (req, res) => {
+    try {
+        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
+        const allowedStyles = new Set(["Success", "Primary", "Secondary", "Danger"]);
+        const cleanStyle = (val, def) => allowedStyles.has(String(val || "")) ? String(val) : def;
+
+        store.discordConfig.panelEmbedTitle = String(req.body.panelEmbedTitle || "{script} — Control Panel").trim().slice(0, 200);
+        store.discordConfig.panelEmbedDesc = String(req.body.panelEmbedDesc || "").trim().slice(0, 2000) || store.discordConfig.panelEmbedDesc;
+        const hex = String(req.body.panelEmbedColor || "#7c3aed").trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+            store.discordConfig.panelEmbedColor = hex;
+        }
+
+        store.discordConfig.btnRedeemLabel = String(req.body.btnRedeemLabel || "Redeem Key").trim().slice(0, 80);
+        store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Success");
+
+        store.discordConfig.btnScriptLabel = String(req.body.btnScriptLabel || "Get Script").trim().slice(0, 80);
+        store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Primary");
+
+        store.discordConfig.btnHwidLabel = String(req.body.btnHwidLabel || "Reset HWID").trim().slice(0, 80);
+        store.discordConfig.btnHwidStyle = cleanStyle(req.body.btnHwidStyle, "Secondary");
+
+        store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Get Stats").trim().slice(0, 80);
+        store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Secondary");
+
+        saveStoreToDisk();
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&tab=discord&msg=panel_style_saved');
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
     }
