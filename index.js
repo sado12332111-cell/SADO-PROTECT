@@ -211,10 +211,10 @@ function buildLoaderSnippet(keyStr, scriptId = "", discordUserId = null) {
 
     return `local hwid = game:GetService("RbxAnalyticsService"):GetClientId()\nloadstring(game:HttpGet("${base}/loader?ticket=${ticket}&hwid=" .. hwid))()`;
 }
-        const raw = fs.readFileSync(DATA_FILE, 'utf8');
-        const parsed = JSON.parse(raw);
 
-        if (parsed && typeof parsed === 'object') {
+function loadStoreFromDisk() {
+    try {
+        if (!fs.existsSync(DATA_FILE)) {
             if (parsed.discordConfig && typeof parsed.discordConfig === 'object') {
                 store.discordConfig.enabled = parsed.discordConfig.enabled !== false;
                 if (typeof parsed.discordConfig.clientId === 'string' && parsed.discordConfig.clientId.trim()) {
@@ -1010,24 +1010,6 @@ async function startDiscordBot() {
 
                         await interaction.editReply({
                             content: `HWID sıfırlandı (\`${maskKeyValue(redeemed.key)}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər.`
-                        });
-                        return;
-                    }
-
-                    if (actionPart === 'sado_btn_hwid') {
-                        const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
-                        if (!redeemed) {
-                            await interaction.editReply({
-                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.'
-                            });
-                            return;
-                        }
-
-                        redeemed.entry.users = [];
-                        saveStoreToDisk();
-
-                        await interaction.editReply({
-                            content: `HWID sıfırlandı (\`${redeemed.key}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər (yenidən Reset atmadıqca sizin cihazda işləməyəcək).`
                         });
                         return;
                     }
@@ -1985,9 +1967,9 @@ app.post('/edit-script', async (req, res) => {
             saveStoreToDisk();
             await syncDiscordSlashCommands();
         }
-        res.redirect('/?view=panel&msg=script_updated');
+        res.redirect('/?msg=script_updated');
     } catch (err) {
-        res.status(500).send("Xeta bas verdi");
+        res.status(500).send("Xəta baş verdi");
     }
 });
 
@@ -2013,109 +1995,9 @@ app.get('/delete-script', async (req, res) => {
             saveStoreToDisk();
             await syncDiscordSlashCommands();
         }
-        res.redirect('/?view=panel&msg=script_deleted');
+        res.redirect('/?msg=script_deleted');
     } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/save-panel-style', (req, res) => {
-    try {
-        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const allowedStyles = new Set(["Success", "Primary", "Secondary", "Danger"]);
-        const cleanStyle = (val, def) => allowedStyles.has(String(val || "")) ? String(val) : def;
-
-        store.discordConfig.panelEmbedTitle = String(req.body.panelEmbedTitle || "{script} — Control Panel").trim().slice(0, 200);
-        store.discordConfig.panelEmbedDesc = String(req.body.panelEmbedDesc || "").trim().slice(0, 2000) || store.discordConfig.panelEmbedDesc;
-        const hex = String(req.body.panelEmbedColor || "#7c3aed").trim();
-        if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
-            store.discordConfig.panelEmbedColor = hex;
-        }
-
-        store.discordConfig.btnRedeemLabel = String(req.body.btnRedeemLabel || "Redeem Key").trim().slice(0, 80);
-        store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Success");
-
-        store.discordConfig.btnScriptLabel = String(req.body.btnScriptLabel || "Get Script").trim().slice(0, 80);
-        store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Primary");
-
-        store.discordConfig.btnHwidLabel = String(req.body.btnHwidLabel || "Reset HWID").trim().slice(0, 80);
-        store.discordConfig.btnHwidStyle = cleanStyle(req.body.btnHwidStyle, "Secondary");
-
-        store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Get Stats").trim().slice(0, 80);
-        store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Secondary");
-
-        saveStoreToDisk();
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&tab=discord&msg=panel_style_saved');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/new-script', async (req, res) => {
-    try {
-        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const sName = String(req.body.scriptName || "").trim();
-        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
-        if (!sName) {
-            return res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
-        }
-        store.scripts.push({
-            id: makeSlugId(sName),
-            name: sName.slice(0, 60),
-            code: sCode
-        });
-        saveStoreToDisk();
-        await syncDiscordSlashCommands();
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_created');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/edit-script', async (req, res) => {
-    try {
-        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const targetId = String(req.body.scriptId || "");
-        const sName = String(req.body.scriptName || "").trim();
-        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
-        const found = store.scripts.find(s => s.id === targetId);
-        if (found && sName) {
-            found.name = sName.slice(0, 60);
-            found.code = sCode;
-            saveStoreToDisk();
-            await syncDiscordSlashCommands();
-        }
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_updated');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/delete-script', async (req, res) => {
-    try {
-        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const targetId = String(req.query.id || "").trim();
-        if (targetId) {
-            store.scripts = store.scripts.filter(s => s.id !== targetId);
-            if (store.scripts.length === 0) {
-                store.scripts.push({
-                    id: "sado-hub",
-                    name: "SADO HUB",
-                    code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
-                });
-            }
-            const fallbackId = store.scripts[0].id;
-            for (const k in store.keys) {
-                if (store.keys[k].scriptId === targetId) {
-                    store.keys[k].scriptId = fallbackId;
-                }
-            }
-            saveStoreToDisk();
-            await syncDiscordSlashCommands();
-        }
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&msg=script_deleted');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
+        res.status(500).send("Xəta baş verdi");
     }
 });
 
@@ -2371,165 +2253,6 @@ app.get('/loader', (req, res) => {
         res.type('text/plain').send(targetScript.code);
     } catch (err) {
         res.status(500).type('text/plain').send('-- SADOPROTECT: Server Error');
-    }
-});
-
-app.get('/reset', (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        const k = req.query.key;
-        if (k && store.keys[k]) {
-            store.keys[k].users = [];
-            saveStoreToDisk();
-        }
-        res.redirect('/?view=panel');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/delete', (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        const k = req.query.key;
-        if (k && store.keys[k]) {
-            delete store.keys[k];
-            saveStoreToDisk();
-        }
-        res.redirect('/?view=panel');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/whitelist', (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        addToWhitelist(req.body.target, req.body.scriptId);
-        res.redirect('/?view=panel');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/unwhitelist', (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        removeFromWhitelist(req.query.id);
-        res.redirect('/?view=panel');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/reset', (req, res) => {
-    try {
-        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const k = req.query.key;
-        if (k && store.keys[k]) {
-            store.keys[k].users = [];
-            saveStoreToDisk();
-        }
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/delete', (req, res) => {
-    try {
-        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        const k = req.query.key;
-        if (k && store.keys[k]) {
-            delete store.keys[k];
-            saveStoreToDisk();
-        }
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/whitelist', (req, res) => {
-    try {
-        if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        addToWhitelist(req.body.target, req.body.scriptId);
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/unwhitelist', (req, res) => {
-    try {
-        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
-        removeFromWhitelist(req.query.id);
-        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.get('/loader', (req, res) => {
-    try {
-        purgeExpiredKeys();
-        const userKey = String(req.query.key || "").trim();
-        const userHwid = String(req.query.hwid || "").trim();
-        const userAgent = String(req.headers['user-agent'] || "");
-
-        if (!userAgent.includes("Roblox")) {
-            return res.status(403).send("-- SADOPROTECT: Access Denied!");
-        }
-
-        const isWlKey = userKey.startsWith("WHITELIST-");
-        const wlCandidateId = isWlKey ? userKey.replace(/^WHITELIST-/i, "") : "";
-        const matchedWhitelist =
-            (isWlKey ? isWhitelistedIdentifier(wlCandidateId) : null) ||
-            (userHwid ? isWhitelistedIdentifier(userHwid) : null);
-
-        if (matchedWhitelist) {
-            const wlScript = getScriptById(matchedWhitelist.scriptId);
-            return res.type('text/plain').send(wlScript.code || `print("SADOPROTECT Whitelist: ${wlScript.name}")`);
-        }
-
-        const keyEntry = userKey ? store.keys[userKey] : null;
-        if (!keyEntry) {
-            return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Key vaxti bitib ve ya silinib!")');
-        }
-
-        if (typeof keyEntry.expiresAt === "number" && keyEntry.expiresAt <= Date.now()) {
-            delete store.keys[userKey];
-            saveStoreToDisk();
-            return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Key vaxti bitib! Key silindi.")');
-        }
-
-        const maxLimit = Math.max(1, parseInt(keyEntry.maxUsers, 10) || 1);
-        const matchedUser = userHwid ? keyEntry.users.find(u => u.hwid === userHwid) : null;
-
-        if (!matchedUser) {
-            if (!userHwid) {
-                return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: HWID tapilmadi!")');
-            }
-
-            const unboundDiscordSlot = keyEntry.users.find(u => !u.hwid);
-            if (unboundDiscordSlot) {
-                unboundDiscordSlot.hwid = userHwid;
-                saveStoreToDisk();
-            } else if (keyEntry.users.length < maxLimit) {
-                keyEntry.users.push({
-                    hwid: userHwid,
-                    discordUserId: null
-                });
-                saveStoreToDisk();
-            } else {
-                return res.send('game.Players.LocalPlayer:Kick("SADOPROTECT: Bu key-i basqasi isledib! Limit dolub.")');
-            }
-        }
-
-        const targetScript = getScriptById(keyEntry.scriptId);
-        res.type('text/plain').send(targetScript.code);
-    } catch (err) {
-        res.status(500).send("-- SADOPROTECT: Server Error");
     }
 });
 
