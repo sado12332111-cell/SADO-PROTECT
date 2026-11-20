@@ -1687,10 +1687,25 @@ app.get('/loader', (req, res) => {
     }
 });
 
+// Serverin yuxuya getməməsi üçün yüngül ping endpoint-i
+app.get('/ping', (req, res) => {
+    res.status(200).send("OK");
+});
+
 loadStoreFromDisk();
 if (store.discordConfig.enabled && store.discordConfig.token) {
     startDiscordBot();
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("SADOPROTECT Aktivdir!"));
+app.listen(PORT, () => {
+    console.log("SADOPROTECT Aktivdir!");
+
+    // Hər 9 dəqiqədən bir özünə sorğu atır ki, Render botu yuxuya verməsin
+    setInterval(() => {
+        const targetUrl = (panelBaseUrl || process.env.RENDER_EXTERNAL_URL || "").replace(/\/+$/, "");
+        if (targetUrl) {
+            fetch(`${targetUrl}/ping`).catch(() => {});
+        }
+    }, 9 * 60 * 1000);
+});
