@@ -510,10 +510,15 @@ async function stopDiscordBot() {
 }
 
 function buildPanelSlashCommands() {
-    const nameOption = new SlashCommandBuilder()
+    const scriptChoices = store.scripts.slice(0, 25).map(sc => ({
+        name: String(sc.name || sc.id).slice(0, 100),
+        value: String(sc.id).slice(0, 100)
+    }));
+
+    const panelCmd = new SlashCommandBuilder()
         .setName('panel')
         .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir veya whitelist idare edir')
-        .addStringOption(option => {
+        .addStringOption(option =>
             option
                 .setName('action')
                 .setDescription('Emeliyyat: panel, whitelist ve ya unwhitelist')
@@ -522,6 +527,57 @@ function buildPanelSlashCommands() {
                     { name: 'panel (Control Panel gonder)', value: 'panel' },
                     { name: 'whitelist (Ag siyahiyaya elave et)', value: 'whitelist' },
                     { name: 'unwhitelist (Ag siyahidan cixar)', value: 'unwhitelist' }
+                )
+        )
+        .addStringOption(option => {
+            option
+                .setName('name')
+                .setDescription('Saytda yaratdiginiz skriptin adi')
+                .setRequired(false);
+            if (scriptChoices.length > 0) {
+                option.addChoices(...scriptChoices);
+            }
+            return option;
+        })
+        .addStringOption(option =>
+            option
+                .setName('user')
+                .setDescription('Whitelist / Unwhitelist ucun Discord ID, @mention ve ya HWID/ad')
+                .setRequired(false)
+        );
+
+    const whitelistCmd = new SlashCommandBuilder()
+        .setName('whitelist')
+        .setDescription('Istifadecini whitelist (ag siyahisina) elave edir')
+        .addStringOption(option =>
+            option
+                .setName('user')
+                .setDescription('Discord ID, @mention ve ya HWID')
+                .setRequired(true)
+        )
+        .addStringOption(option => {
+            option
+                .setName('name')
+                .setDescription('Skript secin')
+                .setRequired(false);
+            if (scriptChoices.length > 0) {
+                option.addChoices(...scriptChoices);
+            }
+            return option;
+        });
+
+    const unwhitelistCmd = new SlashCommandBuilder()
+        .setName('unwhitelist')
+        .setDescription('Istifadecini whitelist siyahisindan cixarir')
+        .addStringOption(option =>
+            option
+                .setName('user')
+                .setDescription('Cixarilacaq Discord ID, @mention ve ya HWID')
+                .setRequired(true)
+        );
+
+    return [panelCmd.toJSON(), whitelistCmd.toJSON(), unwhitelistCmd.toJSON()];
+}
                 );
             return option;
         })
@@ -616,6 +672,37 @@ async function startDiscordBot() {
                 }
 
                 if (interaction.isChatInputCommand()) {
+                    if (interaction.commandName === 'whitelist' || interaction.commandName === 'unwhitelist') {
+                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+                        const rawUserOption = interaction.options.getString('user');
+                        const rawNameOption = interaction.options.getString('name');
+
+                        if (interaction.commandName === 'whitelist') {
+                            const chosenScript = rawNameOption
+                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
+                                : getScriptById("");
+                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
+                            if (!resAdd.ok) {
+                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` });
+                                return;
+                            }
+                            await interaction.editReply({
+                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**).`
+                            });
+                            return;
+                        }
+
+                        if (interaction.commandName === 'unwhitelist') {
+                            const removed = removeFromWhitelist(rawUserOption);
+                            await interaction.editReply({
+                                content: removed
+                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
+                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
+                            });
+                            return;
+                        }
+                    }
+
                     if (interaction.commandName === 'panel') {
                         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
