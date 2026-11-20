@@ -1644,7 +1644,7 @@ app.get('/loader', (req, res) => {
 
         if (matchedWhitelist) {
             const wlScript = getScriptById(matchedWhitelist.scriptId);
-            return res.type('text/plain').send(wlScript.code);
+            return res.type('text/plain').send(wlScript.code || `print("SADOPROTECT Whitelist: ${wlScript.name}")`);
         }
 
         const keyEntry = userKey ? store.keys[userKey] : null;
