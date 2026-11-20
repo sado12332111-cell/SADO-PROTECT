@@ -1070,6 +1070,16 @@ app.get('/', async (req, res) => {
                 <td style="padding:10px;border-bottom:1px solid #1e293b;">
                     <a href="/reset?pass=${safePassEnc}&key=${safeKEnc}" style="color:#fbbf24;text-decoration:none;margin-right:8px;">[HWID Sifirla]</a>
                     <a href="/delete?pass=${safePassEnc}&key=${safeKEnc}" style="color:#f87171;text-decoration:none;">[Sil]</a>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="7" style="padding:8px 10px 12px 10px;border-bottom:1px solid #1e293b;background:#0f172a;">
+                    <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">Loader Kodu:</div>
+                    <pre style="margin:0;padding:8px;background:#020617;border-radius:6px;color:#38bdf8;font-size:12px;overflow-x:auto;">${sampleLoader}</pre>
+                </td>
+            </tr>`;
+        }
+
         const wlListHtml = store.whitelist.length
             ? store.whitelist.map(w => {
                 const sc = getScriptById(w.scriptId);
@@ -1376,6 +1386,9 @@ app.post('/save-panel-style', (req, res) => {
         res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS) + '&tab=discord&msg=panel_style_saved');
     } catch (err) {
         res.status(500).send("Xeta bas verdi");
+    }
+});
+
 app.post('/new-script', async (req, res) => {
     try {
         if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
@@ -1555,6 +1568,42 @@ app.get('/create', (req, res) => {
             req.query.duration,
             req.query.scriptId,
             req.query.maxUsers,
+            req.query.autoRoleId
+        );
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
+    } catch (err) {
+        res.status(500).send("Xeta bas verdi");
+    }
+});
+
+app.get('/reset', (req, res) => {
+    try {
+        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
+        const k = req.query.key;
+        if (k && store.keys[k]) {
+            store.keys[k].users = [];
+            saveStoreToDisk();
+        }
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
+    } catch (err) {
+        res.status(500).send("Xeta bas verdi");
+    }
+});
+
+app.get('/delete', (req, res) => {
+    try {
+        if (req.query.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
+        const k = req.query.key;
+        if (k && store.keys[k]) {
+            delete store.keys[k];
+            saveStoreToDisk();
+        }
+        res.redirect('/?pass=' + encodeURIComponent(ADMIN_PASS));
+    } catch (err) {
+        res.status(500).send("Xeta bas verdi");
+    }
+});
+
 app.post('/whitelist', (req, res) => {
     try {
         if (req.body.pass !== ADMIN_PASS) return res.status(403).send("Icase yoxdur!");
