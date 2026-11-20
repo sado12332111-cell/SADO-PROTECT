@@ -66,12 +66,20 @@ let store = {
         panelEmbedColor: "#7c3aed",
         btnRedeemLabel: "Redeem Key",
         btnRedeemStyle: "Primary",
+        btnRedeemEmoji: "",
+        btnRedeemOrder: 1,
         btnScriptLabel: "Get Script",
         btnScriptStyle: "Success",
+        btnScriptEmoji: "",
+        btnScriptOrder: 2,
         btnHwidLabel: "Reset HWID",
         btnHwidStyle: "Secondary",
+        btnHwidEmoji: "",
+        btnHwidOrder: 3,
         btnStatsLabel: "Key Info",
-        btnStatsStyle: "Primary"
+        btnStatsStyle: "Primary",
+        btnStatsEmoji: "",
+        btnStatsOrder: 4
     },
     scripts: [
         {
@@ -179,12 +187,20 @@ function saveStoreToDisk() {
                 panelEmbedColor: String(store.discordConfig.panelEmbedColor || "#7c3aed"),
                 btnRedeemLabel: String(store.discordConfig.btnRedeemLabel || "Redeem Key"),
                 btnRedeemStyle: String(store.discordConfig.btnRedeemStyle || "Success"),
+                btnRedeemEmoji: String(store.discordConfig.btnRedeemEmoji || ""),
+                btnRedeemOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnRedeemOrder, 10) || 1)),
                 btnScriptLabel: String(store.discordConfig.btnScriptLabel || "Get Script"),
                 btnScriptStyle: String(store.discordConfig.btnScriptStyle || "Primary"),
+                btnScriptEmoji: String(store.discordConfig.btnScriptEmoji || ""),
+                btnScriptOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnScriptOrder, 10) || 2)),
                 btnHwidLabel: String(store.discordConfig.btnHwidLabel || "Reset HWID"),
                 btnHwidStyle: String(store.discordConfig.btnHwidStyle || "Secondary"),
+                btnHwidEmoji: String(store.discordConfig.btnHwidEmoji || ""),
+                btnHwidOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnHwidOrder, 10) || 3)),
                 btnStatsLabel: String(store.discordConfig.btnStatsLabel || "Get Stats"),
-                btnStatsStyle: String(store.discordConfig.btnStatsStyle || "Secondary")
+                btnStatsStyle: String(store.discordConfig.btnStatsStyle || "Secondary"),
+                btnStatsEmoji: String(store.discordConfig.btnStatsEmoji || ""),
+                btnStatsOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnStatsOrder, 10) || 4))
             },
             scripts: Array.isArray(store.scripts) ? store.scripts : [],
             whitelist: Array.isArray(store.whitelist) ? store.whitelist : [],
@@ -249,11 +265,23 @@ function loadStoreFromDisk() {
                 if (typeof parsed.discordConfig.btnRedeemStyle === 'string') {
                     store.discordConfig.btnRedeemStyle = parsed.discordConfig.btnRedeemStyle;
                 }
+                if (typeof parsed.discordConfig.btnRedeemEmoji === 'string') {
+                    store.discordConfig.btnRedeemEmoji = parsed.discordConfig.btnRedeemEmoji.trim().slice(0, 24);
+                }
+                if (parsed.discordConfig.btnRedeemOrder !== undefined) {
+                    store.discordConfig.btnRedeemOrder = Math.min(4, Math.max(1, parseInt(parsed.discordConfig.btnRedeemOrder, 10) || 1));
+                }
                 if (typeof parsed.discordConfig.btnScriptLabel === 'string' && parsed.discordConfig.btnScriptLabel.trim()) {
                     store.discordConfig.btnScriptLabel = parsed.discordConfig.btnScriptLabel.trim().slice(0, 80);
                 }
                 if (typeof parsed.discordConfig.btnScriptStyle === 'string') {
                     store.discordConfig.btnScriptStyle = parsed.discordConfig.btnScriptStyle;
+                }
+                if (typeof parsed.discordConfig.btnScriptEmoji === 'string') {
+                    store.discordConfig.btnScriptEmoji = parsed.discordConfig.btnScriptEmoji.trim().slice(0, 24);
+                }
+                if (parsed.discordConfig.btnScriptOrder !== undefined) {
+                    store.discordConfig.btnScriptOrder = Math.min(4, Math.max(1, parseInt(parsed.discordConfig.btnScriptOrder, 10) || 2));
                 }
                 if (typeof parsed.discordConfig.btnHwidLabel === 'string' && parsed.discordConfig.btnHwidLabel.trim()) {
                     store.discordConfig.btnHwidLabel = parsed.discordConfig.btnHwidLabel.trim().slice(0, 80);
@@ -261,11 +289,23 @@ function loadStoreFromDisk() {
                 if (typeof parsed.discordConfig.btnHwidStyle === 'string') {
                     store.discordConfig.btnHwidStyle = parsed.discordConfig.btnHwidStyle;
                 }
+                if (typeof parsed.discordConfig.btnHwidEmoji === 'string') {
+                    store.discordConfig.btnHwidEmoji = parsed.discordConfig.btnHwidEmoji.trim().slice(0, 24);
+                }
+                if (parsed.discordConfig.btnHwidOrder !== undefined) {
+                    store.discordConfig.btnHwidOrder = Math.min(4, Math.max(1, parseInt(parsed.discordConfig.btnHwidOrder, 10) || 3));
+                }
                 if (typeof parsed.discordConfig.btnStatsLabel === 'string' && parsed.discordConfig.btnStatsLabel.trim()) {
                     store.discordConfig.btnStatsLabel = parsed.discordConfig.btnStatsLabel.trim().slice(0, 80);
                 }
                 if (typeof parsed.discordConfig.btnStatsStyle === 'string') {
                     store.discordConfig.btnStatsStyle = parsed.discordConfig.btnStatsStyle;
+                }
+                if (typeof parsed.discordConfig.btnStatsEmoji === 'string') {
+                    store.discordConfig.btnStatsEmoji = parsed.discordConfig.btnStatsEmoji.trim().slice(0, 24);
+                }
+                if (parsed.discordConfig.btnStatsOrder !== undefined) {
+                    store.discordConfig.btnStatsOrder = Math.min(4, Math.max(1, parseInt(parsed.discordConfig.btnStatsOrder, 10) || 4));
                 }
             }
 
@@ -578,30 +618,60 @@ function buildScriptControlPanelMessage(scriptObj, guildName = "SADOPROTECT") {
         .setDescription(finalDesc)
         .setFooter({ text: `${guildName} • SADOPROTECT (${scriptObj.id})` });
 
+    const buttonSpecs = [
+        {
+            key: "redeem",
+            order: Math.min(4, Math.max(1, parseInt(cfg.btnRedeemOrder, 10) || 1)),
+            customId: `sado_btn_redeem:${scriptObj.id}`,
+            label: String(cfg.btnRedeemLabel || "Redeem Key").slice(0, 80),
+            style: resolveButtonStyle(cfg.btnRedeemStyle, ButtonStyle.Primary),
+            emoji: String(cfg.btnRedeemEmoji || "").trim()
+        },
+        {
+            key: "script",
+            order: Math.min(4, Math.max(1, parseInt(cfg.btnScriptOrder, 10) || 2)),
+            customId: `sado_btn_script:${scriptObj.id}`,
+            label: String(cfg.btnScriptLabel || "Get Script").slice(0, 80),
+            style: resolveButtonStyle(cfg.btnScriptStyle, ButtonStyle.Success),
+            emoji: String(cfg.btnScriptEmoji || "").trim()
+        },
+        {
+            key: "hwid",
+            order: Math.min(4, Math.max(1, parseInt(cfg.btnHwidOrder, 10) || 3)),
+            customId: `sado_btn_hwid:${scriptObj.id}`,
+            label: String(cfg.btnHwidLabel || "Reset HWID").slice(0, 80),
+            style: resolveButtonStyle(cfg.btnHwidStyle, ButtonStyle.Secondary),
+            emoji: String(cfg.btnHwidEmoji || "").trim()
+        },
+        {
+            key: "stats",
+            order: Math.min(4, Math.max(1, parseInt(cfg.btnStatsOrder, 10) || 4)),
+            customId: `sado_btn_stats:${scriptObj.id}`,
+            label: String(cfg.btnStatsLabel || "Key Info").slice(0, 80),
+            style: resolveButtonStyle(cfg.btnStatsStyle, ButtonStyle.Primary),
+            emoji: String(cfg.btnStatsEmoji || "").trim()
+        }
+    ].sort((a, b) => a.order - b.order);
+
+    const makeBtn = (spec) => {
+        const b = new ButtonBuilder()
+            .setCustomId(spec.customId)
+            .setLabel(spec.label)
+            .setStyle(spec.style);
+        if (spec.emoji) {
+            b.setEmoji(spec.emoji);
+        }
+        return b;
+    };
+
     const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`sado_btn_redeem:${scriptObj.id}`)
-            .setEmoji("🔑")
-            .setLabel(String(cfg.btnRedeemLabel || "Redeem Key").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnRedeemStyle, ButtonStyle.Primary)),
-        new ButtonBuilder()
-            .setCustomId(`sado_btn_hwid:${scriptObj.id}`)
-            .setEmoji("🔄")
-            .setLabel(String(cfg.btnHwidLabel || "Reset HWID").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnHwidStyle, ButtonStyle.Secondary))
+        makeBtn(buttonSpecs[0]),
+        makeBtn(buttonSpecs[1])
     );
 
     const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`sado_btn_script:${scriptObj.id}`)
-            .setEmoji("📜")
-            .setLabel(String(cfg.btnScriptLabel || "Get Script").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnScriptStyle, ButtonStyle.Success)),
-        new ButtonBuilder()
-            .setCustomId(`sado_btn_stats:${scriptObj.id}`)
-            .setEmoji("ℹ️")
-            .setLabel(String(cfg.btnStatsLabel || "Key Info").slice(0, 80))
-            .setStyle(resolveButtonStyle(cfg.btnStatsStyle, ButtonStyle.Primary))
+        makeBtn(buttonSpecs[2]),
+        makeBtn(buttonSpecs[3])
     );
 
     return { embeds: [embed], components: [row1, row2] };
@@ -1287,6 +1357,16 @@ app.get('/', async (req, res) => {
             </select>`;
         };
 
+        const renderOrderSelect = (fieldName, currentOrder) => {
+            const safeOrder = Math.min(4, Math.max(1, parseInt(currentOrder, 10) || 1));
+            return `<select name="${fieldName}" class="sp-select-mini">
+                <option value="1" ${safeOrder === 1 ? "selected" : ""}>Yer: 1</option>
+                <option value="2" ${safeOrder === 2 ? "selected" : ""}>Yer: 2</option>
+                <option value="3" ${safeOrder === 3 ? "selected" : ""}>Yer: 3</option>
+                <option value="4" ${safeOrder === 4 ? "selected" : ""}>Yer: 4</option>
+            </select>`;
+        };
+
         const roleOptionsHtml = cachedGuildRoles.map(r =>
             `<option value="${escapeHtml(r.id)}" ${store.discordConfig.autoRoleId === r.id ? "selected" : ""}>@${escapeHtml(r.name)} (${escapeHtml(r.guildName)})</option>`
         ).join("");
@@ -1400,6 +1480,7 @@ app.get('/', async (req, res) => {
       --rose: #f43f5e;
     }
     * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: hidden; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -1583,6 +1664,7 @@ app.get('/', async (req, res) => {
       background: #060913;
       color: #f8fafc;
       font-size: 13px;
+      max-width: 100%;
     }
     .sp-select-mini {
       padding: 9px 10px;
@@ -1591,6 +1673,13 @@ app.get('/', async (req, res) => {
       background: #060913;
       color: #f8fafc;
       font-size: 12.5px;
+      max-width: 100%;
+    }
+    .sp-btn-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
     }
     .sp-textarea {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1835,30 +1924,38 @@ app.get('/', async (req, res) => {
 
       <div class="btn-grid">
         <div class="sp-btn-box">
-          <label class="sp-label">1-ci Buton (Redeem Key):</label>
-          <div style="display:flex;gap:8px;">
-            <input type="text" name="btnRedeemLabel" value="${escapeHtml(store.discordConfig.btnRedeemLabel)}" required class="sp-inline-input" style="flex:1;">
+          <label class="sp-label">Redeem Key Butonu:</label>
+          <div class="sp-btn-controls">
+            <input type="text" name="btnRedeemLabel" value="${escapeHtml(store.discordConfig.btnRedeemLabel)}" required class="sp-inline-input" style="flex:1;min-width:120px;">
+            <input type="text" name="btnRedeemEmoji" value="${escapeHtml(store.discordConfig.btnRedeemEmoji || "")}" placeholder="Emoji (opsional)" class="sp-inline-input" style="width:110px;">
+            ${renderOrderSelect("btnRedeemOrder", store.discordConfig.btnRedeemOrder)}
             ${renderStyleSelect("btnRedeemStyle", store.discordConfig.btnRedeemStyle)}
           </div>
         </div>
         <div class="sp-btn-box">
-          <label class="sp-label">2-ci Buton (Get Script):</label>
-          <div style="display:flex;gap:8px;">
-            <input type="text" name="btnScriptLabel" value="${escapeHtml(store.discordConfig.btnScriptLabel)}" required class="sp-inline-input" style="flex:1;">
+          <label class="sp-label">Get Script Butonu:</label>
+          <div class="sp-btn-controls">
+            <input type="text" name="btnScriptLabel" value="${escapeHtml(store.discordConfig.btnScriptLabel)}" required class="sp-inline-input" style="flex:1;min-width:120px;">
+            <input type="text" name="btnScriptEmoji" value="${escapeHtml(store.discordConfig.btnScriptEmoji || "")}" placeholder="Emoji (opsional)" class="sp-inline-input" style="width:110px;">
+            ${renderOrderSelect("btnScriptOrder", store.discordConfig.btnScriptOrder)}
             ${renderStyleSelect("btnScriptStyle", store.discordConfig.btnScriptStyle)}
           </div>
         </div>
         <div class="sp-btn-box">
-          <label class="sp-label">3-cü Buton (Reset HWID):</label>
-          <div style="display:flex;gap:8px;">
-            <input type="text" name="btnHwidLabel" value="${escapeHtml(store.discordConfig.btnHwidLabel)}" required class="sp-inline-input" style="flex:1;">
+          <label class="sp-label">Reset HWID Butonu:</label>
+          <div class="sp-btn-controls">
+            <input type="text" name="btnHwidLabel" value="${escapeHtml(store.discordConfig.btnHwidLabel)}" required class="sp-inline-input" style="flex:1;min-width:120px;">
+            <input type="text" name="btnHwidEmoji" value="${escapeHtml(store.discordConfig.btnHwidEmoji || "")}" placeholder="Emoji (opsional)" class="sp-inline-input" style="width:110px;">
+            ${renderOrderSelect("btnHwidOrder", store.discordConfig.btnHwidOrder)}
             ${renderStyleSelect("btnHwidStyle", store.discordConfig.btnHwidStyle)}
           </div>
         </div>
         <div class="sp-btn-box">
-          <label class="sp-label">4-cü Buton (Get Stats):</label>
-          <div style="display:flex;gap:8px;">
-            <input type="text" name="btnStatsLabel" value="${escapeHtml(store.discordConfig.btnStatsLabel)}" required class="sp-inline-input" style="flex:1;">
+          <label class="sp-label">Key Info Butonu:</label>
+          <div class="sp-btn-controls">
+            <input type="text" name="btnStatsLabel" value="${escapeHtml(store.discordConfig.btnStatsLabel)}" required class="sp-inline-input" style="flex:1;min-width:120px;">
+            <input type="text" name="btnStatsEmoji" value="${escapeHtml(store.discordConfig.btnStatsEmoji || "")}" placeholder="Emoji (opsional)" class="sp-inline-input" style="width:110px;">
+            ${renderOrderSelect("btnStatsOrder", store.discordConfig.btnStatsOrder)}
             ${renderStyleSelect("btnStatsStyle", store.discordConfig.btnStatsStyle)}
           </div>
         </div>
@@ -1978,6 +2075,7 @@ app.post('/save-panel-style', (req, res) => {
     try {
         const allowedStyles = new Set(["Success", "Primary", "Secondary", "Danger"]);
         const cleanStyle = (val, def) => allowedStyles.has(String(val || "")) ? String(val) : def;
+        const cleanOrder = (val, def) => Math.min(4, Math.max(1, parseInt(val, 10) || def));
 
         store.discordConfig.panelEmbedTitle = String(req.body.panelEmbedTitle || "{script} — Control Panel").trim().slice(0, 200);
         store.discordConfig.panelEmbedDesc = String(req.body.panelEmbedDesc || "").trim().slice(0, 2000) || store.discordConfig.panelEmbedDesc;
@@ -1988,15 +2086,23 @@ app.post('/save-panel-style', (req, res) => {
 
         store.discordConfig.btnRedeemLabel = String(req.body.btnRedeemLabel || "Redeem Key").trim().slice(0, 80);
         store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Success");
+        store.discordConfig.btnRedeemEmoji = String(req.body.btnRedeemEmoji || "").trim().slice(0, 24);
+        store.discordConfig.btnRedeemOrder = cleanOrder(req.body.btnRedeemOrder, 1);
 
         store.discordConfig.btnScriptLabel = String(req.body.btnScriptLabel || "Get Script").trim().slice(0, 80);
         store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Primary");
+        store.discordConfig.btnScriptEmoji = String(req.body.btnScriptEmoji || "").trim().slice(0, 24);
+        store.discordConfig.btnScriptOrder = cleanOrder(req.body.btnScriptOrder, 2);
 
         store.discordConfig.btnHwidLabel = String(req.body.btnHwidLabel || "Reset HWID").trim().slice(0, 80);
         store.discordConfig.btnHwidStyle = cleanStyle(req.body.btnHwidStyle, "Secondary");
+        store.discordConfig.btnHwidEmoji = String(req.body.btnHwidEmoji || "").trim().slice(0, 24);
+        store.discordConfig.btnHwidOrder = cleanOrder(req.body.btnHwidOrder, 3);
 
         store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Get Stats").trim().slice(0, 80);
         store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Secondary");
+        store.discordConfig.btnStatsEmoji = String(req.body.btnStatsEmoji || "").trim().slice(0, 24);
+        store.discordConfig.btnStatsOrder = cleanOrder(req.body.btnStatsOrder, 4);
 
         saveStoreToDisk();
         res.redirect('/?tab=discord&msg=panel_style_saved');
