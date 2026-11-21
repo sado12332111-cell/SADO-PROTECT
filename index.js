@@ -118,7 +118,6 @@ function normalizeStore(raw, fallbackRaw = null) {
     base.panels = mergeObjectsPreserve(a.panels, b.panels);
     base.tickets = mergeObjectsPreserve(a.tickets, b.tickets);
 
-    // Əgər əsas bazada skript/key/whitelist varsa, heç vaxt boş qalmasın
     if (Object.keys(base.scripts).length === 0 && store && store.scripts && Object.keys(store.scripts).length > 0) {
         base.scripts = mergeObjectsPreserve(base.scripts, store.scripts);
     }
@@ -179,7 +178,6 @@ let store = loadStoreFromDisk();
 
 function saveStoreToDisk() {
     try {
-        // Mövcud skript, key və whitelist-ləri qoruyaraq yaz ki, heç vaxt silinməsinlər
         const existingPrimary = readJsonSafe(STORE_FILE) || {};
         const safeStore = {
             ...store,
@@ -187,7 +185,6 @@ function saveStoreToDisk() {
             keys: mergeObjectsPreserve(store.keys, existingPrimary.keys),
             whitelist: mergeObjectsPreserve(store.whitelist, existingPrimary.whitelist)
         };
-        // Yalnız açıq şəkildə silinmiş açarları burax (store-da olmayan və existingPrimary-də olanları qoru)
         for (const k of Object.keys(existingPrimary.scripts || {})) {
             if (!(k in (store.scripts || {})) && store._explicitDeletedScripts && store._explicitDeletedScripts.includes(k)) {
                 delete safeStore.scripts[k];
@@ -327,13 +324,7 @@ function getSlashCommands() {
 
     const panelCmd = new SlashCommandBuilder()
         .setName('panel')
-        .setDescription('Skript idarəetmə panelini bu kanala göndərir')
-        .addStringOption(opt =>
-            opt.setName('script')
-                .setDescription('Skript adı və ya ID-si (boş buraxsanız ilk skript seçilir)')
-                .setRequired(false)
-                .setAutocomplete(false)
-        );
+        .setDescription('Skript idarəetmə panelini bu kanala göndərir');
 
     const whitelistCmd = new SlashCommandBuilder()
         .setName('whitelist')
@@ -515,9 +506,7 @@ async function restartDiscordBot(newToken) {
                 if (cmd === 'panel') {
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-                    const rawQuery = interaction.options.getString('script');
-                    const query = rawQuery && String(rawQuery).trim() ? String(rawQuery).trim() : '';
-                    let scriptObj = findScript(query, interaction.guildId || '');
+                    let scriptObj = findScript('', interaction.guildId || '');
                     if (!scriptObj) {
                         const fallbackId = 'sado-hub';
                         scriptObj = {
@@ -1208,7 +1197,6 @@ const server = http.createServer(async (req, res) => {
             const accept = String(req.headers['accept'] || '').toLowerCase();
             const secFetchMode = String(req.headers['sec-fetch-mode'] || '').toLowerCase();
 
-            // Brauzerdən (Chrome, Mobile browser, Discord in-app browser və s.) açılmanı tam blokla
             const isBrowser =
                 secFetchMode === 'navigate' ||
                 accept.includes('text/html') ||
@@ -1256,7 +1244,6 @@ const server = http.createServer(async (req, res) => {
                 }
             }
 
-            // Skripti şifrələnmiş (XOR + Byte array) şəkildə göndər ki, şəbəkə dinləməsində açıq mətn görünməsin
             const xorKey = crypto.randomBytes(16);
             const rawBytes = Buffer.from(String(scriptObj.code || ''), 'utf8');
             const encBytes = new Array(rawBytes.length);
