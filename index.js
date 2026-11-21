@@ -429,19 +429,115 @@ function findScript(query, guildId = '') {
 }
 
 function checkUserAccess(userId, scriptId) {
-    const uid = String(userId);
-    const wlKey = `${scriptId}:${uid}`;
+    const uid = String(userId || '').trim();
+    const targetScriptId = String(scriptId || '').trim();
+    if (!uid || !targetScriptId) return { allowed: false };
+
+    const wlKey = `${targetScriptId}:${uid}`;
     const wl = store.whitelist[wlKey];
-    if (wl && !isExpired(wl.expiresAt)) {
+    if (
+        wl &&
+        String(wl.scriptId || '').trim() === targetScriptId &&
+        String(wl.userId || '').trim() === uid &&
+        !isExpired(wl.expiresAt)
+    ) {
         return { allowed: true, source: 'whitelist', record: wl, wlKey };
     }
-    const foundKey = Object.values(store.keys).find(
-        k => k.scriptId === scriptId && String(k.redeemedBy) === uid && !k.revoked && !isExpired(k.expiresAt)
+
+    const foundKey = Object.values(store.keys || {}).find(
+        k =>
+            k &&
+            String(k.scriptId || '').trim() === targetScriptId &&
+            String(k.redeemedBy || '').trim() === uid &&
+            !k.revoked &&
+            !isExpired(k.expiresAt)
     );
     if (foundKey) {
         return { allowed: true, source: 'key', record: foundKey };
     }
+
     return { allowed: false };
+}
+
+function buildProtectedLuaPayload(rawCode) {
+    const sourceText = String(rawCode || '');
+    const xorKey = crypto.randomBytes(16);
+    const rawBytes = Buffer.from(sourceText, 'utf8');
+    const encBytes = new Array(rawBytes.length);
+    for (let i = 0; i < rawBytes.length; i++) {
+        encBytes[i] = rawBytes[i] ^ xorKey[i % xorKey.length];
+    }
+
+    const encodedB64 = Buffer.from(encBytes).toString('base64');
+    const keyList = Array.from(xorKey).join(',');
+
+    return [
+        '-- SADO PROTECT LOADER v4',
+        'local _b64 = "' + encodedB64 + '"',
+        'local _k = {' + keyList + '}',
+        'local _c = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"',
+        'local function _decB64(data)',
+        '    data = string.gsub(data, "[^" .. _c .. "=]", "")',
+        '    return (data:gsub(".", function(x)',
+        '        if x == "=" then return "" end',
+        '        local r, f = "", (_c:find(x, 1, true) - 1)',
+        '        for i = 6, 1, -1 do r = r .. (f % 2^i - f % 2^(i - 1) > 0 and "1" or "0") end',
+        '        return r',
+        '    end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)',
+        '        if #x ~= 8 then return "" end',
+        '        local n = 0',
+        '        for i = 1, 8 do if x:sub(i, i) == "1" then n = n + 2^(8 - i) end end',
+        '        return string.char(n)',
+        '    end))',
+        'end',
+        'local _raw = _decB64(_b64)',
+        'local _out = {}',
+        'for i = 1, #_raw do',
+        '    local b = string.byte(_raw, i)',
+        '    local k = _k[((i - 1) % #_k) + 1]',
+        '    if bit32 and bit32.bxor then',
+        '        _out[i] = string.char(bit32.bxor(b, k))',
+        '    else',
+        '        local res, p = 0, 1',
+        '        local x, y = b, k',
+        '        while x > 0 or y > 0 do',
+        '            if (x % 2) ~= (y % 2) then res = res + p end',
+        '            x = math.floor(x / 2)',
+        '            y = math.floor(y / 2)',
+        '            p = p * 2',
+        '        end',
+        '        _out[i] = string.char(res)',
+        '    end',
+        'end',
+        'local _fn, _err = loadstring(table.concat(_out))',
+        'if type(_fn) == "function" then',
+        '    return _fn()',
+        'else',
+        '    warn("[SADO PROTECT] Payload xetasi: " .. tostring(_err))',
+        'end'
+    ].join('\n');
+}
+
+function createLoaderTicket(scriptId, userId, guildId = '') {
+    const ticketId = crypto.randomBytes(24).toString('base64url');
+    const host = process.env.RENDER_EXTERNAL_URL
+        ? String(process.env.RENDER_EXTERNAL_URL).replace(/\/+$/, '')
+        : 'https://sado-protect.onrender.com';
+    const loaderUrl = `${host}/files/v4/loaders/${ticketId}.lua`;
+    const loaderCode = `loadstring(game:HttpGet("${loaderUrl}"))()`;
+
+    store.tickets[ticketId] = {
+        ticketId,
+        scriptId,
+        userId: String(userId),
+        guildId: normalizeGuildId(guildId),
+        loaderCode,
+        createdAt: Date.now(),
+        expiresAt: null
+    };
+    saveStoreToDisk();
+
+    return { ticketId, loaderUrl, loaderCode };
 }
 
 async function restartDiscordBot(newToken) {
@@ -691,26 +787,11 @@ async function restartDiscordBot(newToken) {
                         return;
                     }
 
-                    const ticketId = crypto.randomBytes(16).toString('hex');
-                    const host = process.env.RENDER_EXTERNAL_URL
-                        ? String(process.env.RENDER_EXTERNAL_URL).replace(/\/+$/, '')
-                        : 'https://sado-protect.onrender.com';
-                    const safeHostExpr = host.includes('sado-protect.onrender.com')
-                        ? `"https://sado-protect." .. "onrender.com"`
-                        : `"${host}"`;
-
-                    const loaderCode =
-                        `local hwid = game:GetService("RbxAnalyticsService"):GetClientId()\n` +
-                        `local base = ${safeHostExpr}\n` +
-                        `loadstring(game:HttpGet(base .. "/loader?ticket=" .. "${ticketId}" .. "&hwid=" .. hwid))()`;
-
-                    store.tickets[ticketId] = {
+                    const { ticketId, loaderCode } = createLoaderTicket(
                         scriptId,
-                        userId: interaction.user.id,
-                        loaderCode,
-                        expiresAt: null
-                    };
-                    saveStoreToDisk();
+                        interaction.user.id,
+                        interaction.guildId || scriptObj.guildId || ''
+                    );
 
                     const expText = access.record.expiresAt
                         ? `<t:${Math.floor(access.record.expiresAt / 1000)}:F>`
@@ -1257,15 +1338,29 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        if (req.method === 'GET' && pathname === '/loader') {
-            const ticketId = parsed.searchParams.get('ticket') || '';
-            const hwid = (parsed.searchParams.get('hwid') || '').trim();
+        const loaderFileMatch = pathname.match(/^\/files\/v4\/loaders\/([A-Za-z0-9_-]+)\.lua$/);
+        if (req.method === 'GET' && (pathname === '/loader' || loaderFileMatch)) {
+            const ticketId = loaderFileMatch
+                ? loaderFileMatch[1]
+                : String(parsed.searchParams.get('ticket') || '').trim();
+            const hwid = String(
+                parsed.searchParams.get('hwid') ||
+                req.headers['roblox-id'] ||
+                req.headers['syn-fingerprint'] ||
+                req.headers['krnl-hwid'] ||
+                req.headers['x-hwid'] ||
+                ''
+            ).trim();
             const ua = String(req.headers['user-agent'] || '').toLowerCase();
             const accept = String(req.headers['accept'] || '').toLowerCase();
             const secFetchMode = String(req.headers['sec-fetch-mode'] || '').toLowerCase();
+            const secFetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
 
             const isBrowser =
                 secFetchMode === 'navigate' ||
+                secFetchMode === 'cors' ||
+                secFetchSite === 'same-origin' ||
+                secFetchSite === 'same-site' ||
                 accept.includes('text/html') ||
                 ua.includes('mozilla/') ||
                 ua.includes('chrome/') ||
@@ -1274,58 +1369,54 @@ const server = http.createServer(async (req, res) => {
                 ua.includes('edge/') ||
                 ua.includes('opera/');
 
-            if (isBrowser || !hwid) {
+            if (isBrowser) {
                 res.writeHead(403, {
-                    'Content-Type': 'text/html; charset=utf-8',
+                    'Content-Type': 'text/plain; charset=utf-8',
                     'Cache-Control': 'no-store'
                 });
-                res.end('<html><body style="background:#0b0f19;color:#ef4444;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;"><h2>403 Forbidden — SADO PROTECT: Brauzerdən giriş qadağandır!</h2></body></html>');
+                res.end('-- 403 Forbidden: Access Denied');
                 return;
             }
 
             const ticket = store.tickets[ticketId];
-
             if (!ticket) {
-                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end('warn("[SADO PROTECT] Bilet tapilmadi! Discord-da Get Script basin.")');
+                res.writeHead(403, {
+                    'Content-Type': 'text/plain; charset=utf-8',
+                    'Cache-Control': 'no-store'
+                });
+                res.end('warn("[SADO PROTECT] Invalid or expired loader!")');
                 return;
             }
 
             const access = checkUserAccess(ticket.userId, ticket.scriptId);
             const scriptObj = store.scripts[ticket.scriptId];
 
-            if (!access.allowed || !scriptObj) {
-                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end('warn("[SADO PROTECT] Icazeniz yoxdur ve ya key muddeti bitib.")');
+            if (!access.allowed || !scriptObj || String(scriptObj.id) !== String(ticket.scriptId)) {
+                res.writeHead(403, {
+                    'Content-Type': 'text/plain; charset=utf-8',
+                    'Cache-Control': 'no-store'
+                });
+                res.end('warn("[SADO PROTECT] Access denied or license expired!")');
                 return;
             }
 
-            if (hwid) {
-                if (!access.record.hwid) {
-                    access.record.hwid = hwid;
-                    saveStoreToDisk();
-                } else if (access.record.hwid !== hwid) {
-                    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                    res.end('warn("[SADO PROTECT] HWID uygun gelmir! Discord panelden Reset HWID edin.")');
-                    return;
-                }
+            const effectiveHwid = hwid || `rbx-user-${String(ticket.userId)}`;
+            if (!access.record.hwid) {
+                access.record.hwid = effectiveHwid;
+                saveStoreToDisk();
+            } else if (hwid && access.record.hwid !== hwid && !String(access.record.hwid).startsWith('rbx-user-')) {
+                res.writeHead(403, {
+                    'Content-Type': 'text/plain; charset=utf-8',
+                    'Cache-Control': 'no-store'
+                });
+                res.end('warn("[SADO PROTECT] HWID mismatch! Use Reset HWID in panel.")');
+                return;
+            } else if (hwid && String(access.record.hwid).startsWith('rbx-user-')) {
+                access.record.hwid = hwid;
+                saveStoreToDisk();
             }
 
-            const xorKey = crypto.randomBytes(16);
-            const rawBytes = Buffer.from(String(scriptObj.code || ''), 'utf8');
-            const encBytes = new Array(rawBytes.length);
-            for (let i = 0; i < rawBytes.length; i++) {
-                encBytes[i] = rawBytes[i] ^ xorKey[i % xorKey.length];
-            }
-
-            const protectedPayload =
-                `-- SADO PROTECT PROTECTED CHUNK\n` +
-                `local _k={${Array.from(xorKey).join(',')}}\n` +
-                `local _d={${encBytes.join(',')}}\n` +
-                `local _b=table.create(#_d)\n` +
-                `for i=1,#_d do _b[i]=string.char(bit32.bxor(_d[i],_k[((i-1)%#_k)+1])) end\n` +
-                `local _f,err=loadstring(table.concat(_b))\n` +
-                `if _f then return _f() else warn("[SADO PROTECT] "..tostring(err)) end`;
+            const protectedPayload = buildProtectedLuaPayload(scriptObj.code || '');
 
             res.writeHead(200, {
                 'Content-Type': 'text/plain; charset=utf-8',
