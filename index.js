@@ -513,6 +513,8 @@ async function restartDiscordBot(newToken) {
                 const cmd = interaction.commandName;
 
                 if (cmd === 'panel') {
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
                     const query = interaction.options.getString('script');
                     let scriptObj = findScript(query, interaction.guildId || '');
                     if (!scriptObj) {
@@ -532,11 +534,6 @@ async function restartDiscordBot(newToken) {
                         saveStoreToDisk();
                     }
 
-                    await interaction.reply({
-                        content: `**${scriptObj.name}** paneli kanala göndərildi (skript update olanda avtomatik yenilənəcək).`,
-                        flags: MessageFlags.Ephemeral
-                    });
-
                     const sent = await interaction.channel.send({
                         embeds: [buildPanelEmbed(scriptObj)],
                         components: buildPanelRows(scriptObj.id)
@@ -551,6 +548,10 @@ async function restartDiscordBot(newToken) {
                         updatedAt: Date.now()
                     };
                     saveStoreToDisk();
+
+                    await interaction.editReply({
+                        content: `**${scriptObj.name}** paneli kanala göndərildi (skript update olanda avtomatik yenilənəcək).`
+                    }).catch(() => {});
                     return;
                 }
 
