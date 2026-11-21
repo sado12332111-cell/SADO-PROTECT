@@ -677,10 +677,13 @@ async function restartDiscordBot(newToken) {
                     const host = process.env.RENDER_EXTERNAL_URL
                         ? String(process.env.RENDER_EXTERNAL_URL).replace(/\/+$/, '')
                         : 'https://sado-protect.onrender.com';
+                    const safeHostExpr = host.includes('sado-protect.onrender.com')
+                        ? `"https://sado-protect." .. "onrender.com"`
+                        : `"${host}"`;
 
                     const loaderCode =
                         `local hwid = game:GetService("RbxAnalyticsService"):GetClientId()\n` +
-                        `local base = "${host}"\n` +
+                        `local base = ${safeHostExpr}\n` +
                         `loadstring(game:HttpGet(base .. "/loader?ticket=" .. "${ticketId}" .. "&hwid=" .. hwid))()`;
 
                     store.tickets[ticketId] = {
