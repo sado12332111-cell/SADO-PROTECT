@@ -168,9 +168,7 @@ let store = loadStoreFromDisk();
 
 function saveStoreToDisk() {
     try {
-        const snapshot = {
-            ...store
-        };
+        const snapshot = { ...store };
         const json = JSON.stringify(snapshot, null, 2);
         const tmpFile = `${STORE_FILE}.tmp`;
         fs.writeFileSync(tmpFile, json, 'utf8');
@@ -814,600 +812,303 @@ function belongsToGuild(record, activeGuildId) {
     return recGuild === activeGuildId;
 }
 
+const DASHBOARD_HTML = [
+'<!DOCTYPE html>',
+'<html lang="az">',
+'<head>',
+'<meta charset="UTF-8">',
+'<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+'<title>SADO PROTECT — Control Dashboard</title>',
+'<style>',
+'  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }',
+'  body { background: #0b0f19; color: #e2e8f0; padding: 14px; max-width: 960px; margin: 0 auto; }',
+'  h1 { font-size: 1.4rem; color: #38bdf8; margin-bottom: 4px; }',
+'  .sub { font-size: 0.85rem; color: #94a3b8; margin-bottom: 16px; }',
+'  .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 14px; margin-bottom: 14px; }',
+'  .card h2 { font-size: 1.05rem; color: #f8fafc; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }',
+'  label { display: block; font-size: 0.82rem; color: #cbd5e1; margin: 8px 0 4px; }',
+'  input, textarea, select { width: 100%; background: #0b0f19; color: #f8fafc; border: 1px solid #334155; border-radius: 8px; padding: 9px 10px; font-size: 0.9rem; outline: none; }',
+'  input:focus, textarea:focus, select:focus { border-color: #38bdf8; }',
+'  textarea { min-height: 110px; font-family: monospace; resize: vertical; }',
+'  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }',
+'  .row-3 { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 6px; align-items: end; }',
+'  @media (max-width: 640px) { .row, .row-3 { grid-template-columns: 1fr; } }',
+'  button { background: #10b981; color: #fff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; font-size: 0.9rem; cursor: pointer; margin-top: 10px; width: 100%; }',
+'  button.blue { background: #3b82f6; }',
+'  button.danger { background: #ef4444; width: auto; padding: 5px 10px; font-size: 0.78rem; margin-top: 0; }',
+'  button.sm { width: auto; padding: 6px 10px; font-size: 0.8rem; margin-top: 0; }',
+'  .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; background: #1e293b; color: #38bdf8; }',
+'  .badge.ok { background: #064e3b; color: #34d399; }',
+'  .badge.err { background: #7f1d1d; color: #fca5a5; }',
+'  .list-item { background: #0b0f19; border: 1px solid #1e293b; border-radius: 8px; padding: 10px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }',
+'  .user-chip { display: flex; align-items: center; gap: 8px; }',
+'  .user-chip img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: #1e293b; }',
+'  .user-chip a { color: #38bdf8; text-decoration: none; font-weight: 600; font-size: 0.88rem; }',
+'  .muted { color: #94a3b8; font-size: 0.78rem; }',
+'  .file-box { border: 1px dashed #38bdf8; border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: #0f172a; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }',
+'  .file-box input[type="file"] { border: none; padding: 2px; background: transparent; width: auto; }',
+'  .btn-box { border: 1px solid #1e293b; border-radius: 10px; padding: 10px; margin-top: 8px; background: #0d1322; }',
+'  .toast { position: fixed; bottom: 16px; right: 16px; background: #10b981; color: #fff; padding: 10px 16px; border-radius: 8px; font-weight: 600; display: none; z-index: 999; }',
+'  .guild-bar { background: #111827; border: 1px solid #38bdf8; border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }',
+'  .guild-bar input { width: auto; flex: 1; min-width: 190px; margin-top: 0; }',
+'  .guild-bar button { width: auto; margin-top: 0; padding: 9px 14px; }',
+'</style>',
+'</head>',
+'<body>',
+'  <h1>🛡️ SADO PROTECT</h1>',
+'  <p class="sub">Serverə bağlı skript qoruma, Key/Whitelist idarəetmə və Avto-Panel sinxronizasiyası</p>',
+'  <div class="guild-bar">',
+'    <span id="guildBadge" class="badge err">🔒 Server seçilməyib (Server ID yazın)</span>',
+'    <input type="text" id="activeGuildInput" placeholder="Öz Discord Server (Guild) ID-nizi yazın...">',
+'    <button class="blue" onclick="connectGuild()">Serverə Qoşul / Dəyiş</button>',
+'    <button class="sm" style="background:#334155;" onclick="clearGuild()">Çıx</button>',
+'  </div>',
+'  <div class="card">',
+'    <h2><span>🤖 Discord Bot Ayarları</span><span id="botStatusBadge" class="badge">Yoxlanılır...</span></h2>',
+'    <label>Bot Token (Həmişə qorunur):</label>',
+'    <input type="password" id="botToken" placeholder="Discord Bot Token daxil edin (saxlanılır)">',
+'    <div class="row">',
+'      <div><label>Default Rol ID (Key/Whitelist alanda veriləcək):</label><input type="text" id="roleId" placeholder="Məs: 123456789012345678"></div>',
+'      <div><label>Server (Guild) ID:</label><input type="text" id="guildId" placeholder="Məs: 123456789012345678"></div>',
+'    </div>',
+'    <button class="blue" onclick="saveBotSettings()">Bot Ayarlarını Saxla & Qoşul</button>',
+'  </div>',
+'  <div class="card">',
+'    <h2><span>📜 Skript Əlavə Et / Update Et</span><span class="badge ok">Update zamanı keylər silinmir & Panel auto-yenilənir</span></h2>',
+'    <div class="row">',
+'      <div><label>Mövcud Skripti Seç (Update üçün) və ya Yeni Yarat:</label><select id="editScriptSelect" onchange="loadSelectedScriptForEdit()"><option value="">+ Yeni Skript Yarat</option></select></div>',
+'      <div><label>Skript Adı:</label><input type="text" id="scriptName" placeholder="Məs: SADO HUB"></div>',
+'    </div>',
+'    <label>Skriptə Özəl Rol ID (istəyə bağlı):</label>',
+'    <input type="text" id="scriptRoleId" placeholder="Boş buraxsanız ümumi Rol ID işlənəcək">',
+'    <label>Lua Skript Kodu (Mətn yazın və ya aşağıdan fayl seçin):</label>',
+'    <div class="file-box"><span class="muted">📁 Fayldan yüklə (<code>.lua</code>, <code>.txt</code>):</span><input type="file" id="scriptFileInput" accept=".lua,.txt,text/plain" onchange="handleScriptFile(this)"><span id="fileNameLabel" class="muted"></span></div>',
+'    <textarea id="scriptCode" placeholder=\'print("SADO PROTECT Aktivdir!")\'></textarea>',
+'    <button onclick="saveOrUpdateScript()">Skripti Saxla / Update Et (Auto-Panel)</button>',
+'    <div id="scriptsList" style="margin-top:12px;"></div>',
+'  </div>',
+'  <div class="card">',
+'    <h2>🔑 Key Yarat & Whitelist</h2>',
+'    <div class="row">',
+'      <div><label>Skript Seçin:</label><select id="targetScriptId"></select></div>',
+'      <div><label>Müddət:</label><select id="durationSelect"><option value="lifetime">lifetime</option><option value="7 day">7 day</option><option value="5 day">5 day</option><option value="3 day">3 day</option><option value="24 hour">24 hour</option><option value="5 hour">5 hour</option><option value="1 hour">1 hour</option></select></div>',
+'    </div>',
+'    <div class="row">',
+'      <div><label>Key Sayı:</label><input type="number" id="keyAmount" value="1" min="1" max="50"></div>',
+'      <div style="display:flex;align-items:end;"><button onclick="generateKeys()">Key Yarat</button></div>',
+'    </div>',
+'    <div id="generatedKeysBox" style="margin-top:8px;"></div>',
+'    <hr style="border-color:#1f2937;margin:14px 0;">',
+'    <label>Birbaşa Discord ID-yə Whitelist Ver:</label>',
+'    <div class="row"><input type="text" id="wlUserId" placeholder="Discord User ID (məs: 1333482185423982733)"><button class="blue" style="margin-top:0;" onclick="addWhitelistManual()">Whitelist Ver</button></div>',
+'  </div>',
+'  <div class="card"><h2>👥 Aktiv İstifadəçilər (Key & Whitelist)</h2><div id="holdersList"></div></div>',
+'  <div class="card">',
+'    <h2>🎨 Discord Panel Görünüşü & Butonları</h2>',
+'    <label>Panel Başlığı (Title):</label><input type="text" id="panelTitle">',
+'    <label>Panel Açıqlaması (Description):</label><textarea id="panelDesc" style="min-height:70px;"></textarea>',
+'    <label>Embed Rəngi:</label><input type="color" id="panelColor" style="height:40px;padding:3px;">',
+'    <div id="buttonsConfigArea"></div>',
+'    <button onclick="savePanelConfig()">Panel Ayarlarını Saxla & Discord-da Yenilə</button>',
+'  </div>',
+'  <div class="card">',
+'    <h2>💾 Yedəkləmə (Backup / Restore)</h2>',
+'    <p class="muted">Bütün skriptlərinizi, keylərinizi, whitelistləri və tokeni JSON kimi endirib istənilən vaxt geri yükləyə bilərsiniz.</p>',
+'    <div class="row"><button class="blue" onclick="downloadBackup()">Backup Endir (.json)</button><div class="file-box" style="margin-top:10px;"><span class="muted">Backup Yüklə:</span><input type="file" accept=".json,application/json" onchange="restoreBackup(this)"></div></div>',
+'  </div>',
+'  <div id="toast" class="toast"></div>',
+'<script>',
+'let stateData = null;',
+'function getSelectedGuildId() { try { return (localStorage.getItem("sado_selected_guild") || "").trim(); } catch (_) { return ""; } }',
+'function setSelectedGuildId(gid) { try { var clean = (gid || "").trim(); if (clean) localStorage.setItem("sado_selected_guild", clean); else localStorage.removeItem("sado_selected_guild"); } catch (_) {} }',
+'function showToast(msg, isErr) { var t = document.getElementById("toast"); t.textContent = msg; t.style.background = isErr ? "#ef4444" : "#10b981"; t.style.display = "block"; setTimeout(function() { t.style.display = "none"; }, 3200); }',
+'async function api(path, method, body) {',
+'  method = method || "GET";',
+'  var gid = getSelectedGuildId();',
+'  var headers = {};',
+'  if (gid) headers["X-Guild-Id"] = gid;',
+'  if (body) headers["Content-Type"] = "application/json";',
+'  var sep = path.indexOf("?") !== -1 ? "&" : "?";',
+'  var fullPath = gid ? (path + sep + "guildId=" + encodeURIComponent(gid)) : path;',
+'  var payload = body ? Object.assign({}, body, { guildId: body.guildId !== undefined ? body.guildId : gid }) : undefined;',
+'  var res = await fetch(fullPath, { method: method, headers: headers, body: payload ? JSON.stringify(payload) : undefined });',
+'  return res.json();',
+'}',
+'function connectGuild() {',
+'  var val = document.getElementById("activeGuildInput").value.trim();',
+'  if (!/^[0-9]{5,25}$/.test(val)) return showToast("Düzgün Discord Server (Guild) ID daxil edin!", true);',
+'  setSelectedGuildId(val);',
+'  document.getElementById("activeGuildInput").value = "";',
+'  showToast("Server seçildi: " + val);',
+'  loadState();',
+'}',
+'function clearGuild() { setSelectedGuildId(""); document.getElementById("activeGuildInput").value = ""; showToast("Server seçimi sıfırlandı"); loadState(); }',
+'function handleScriptFile(input) {',
+'  var file = input.files && input.files[0];',
+'  if (!file) return;',
+'  document.getElementById("fileNameLabel").textContent = file.name;',
+'  if (!document.getElementById("scriptName").value.trim()) { document.getElementById("scriptName").value = file.name.replace(/\\.(lua|txt)$/i, ""); }',
+'  var reader = new FileReader();',
+'  reader.onload = function() { document.getElementById("scriptCode").value = String(reader.result || ""); showToast("Fayl yükləndi: " + file.name); };',
+'  reader.readAsText(file);',
+'}',
+'function renderButtonsConfig(buttons) {',
+'  var labels = { redeem: "1. Redeem Key Düyməsi", getScript: "2. Get Script Düyməsi", resetHwid: "3. Reset HWID Düyməsi", getStats: "4. Get Stats Düyməsi" };',
+'  var area = document.getElementById("buttonsConfigArea");',
+'  area.innerHTML = "";',
+'  ["redeem", "getScript", "resetHwid", "getStats"].forEach(function(key) {',
+'    var b = (buttons && buttons[key]) || {};',
+'    var box = document.createElement("div");',
+'    box.className = "btn-box";',
+'    var opts = ["Primary", "Success", "Danger", "Secondary"].map(function(st) { return "<option value=\\"" + st + "\\" " + (b.style === st ? "selected" : "") + ">" + st + "</option>"; }).join("");',
+'    box.innerHTML = "<div style=\\"font-weight:600;font-size:0.88rem;margin-bottom:6px;color:#38bdf8;\\">" + labels[key] + "</div>" +',
+'      "<div class=\\"row-3\\">" +',
+'      "<div><label>Mətn (Label):</label><input type=\\"text\\" id=\\"btn_label_" + key + "\\" value=\\"" + String(b.label || "").replace(/"/g, "&quot;") + "\\"></div>" +',
+'      "<div><label>Emoji:</label><input type=\\"text\\" id=\\"btn_emoji_" + key + "\\" value=\\"" + String(b.emoji || "").replace(/"/g, "&quot;") + "\\"></div>" +',
+'      "<div><label>Rəng (Style):</label><select id=\\"btn_style_" + key + "\\">" + opts + "</select></div>" +',
+'      "<div><label>Sıra (1-4):</label><input type=\\"number\\" id=\\"btn_order_" + key + "\\" min=\\"1\\" max=\\"4\\" value=\\"" + (b.order || 1) + "\\"></div>" +',
+'      "</div>";',
+'    area.appendChild(box);',
+'  });',
+'}',
+'function loadSelectedScriptForEdit() {',
+'  var selId = document.getElementById("editScriptSelect").value;',
+'  if (!selId || !stateData || !stateData.scripts[selId]) {',
+'    document.getElementById("scriptName").value = "";',
+'    document.getElementById("scriptRoleId").value = "";',
+'    document.getElementById("scriptCode").value = "";',
+'    document.getElementById("fileNameLabel").textContent = "";',
+'    return;',
+'  }',
+'  var sc = stateData.scripts[selId];',
+'  document.getElementById("scriptName").value = sc.name || "";',
+'  document.getElementById("scriptRoleId").value = sc.roleId || "";',
+'  document.getElementById("scriptCode").value = sc.code || "";',
+'  document.getElementById("fileNameLabel").textContent = sc.fileName || "";',
+'}',
+'async function loadState() {',
+'  stateData = await api("/api/state");',
+'  var activeGid = getSelectedGuildId();',
+'  var guildBadge = document.getElementById("guildBadge");',
+'  if (guildBadge) {',
+'    if (activeGid) { guildBadge.textContent = "🌐 Aktiv Server ID: " + activeGid; guildBadge.className = "badge ok"; }',
+'    else { guildBadge.textContent = "🔒 Server seçilməyib (Server ID yazın)"; guildBadge.className = "badge err"; }',
+'  }',
+'  var badge = document.getElementById("botStatusBadge");',
+'  if (stateData.botStatus && stateData.botStatus.online) { badge.textContent = "Onlayn: " + stateData.botStatus.tag; badge.className = "badge ok"; }',
+'  else { badge.textContent = "Oflayn" + (stateData.botStatus && stateData.botStatus.error ? ": " + stateData.botStatus.error : ""); badge.className = "badge err"; }',
+'  document.getElementById("roleId").value = stateData.roleId || "";',
+'  document.getElementById("guildId").value = activeGid || "";',
+'  var scripts = Object.values(stateData.scripts || {});',
+'  var targetSel = document.getElementById("targetScriptId");',
+'  var prevTarget = targetSel.value;',
+'  targetSel.innerHTML = scripts.map(function(s) { return "<option value=\\"" + s.id + "\\">" + s.name + " (v" + (s.version || 1) + ")</option>"; }).join("");',
+'  if (prevTarget && stateData.scripts[prevTarget]) targetSel.value = prevTarget;',
+'  var editSel = document.getElementById("editScriptSelect");',
+'  var prevEdit = editSel.value;',
+'  editSel.innerHTML = "<option value=\\"\\">+ Yeni Skript Yarat</option>" + scripts.map(function(s) { return "<option value=\\"" + s.id + "\\">" + s.name + " (v" + (s.version || 1) + ")</option>"; }).join("");',
+'  if (prevEdit && stateData.scripts[prevEdit]) editSel.value = prevEdit;',
+'  var scriptsList = document.getElementById("scriptsList");',
+'  if (!activeGid) { scriptsList.innerHTML = "<div class=\\"muted\\">Öz serverinizin skriptlərini görmək üçün yuxarıda Server (Guild) ID daxil edin.</div>"; }',
+'  else if (scripts.length) {',
+'    scriptsList.innerHTML = scripts.map(function(s) {',
+'      return "<div class=\\"list-item\\"><div><strong>" + s.name + "</strong> <span class=\\"badge\\">ID: " + s.id + "</span> <span class=\\"badge ok\\">v" + (s.version || 1) + "</span>" +',
+'        (s.guildId ? " <span class=\\"badge\\">Server: " + s.guildId + "</span>" : "") +',
+'        "<div class=\\"muted\\">" + (s.fileName ? "Fayl: " + s.fileName + " • " : "") + "Kod uzunluğu: " + (s.code || "").length + " simvol</div></div>" +',
+'        "<button class=\\"danger\\" onclick=\\"deleteScript(\'" + s.id + "\')\\">Sil</button></div>";',
+'    }).join("");',
+'  } else { scriptsList.innerHTML = "<div class=\\"muted\\">Bu serverdə hələ skript əlavə edilməyib.</div>"; }',
+'  var holders = [];',
+'  Object.values(stateData.whitelist || {}).forEach(function(w) {',
+'    holders.push({ type: "Whitelist", userId: w.userId, username: w.username || w.userId, displayName: w.displayName || w.username || w.userId, avatarUrl: w.avatarUrl || "", profileUrl: w.profileUrl || ("https://discord.com/users/" + w.userId), scriptId: w.scriptId, expiresAt: w.expiresAt, hwid: w.hwid, removeAction: "removeWhitelist(\'" + w.scriptId + ":" + w.userId + "\')" });',
+'  });',
+'  Object.values(stateData.keys || {}).forEach(function(k) {',
+'    if (k.redeemedBy) {',
+'      holders.push({ type: "Key (" + k.code + ")", userId: k.redeemedBy, username: k.username || k.redeemedBy, displayName: k.displayName || k.username || k.redeemedBy, avatarUrl: k.avatarUrl || "", profileUrl: k.profileUrl || ("https://discord.com/users/" + k.redeemedBy), scriptId: k.scriptId, expiresAt: k.expiresAt, hwid: k.hwid, removeAction: "deleteKey(\'" + k.code + "\')" });',
+'    }',
+'  });',
+'  var holdersList = document.getElementById("holdersList");',
+'  if (!activeGid) { holdersList.innerHTML = "<div class=\\"muted\\">Server seçildikdən sonra yalnız həmin serverin istifadəçiləri görünəcək.</div>"; }',
+'  else if (holders.length) {',
+'    holdersList.innerHTML = holders.map(function(h) {',
+'      var expText = h.expiresAt ? new Date(h.expiresAt).toLocaleString("az-AZ") : "Lifetime";',
+'      return "<div class=\\"list-item\\"><div class=\\"user-chip\\"><img src=\\"" + (h.avatarUrl || "https://cdn.discordapp.com/embed/avatars/0.png") + "\\" alt=\\"\\">" +',
+'        "<div><a href=\\"" + h.profileUrl + "\\" target=\\"_blank\\">" + h.displayName + "</a> <span class=\\"muted\\">(@" + h.username + ")</span>" +',
+'        "<div class=\\"muted\\">ID: " + h.userId + " • Skript: <b>" + h.scriptId + "</b> • " + h.type + " • Müddət: " + expText + "</div>" +',
+'        "<div class=\\"muted\\">HWID: " + (h.hwid ? h.hwid : "Bağlanmayıb") + "</div></div></div>" +',
+'        "<button class=\\"danger\\" onclick=\\"" + h.removeAction + "\\">Sil</button></div>";',
+'    }).join("");',
+'  } else { holdersList.innerHTML = "<div class=\\"muted\\">Bu serverdə hələ aktiv key və ya whitelist istifadəçisi yoxdur.</div>"; }',
+'  var cfg = stateData.panelConfig || {};',
+'  document.getElementById("panelTitle").value = cfg.title || "";',
+'  document.getElementById("panelDesc").value = cfg.description || "";',
+'  document.getElementById("panelColor").value = cfg.color || "#00FF00";',
+'  renderButtonsConfig(cfg.buttons || {});',
+'}',
+'async function saveBotSettings() {',
+'  var botToken = document.getElementById("botToken").value.trim();',
+'  var roleId = document.getElementById("roleId").value.trim();',
+'  var guildId = document.getElementById("guildId").value.trim();',
+'  if (guildId && /^[0-9]{5,25}$/.test(guildId)) setSelectedGuildId(guildId);',
+'  var res = await api("/api/bot-settings", "POST", { botToken: botToken || undefined, roleId: roleId, guildId: guildId });',
+'  if (res.ok) { document.getElementById("botToken").value = ""; showToast(res.botStatus && res.botStatus.online ? "Bot qoşuldu: " + res.botStatus.tag : "Ayarlar saxlanıldı"); }',
+'  else { showToast(res.error || "Xəta", true); }',
+'  loadState();',
+'}',
+'async function saveOrUpdateScript() {',
+'  var existingId = document.getElementById("editScriptSelect").value.trim();',
+'  var name = document.getElementById("scriptName").value.trim();',
+'  var roleId = document.getElementById("scriptRoleId").value.trim();',
+'  var code = document.getElementById("scriptCode").value;',
+'  var fileName = document.getElementById("fileNameLabel").textContent.trim();',
+'  var activeGid = getSelectedGuildId();',
+'  if (!activeGid) return showToast("Əvvəlcə yuxarıda öz Server (Guild) ID-nizi daxil edib qoşulun!", true);',
+'  if (!name || !code.trim()) return showToast("Skript adı və Lua kodu mütləqdir!", true);',
+'  var res = await api("/api/scripts", "POST", { id: existingId || undefined, guildId: activeGid, name: name, roleId: roleId, code: code, fileName: fileName });',
+'  if (res.ok) { showToast(existingId ? "Skript update edildi! Keylər qorundu, " + (res.panelsUpdated || 0) + " panel yeniləndi." : "Yeni skript yaradıldı!"); loadState(); }',
+'  else { showToast(res.error || "Xəta", true); }',
+'}',
+'async function deleteScript(id) { await api("/api/scripts/" + encodeURIComponent(id), "DELETE"); showToast("Skript silindi"); loadState(); }',
+'async function generateKeys() {',
+'  var activeGid = getSelectedGuildId();',
+'  if (!activeGid) return showToast("Əvvəlcə Server ID daxil edin!", true);',
+'  var scriptId = document.getElementById("targetScriptId").value;',
+'  var durationLabel = document.getElementById("durationSelect").value;',
+'  var amount = Number(document.getElementById("keyAmount").value || 1);',
+'  var res = await api("/api/keys", "POST", { scriptId: scriptId, durationLabel: durationLabel, amount: amount });',
+'  if (res.ok) { document.getElementById("generatedKeysBox").innerHTML = "<textarea readonly style=\\"min-height:70px;\\">" + res.keys.join("\\n") + "</textarea>"; showToast(res.keys.length + " key yaradıldı!"); loadState(); }',
+'  else { showToast(res.error || "Xəta", true); }',
+'}',
+'async function addWhitelistManual() {',
+'  var activeGid = getSelectedGuildId();',
+'  if (!activeGid) return showToast("Əvvəlcə Server ID daxil edin!", true);',
+'  var scriptId = document.getElementById("targetScriptId").value;',
+'  var userId = document.getElementById("wlUserId").value.trim();',
+'  var durationLabel = document.getElementById("durationSelect").value;',
+'  if (!userId) return showToast("Discord User ID yazın!", true);',
+'  var res = await api("/api/whitelist", "POST", { scriptId: scriptId, userId: userId, durationLabel: durationLabel });',
+'  if (res.ok) { document.getElementById("wlUserId").value = ""; showToast("Whitelist verildi!"); loadState(); }',
+'  else { showToast(res.error || "Xəta", true); }',
+'}',
+'async function removeWhitelist(wlKey) { await api("/api/whitelist/" + encodeURIComponent(wlKey), "DELETE"); showToast("Whitelist silindi"); loadState(); }',
+'async function deleteKey(code) { await api("/api/keys/" + encodeURIComponent(code), "DELETE"); showToast("Key silindi"); loadState(); }',
+'async function savePanelConfig() {',
+'  var keys = ["redeem", "getScript", "resetHwid", "getStats"];',
+'  var buttons = {};',
+'  keys.forEach(function(k) { buttons[k] = { label: document.getElementById("btn_label_" + k).value.trim(), emoji: document.getElementById("btn_emoji_" + k).value.trim(), style: document.getElementById("btn_style_" + k).value, order: Number(document.getElementById("btn_order_" + k).value || 1) }; });',
+'  var res = await api("/api/panel-config", "POST", { title: document.getElementById("panelTitle").value, description: document.getElementById("panelDesc").value, color: document.getElementById("panelColor").value, buttons: buttons });',
+'  if (res.ok) { showToast("Panel ayarları saxlanıldı (" + (res.panelsUpdated || 0) + " Discord panel yeniləndi)!"); loadState(); }',
+'}',
+'function downloadBackup() { window.location.href = "/api/backup"; }',
+'async function restoreBackup(input) { var file = input.files && input.files[0]; if (!file) return; var text = await file.text(); var res = await api("/api/restore", "POST", JSON.parse(text)); showToast(res.ok ? "Backup uğurla bərpa edildi!" : (res.error || "Xəta"), !res.ok); loadState(); }',
+'loadState();',
+'</script>',
+'</body>',
+'</html>'
+].join('\n');
+
 function renderDashboardHtml() {
-    return `<!DOCTYPE html>
-<html lang="az">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SADO PROTECT — Control Dashboard</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
-  body { background: #0b0f19; color: #e2e8f0; padding: 14px; max-width: 960px; margin: 0 auto; }
-  h1 { font-size: 1.4rem; color: #38bdf8; margin-bottom: 4px; }
-  .sub { font-size: 0.85rem; color: #94a3b8; margin-bottom: 16px; }
-  .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 1.05rem; color: #f8fafc; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
-  label { display: block; font-size: 0.82rem; color: #cbd5e1; margin: 8px 0 4px; }
-  input, textarea, select {
-    width: 100%; background: #0b0f19; color: #f8fafc; border: 1px solid #334155;
-    border-radius: 8px; padding: 9px 10px; font-size: 0.9rem; outline: none;
-  }
-  input:focus, textarea:focus, select:focus { border-color: #38bdf8; }
-  textarea { min-height: 110px; font-family: monospace; resize: vertical; }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .row-3 { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 6px; align-items: end; }
-  @media (max-width: 640px) {
-    .row, .row-3 { grid-template-columns: 1fr; }
-  }
-  button {
-    background: #10b981; color: #fff; border: none; border-radius: 8px; padding: 10px 14px;
-    font-weight: 600; font-size: 0.9rem; cursor: pointer; margin-top: 10px; width: 100%;
-  }
-  button.blue { background: #3b82f6; }
-  button.danger { background: #ef4444; width: auto; padding: 5px 10px; font-size: 0.78rem; margin-top: 0; }
-  button.sm { width: auto; padding: 6px 10px; font-size: 0.8rem; margin-top: 0; }
-  .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; background: #1e293b; color: #38bdf8; }
-  .badge.ok { background: #064e3b; color: #34d399; }
-  .badge.err { background: #7f1d1d; color: #fca5a5; }
-  .list-item {
-    background: #0b0f19; border: 1px solid #1e293b; border-radius: 8px; padding: 10px;
-    margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
-  }
-  .user-chip { display: flex; align-items: center; gap: 8px; }
-  .user-chip img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: #1e293b; }
-  .user-chip a { color: #38bdf8; text-decoration: none; font-weight: 600; font-size: 0.88rem; }
-  .muted { color: #94a3b8; font-size: 0.78rem; }
-  .file-box {
-    border: 1px dashed #38bdf8; border-radius: 8px; padding: 8px 10px; margin-top: 6px;
-    background: #0f172a; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
-  }
-  .file-box input[type="file"] { border: none; padding: 2px; background: transparent; width: auto; }
-  .btn-box { border: 1px solid #1e293b; border-radius: 10px; padding: 10px; margin-top: 8px; background: #0d1322; }
-  .toast {
-    position: fixed; bottom: 16px; right: 16px; background: #10b981; color: #fff;
-    padding: 10px 16px; border-radius: 8px; font-weight: 600; display: none; z-index: 999;
-  }
-  .guild-bar {
-    background: #111827; border: 1px solid #38bdf8; border-radius: 12px;
-    padding: 12px 14px; margin-bottom: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  }
-  .guild-bar input { width: auto; flex: 1; min-width: 190px; margin-top: 0; }
-  .guild-bar button { width: auto; margin-top: 0; padding: 9px 14px; }
-</style>
-</head>
-<body>
-  <h1>🛡️ SADO PROTECT</h1>
-  <p class="sub">Serverə bağlı skript qoruma, Key/Whitelist idarəetmə və Avto-Panel sinxronizasiyası</p>
-
-  <div class="guild-bar">
-    <span id="guildBadge" class="badge err">🔒 Server seçilməyib (Server ID yazın)</span>
-    <input type="text" id="activeGuildInput" placeholder="Öz Discord Server (Guild) ID-nizi yazın...">
-    <button class="blue" onclick="connectGuild()">Serverə Qoşul / Dəyiş</button>
-    <button class="sm" style="background:#334155;" onclick="clearGuild()">Çıx</button>
-  </div>
-
-  <div class="card">
-    <h2>
-      <span>🤖 Discord Bot Ayarları</span>
-      <span id="botStatusBadge" class="badge">Yoxlanılır...</span>
-    </h2>
-    <label>Bot Token (Həmişə qorunur):</label>
-    <input type="password" id="botToken" placeholder="Discord Bot Token daxil edin (saxlanılır)">
-    <div class="row">
-      <div>
-        <label>Default Rol ID (Key/Whitelist alanda veriləcək):</label>
-        <input type="text" id="roleId" placeholder="Məs: 123456789012345678">
-      </div>
-      <div>
-        <label>Server (Guild) ID:</label>
-        <input type="text" id="guildId" placeholder="Məs: 123456789012345678">
-      </div>
-    </div>
-    <button class="blue" onclick="saveBotSettings()">Bot Ayarlarını Saxla & Qoşul</button>
-  </div>
-
-  <div class="card">
-    <h2>
-      <span>📜 Skript Əlavə Et / Update Et</span>
-      <span class="badge ok">Update zamanı keylər silinmir & Panel auto-yenilənir</span>
-    </h2>
-    <div class="row">
-      <div>
-        <label>Mövcud Skripti Seç (Update üçün) və ya Yeni Yarat:</label>
-        <select id="editScriptSelect" onchange="loadSelectedScriptForEdit()">
-          <option value="">+ Yeni Skript Yarat</option>
-        </select>
-      </div>
-      <div>
-        <label>Skript Adı:</label>
-        <input type="text" id="scriptName" placeholder="Məs: SADO HUB">
-      </div>
-    </div>
-    <label>Skriptə Özəl Rol ID (istəyə bağlı):</label>
-    <input type="text" id="scriptRoleId" placeholder="Boş buraxsanız ümumi Rol ID işlənəcək">
-
-    <label>Lua Skript Kodu (Mətn yazın və ya aşağıdan fayl seçin):</label>
-    <div class="file-box">
-      <span class="muted">📁 Fayldan yüklə (<code>.lua</code>, <code>.txt</code>):</span>
-      <input type="file" id="scriptFileInput" accept=".lua,.txt,text/plain" onchange="handleScriptFile(this)">
-      <span id="fileNameLabel" class="muted"></span>
-    </div>
-    <textarea id="scriptCode" placeholder='print("SADO PROTECT Aktivdir!")'></textarea>
-
-    <button onclick="saveOrUpdateScript()">Skripti Saxla / Update Et (Auto-Panel)</button>
-
-    <div id="scriptsList" style="margin-top:12px;"></div>
-  </div>
-
-  <div class="card">
-    <h2>🔑 Key Yarat & Whitelist</h2>
-    <div class="row">
-      <div>
-        <label>Skript Seçin:</label>
-        <select id="targetScriptId"></select>
-      </div>
-      <div>
-        <label>Müddət:</label>
-        <select id="durationSelect">
-          <option value="lifetime">lifetime</option>
-          <option value="7 day">7 day</option>
-          <option value="5 day">5 day</option>
-          <option value="3 day">3 day</option>
-          <option value="24 hour">24 hour</option>
-          <option value="5 hour">5 hour</option>
-          <option value="1 hour">1 hour</option>
-        </select>
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <label>Key Sayı:</label>
-        <input type="number" id="keyAmount" value="1" min="1" max="50">
-      </div>
-      <div style="display:flex;align-items:end;">
-        <button onclick="generateKeys()">Key Yarat</button>
-      </div>
-    </div>
-    <div id="generatedKeysBox" style="margin-top:8px;"></div>
-
-    <hr style="border-color:#1f2937;margin:14px 0;">
-    <label>Birbaşa Discord ID-yə Whitelist Ver:</label>
-    <div class="row">
-      <input type="text" id="wlUserId" placeholder="Discord User ID (məs: 1333482185423982733)">
-      <button class="blue" style="margin-top:0;" onclick="addWhitelistManual()">Whitelist Ver</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>👥 Aktiv İstifadəçilər (Key & Whitelist)</h2>
-    <div id="holdersList"></div>
-  </div>
-
-  <div class="card">
-    <h2>🎨 Discord Panel Görünüşü & Butonları</h2>
-    <label>Panel Başlığı (Title):</label>
-    <input type="text" id="panelTitle">
-    <label>Panel Açıqlaması (Description):</label>
-    <textarea id="panelDesc" style="min-height:70px;"></textarea>
-    <label>Embed Rəngi:</label>
-    <input type="color" id="panelColor" style="height:40px;padding:3px;">
-
-    <div id="buttonsConfigArea"></div>
-    <button onclick="savePanelConfig()">Panel Ayarlarını Saxla & Discord-da Yenilə</button>
-  </div>
-
-  <div class="card">
-    <h2>💾 Yedəkləmə (Backup / Restore)</h2>
-    <p class="muted">Bütün skriptlərinizi, keylərinizi, whitelistləri və tokeni JSON kimi endirib istənilən vaxt geri yükləyə bilərsiniz.</p>
-    <div class="row">
-      <button class="blue" onclick="downloadBackup()">Backup Endir (.json)</button>
-      <div class="file-box" style="margin-top:10px;">
-        <span class="muted">Backup Yüklə:</span>
-        <input type="file" accept=".json,application/json" onchange="restoreBackup(this)">
-      </div>
-    </div>
-  </div>
-
-  <div id="toast" class="toast"></div>
-
-<script>
-let stateData = null;
-
-function getSelectedGuildId() {
-  try { return (localStorage.getItem('sado_selected_guild') || '').trim(); } catch (_) { return ''; }
-}
-
-function setSelectedGuildId(gid) {
-  try {
-    const clean = (gid || '').trim();
-    if (clean) localStorage.setItem('sado_selected_guild', clean);
-    else localStorage.removeItem('sado_selected_guild');
-  } catch (_) {}
-}
-
-function showToast(msg, isErr = false) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.background = isErr ? '#ef4444' : '#10b981';
-  t.style.display = 'block';
-  setTimeout(() => { t.style.display = 'none'; }, 3200);
-}
-
-async function api(path, method = 'GET', body = null) {
-  const gid = getSelectedGuildId();
-  const headers = {};
-  if (gid) headers['X-Guild-Id'] = gid;
-  if (body) headers['Content-Type'] = 'application/json';
-
-  const sep = path.includes('?') ? '&' : '?';
-  const fullPath = gid ? `${path}${sep}guildId=${encodeURIComponent(gid)}` : path;
-
-  const res = await fetch(fullPath, {
-    method,
-    headers,
-    body: body ? JSON.stringify({ ...body, guildId: body.guildId !== undefined ? body.guildId : gid }) : undefined
-  });
-  return res.json();
-}
-
-function connectGuild() {
-  const val = document.getElementById('activeGuildInput').value.trim();
-  if (!/^\d{5,25}$/.test(val)) {
-    return showToast('Düzgün Discord Server (Guild) ID daxil edin!', true);
-  }
-  setSelectedGuildId(val);
-  document.getElementById('activeGuildInput').value = '';
-  showToast('Server seçildi: ' + val);
-  loadState();
-}
-
-function clearGuild() {
-  setSelectedGuildId('');
-  document.getElementById('activeGuildInput').value = '';
-  showToast('Server seçimi sıfırlandı');
-  loadState();
-}
-
-function handleScriptFile(input) {
-  const file = input.files && input.files[0];
-  if (!file) return;
-  document.getElementById('fileNameLabel').textContent = file.name;
-  if (!document.getElementById('scriptName').value.trim()) {
-    document.getElementById('scriptName').value = file.name.replace(/\.(lua|txt)$/i, '');
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    document.getElementById('scriptCode').value = String(reader.result || '');
-    showToast('Fayl yükləndi: ' + file.name);
-  };
-  reader.readAsText(file);
-}
-
-function renderButtonsConfig(buttons) {
-  const labels = {
-    redeem: '1. Redeem Key Düyməsi',
-    getScript: '2. Get Script Düyməsi',
-    resetHwid: '3. Reset HWID Düyməsi',
-    getStats: '4. Get Stats Düyməsi'
-  };
-  const area = document.getElementById('buttonsConfigArea');
-  area.innerHTML = '';
-  ['redeem', 'getScript', 'resetHwid', 'getStats'].forEach(key => {
-    const b = (buttons && buttons[key]) || {};
-    const box = document.createElement('div');
-    box.className = 'btn-box';
-    box.innerHTML = `
-      <div style="font-weight:600;font-size:0.88rem;margin-bottom:6px;color:#38bdf8;">${labels[key]}</div>
-      <div class="row-3">
-        <div>
-          <label>Mətn (Label):</label>
-          <input type="text" id="btn_label_${key}" value="${(b.label || '').replace(/"/g, '&quot;')}">
-        </div>
-        <div>
-          <label>Emoji:</label>
-          <input type="text" id="btn_emoji_${key}" value="${(b.emoji || '').replace(/"/g, '&quot;')}">
-        </div>
-        <div>
-          <label>Rəng (Style):</label>
-          <select id="btn_style_${key}">
-            ${['Primary', 'Success', 'Danger', 'Secondary'].map(st =>
-              `<option value="${st}" ${b.style === st ? 'selected' : ''}>${st}</option>`
-            ).join('')}
-          </select>
-        </div>
-        <div>
-          <label>Sıra (1-4):</label>
-          <input type="number" id="btn_order_${key}" min="1" max="4" value="${b.order || 1}">
-        </div>
-      </div>
-    `;
-    area.appendChild(box);
-  });
-}
-
-function loadSelectedScriptForEdit() {
-  const selId = document.getElementById('editScriptSelect').value;
-  if (!selId || !stateData || !stateData.scripts[selId]) {
-    document.getElementById('scriptName').value = '';
-    document.getElementById('scriptRoleId').value = '';
-    document.getElementById('scriptCode').value = '';
-    document.getElementById('fileNameLabel').textContent = '';
-    return;
-  }
-  const sc = stateData.scripts[selId];
-  document.getElementById('scriptName').value = sc.name || '';
-  document.getElementById('scriptRoleId').value = sc.roleId || '';
-  document.getElementById('scriptCode').value = sc.code || '';
-  document.getElementById('fileNameLabel').textContent = sc.fileName || '';
-}
-
-async function loadState() {
-  stateData = await api('/api/state');
-  const activeGid = getSelectedGuildId();
-  const guildBadge = document.getElementById('guildBadge');
-  if (guildBadge) {
-    if (activeGid) {
-      guildBadge.textContent = '🌐 Aktiv Server ID: ' + activeGid;
-      guildBadge.className = 'badge ok';
-    } else {
-      guildBadge.textContent = '🔒 Server seçilməyib (Server ID yazın)';
-      guildBadge.className = 'badge err';
-    }
-  }
-
-  const badge = document.getElementById('botStatusBadge');
-  if (stateData.botStatus && stateData.botStatus.online) {
-    badge.textContent = 'Onlayn: ' + stateData.botStatus.tag;
-    badge.className = 'badge ok';
-  } else {
-    badge.textContent = 'Oflayn' + (stateData.botStatus && stateData.botStatus.error ? ': ' + stateData.botStatus.error : '');
-    badge.className = 'badge err';
-  }
-
-  document.getElementById('roleId').value = stateData.roleId || '';
-  document.getElementById('guildId').value = activeGid || '';
-
-  const scripts = Object.values(stateData.scripts || {});
-  const targetSel = document.getElementById('targetScriptId');
-  const prevTarget = targetSel.value;
-  targetSel.innerHTML = scripts.map(s =>
-    `<option value="${s.id}">${s.name} (v${s.version || 1})</option>`
-  ).join('');
-  if (prevTarget && stateData.scripts[prevTarget]) targetSel.value = prevTarget;
-
-  const editSel = document.getElementById('editScriptSelect');
-  const prevEdit = editSel.value;
-  editSel.innerHTML = '<option value="">+ Yeni Skript Yarat</option>' + scripts.map(s =>
-    `<option value="${s.id}">${s.name} (v${s.version || 1})</option>`
-  ).join('');
-  if (prevEdit && stateData.scripts[prevEdit]) editSel.value = prevEdit;
-
-  const scriptsList = document.getElementById('scriptsList');
-  scriptsList.innerHTML = !activeGid
-    ? '<div class="muted">Öz serverinizin skriptlərini görmək üçün yuxarıda Server (Guild) ID daxil edin.</div>'
-    : (scripts.length ? scripts.map(s => `
-    <div class="list-item">
-      <div>
-        <strong>${s.name}</strong> <span class="badge">ID: ${s.id}</span> <span class="badge ok">v${s.version || 1}</span>
-        ${s.guildId ? `<span class="badge">Server: ${s.guildId}</span>` : ''}
-        <div class="muted">${s.fileName ? 'Fayl: ' + s.fileName + ' • ' : ''}Kod uzunluğu: ${(s.code || '').length} simvol</div>
-      </div>
-      <button class="danger" onclick="deleteScript('${s.id}')">Sil</button>
-    </div>
-  `).join('') : '<div class="muted">Bu serverdə hələ skript əlavə edilməyib.</div>');
-
-  const holders = [];
-  Object.values(stateData.whitelist || {}).forEach(w => {
-    holders.push({
-      type: 'Whitelist',
-      userId: w.userId,
-      username: w.username || w.userId,
-      displayName: w.displayName || w.username || w.userId,
-      avatarUrl: w.avatarUrl || '',
-      profileUrl: w.profileUrl || `https://discord.com/users/${w.userId}`,
-      scriptId: w.scriptId,
-      durationLabel: w.durationLabel || 'lifetime',
-      expiresAt: w.expiresAt,
-      hwid: w.hwid,
-      removeAction: `removeWhitelist('${w.scriptId}:${w.userId}')`
-    });
-  });
-  Object.values(stateData.keys || {}).forEach(k => {
-    if (k.redeemedBy) {
-      holders.push({
-        type: 'Key (' + k.code + ')',
-        userId: k.redeemedBy,
-        username: k.username || k.redeemedBy,
-        displayName: k.displayName || k.username || k.redeemedBy,
-        avatarUrl: k.avatarUrl || '',
-        profileUrl: k.profileUrl || `https://discord.com/users/${k.redeemedBy}`,
-        scriptId: k.scriptId,
-        durationLabel: k.durationLabel || 'lifetime',
-        expiresAt: k.expiresAt,
-        hwid: k.hwid,
-        removeAction: `deleteKey('${k.code}')`
-      });
-    }
-  });
-
-  const holdersList = document.getElementById('holdersList');
-  holdersList.innerHTML = !activeGid
-    ? '<div class="muted">Server seçildikdən sonra yalnız həmin serverin istifadəçiləri görünəcək.</div>'
-    : (holders.length ? holders.map(h => {
-    const expText = h.expiresAt ? new Date(h.expiresAt).toLocaleString('az-AZ') : 'Lifetime';
-    return `
-      <div class="list-item">
-        <div class="user-chip">
-          <img src="${h.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="">
-          <div>
-            <a href="${h.profileUrl}" target="_blank">${h.displayName}</a> <span class="muted">(@${h.username})</span>
-            <div class="muted">ID: ${h.userId} • Skript: <b>${h.scriptId}</b> • ${h.type} • Müddət: ${expText}</div>
-            <div class="muted">HWID: ${h.hwid ? h.hwid : 'Bağlanmayıb'}</div>
-          </div>
-        </div>
-        <button class="danger" onclick="${h.removeAction}">Sil</button>
-      </div>
-    `;
-  }).join('') : '<div class="muted">Bu serverdə hələ aktiv key və ya whitelist istifadəçisi yoxdur.</div>');
-
-  const cfg = stateData.panelConfig || {};
-  document.getElementById('panelTitle').value = cfg.title || '';
-  document.getElementById('panelDesc').value = cfg.description || '';
-  document.getElementById('panelColor').value = cfg.color || '#00FF00';
-  renderButtonsConfig(cfg.buttons || {});
-}
-
-async function saveBotSettings() {
-  const botToken = document.getElementById('botToken').value.trim();
-  const roleId = document.getElementById('roleId').value.trim();
-  const guildId = document.getElementById('guildId').value.trim();
-  if (guildId && /^\d{5,25}$/.test(guildId)) {
-    setSelectedGuildId(guildId);
-  }
-  const res = await api('/api/bot-settings', 'POST', {
-    botToken: botToken || undefined,
-    roleId,
-    guildId
-  });
-  if (res.ok) {
-    document.getElementById('botToken').value = '';
-    showToast(res.botStatus && res.botStatus.online ? 'Bot qoşuldu: ' + res.botStatus.tag : 'Ayarlar saxlanıldı');
-  } else {
-    showToast(res.error || 'Xəta', true);
-  }
-  loadState();
-}
-
-async function saveOrUpdateScript() {
-  const existingId = document.getElementById('editScriptSelect').value.trim();
-  const name = document.getElementById('scriptName').value.trim();
-  const roleId = document.getElementById('scriptRoleId').value.trim();
-  const code = document.getElementById('scriptCode').value;
-  const fileName = document.getElementById('fileNameLabel').textContent.trim();
-  const activeGid = getSelectedGuildId();
-
-  if (!activeGid) {
-    return showToast('Əvvəlcə yuxarıda öz Server (Guild) ID-nizi daxil edib qoşulun!', true);
-  }
-  if (!name || !code.trim()) {
-    return showToast('Skript adı və Lua kodu mütləqdir!', true);
-  }
-
-  const res = await api('/api/scripts', 'POST', {
-    id: existingId || undefined,
-    guildId: activeGid,
-    name,
-    roleId,
-    code,
-    fileName
-  });
-
-  if (res.ok) {
-    showToast(existingId
-      ? 'Skript update edildi! Keylər qorundu, ' + (res.panelsUpdated || 0) + ' panel yeniləndi.'
-      : 'Yeni skript yaradıldı!');
-    loadState();
-  } else {
-    showToast(res.error || 'Xəta', true);
-  }
-}
-
-async function deleteScript(id) {
-  await api('/api/scripts/' + encodeURIComponent(id), 'DELETE');
-  showToast('Skript silindi');
-  loadState();
-}
-
-async function generateKeys() {
-  const activeGid = getSelectedGuildId();
-  if (!activeGid) return showToast('Əvvəlcə Server ID daxil edin!', true);
-  const scriptId = document.getElementById('targetScriptId').value;
-  const durationLabel = document.getElementById('durationSelect').value;
-  const amount = Number(document.getElementById('keyAmount').value || 1);
-  const res = await api('/api/keys', 'POST', { scriptId, durationLabel, amount });
-  if (res.ok) {
-    document.getElementById('generatedKeysBox').innerHTML =
-      '<textarea readonly style="min-height:70px;">' + res.keys.join('\\n') + '</textarea>';
-    showToast(res.keys.length + ' key yaradıldı!');
-    loadState();
-  } else {
-    showToast(res.error || 'Xəta', true);
-  }
-}
-
-async function addWhitelistManual() {
-  const activeGid = getSelectedGuildId();
-  if (!activeGid) return showToast('Əvvəlcə Server ID daxil edin!', true);
-  const scriptId = document.getElementById('targetScriptId').value;
-  const userId = document.getElementById('wlUserId').value.trim();
-  const durationLabel = document.getElementById('durationSelect').value;
-  if (!userId) return showToast('Discord User ID yazın!', true);
-
-  const res = await api('/api/whitelist', 'POST', { scriptId, userId, durationLabel });
-  if (res.ok) {
-    document.getElementById('wlUserId').value = '';
-    showToast('Whitelist verildi!');
-    loadState();
-  } else {
-    showToast(res.error || 'Xəta', true);
-  }
-}
-
-async function removeWhitelist(wlKey) {
-  await api('/api/whitelist/' + encodeURIComponent(wlKey), 'DELETE');
-  showToast('Whitelist silindi');
-  loadState();
-}
-
-async function deleteKey(code) {
-  await api('/api/keys/' + encodeURIComponent(code), 'DELETE');
-  showToast('Key silindi');
-  loadState();
-}
-
-async function savePanelConfig() {
-  const keys = ['redeem', 'getScript', 'resetHwid', 'getStats'];
-  const buttons = {};
-  keys.forEach(k => {
-    buttons[k] = {
-      label: document.getElementById('btn_label_' + k).value.trim(),
-      emoji: document.getElementById('btn_emoji_' + k).value.trim(),
-      style: document.getElementById('btn_style_' + k).value,
-      order: Number(document.getElementById('btn_order_' + k).value || 1)
-    };
-  });
-
-  const res = await api('/api/panel-config', 'POST', {
-    title: document.getElementById('panelTitle').value,
-    description: document.getElementById('panelDesc').value,
-    color: document.getElementById('panelColor').value,
-    buttons
-  });
-
-  if (res.ok) {
-    showToast('Panel ayarları saxlanıldı (' + (res.panelsUpdated || 0) + ' Discord panel yeniləndi)!');
-    loadState();
-  }
-}
-
-function downloadBackup() {
-  window.location.href = '/api/backup';
-}
-
-async function restoreBackup(input) {
-  const file = input.files && input.files[0];
-  if (!file) return;
-  const text = await file.text();
-  const res = await api('/api/restore', 'POST', JSON.parse(text));
-  showToast(res.ok ? 'Backup uğurla bərpa edildi!' : (res.error || 'Xəta'), !res.ok);
-  loadState();
-}
-
-loadState();
-</script>
-</body>
-</html>`;
+    return DASHBOARD_HTML;
 }
 
 // ================= HTTP SERVER & API =================
