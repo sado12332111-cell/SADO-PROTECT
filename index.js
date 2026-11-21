@@ -161,13 +161,104 @@ function issueUserWhitelistKey({ guildId, scriptId, userId, username, displayNam
 
 function buildProtectedLuaPayload(rawCode, expectedKey = '') {
     const sourceText = String(rawCode || '');
-    const cleanExpectedKey = String(expectedKey || '').trim();
+    const cleanExpectedKey = String(expectedKey || '').trim().replace(/[^A-Za-z0-9_-]/g, '');
     const xorKey = crypto.randomBytes(16);
     const rawBytes = Buffer.from(sourceText, 'utf8');
-    const encBytes = new Array(rawBytes.length);
+    const encBytes = Buffer.alloc(rawBytes.length);
+
     for (let i = 0; i < rawBytes.length; i++) {
         encBytes[i] = rawBytes[i] ^ xorKey[i % xorKey.length];
     }
+
+    const encodedB64 = encBytes.toString('base64');
+    const keyList = Array.from(xorKey).join(',');
+
+    const luaLines = [
+        '-- SADO PROTECT LOADER v4',
+        'local _b64 = "' + encodedB64 + '"',
+        'local _xor = {' + keyList + '}',
+        'local _c = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"',
+        'local function _b64Decode(data)',
+        '    local clean = string.gsub(data, "[^A-Za-z0-9+/=]", "")',
+        '    local out = {}',
+        '    for i = 1, #clean, 4 do',
+        '        local c1 = string.sub(clean, i, i)',
+        '        local c2 = string.sub(clean, i + 1, i + 1)',
+        '        local c3 = string.sub(clean, i + 2, i + 2)',
+        '        local c4 = string.sub(clean, i + 3, i + 3)',
+        '        local v1 = (string.find(_c, c1, 1, true) or 1) - 1',
+        '        local v2 = (string.find(_c, c2, 1, true) or 1) - 1',
+        '        local v3 = (c3 == "=" or c3 == "") and 0 or ((string.find(_c, c3, 1, true) or 1) - 1)',
+        '        local v4 = (c4 == "=" or c4 == "") and 0 or ((string.find(_c, c4, 1, true) or 1) - 1)',
+        '        local b1 = v1 * 4 + math.floor(v2 / 16)',
+        '        table.insert(out, string.char(b1 % 256))',
+        '        if c3 ~= "=" and c3 ~= "" then',
+        '            local b2 = (v2 % 16) * 16 + math.floor(v3 / 4)',
+        '            table.insert(out, string.char(b2 % 256))',
+        '        end',
+        '        if c4 ~= "=" and c4 ~= "" then',
+        '            local b3 = (v3 % 4) * 64 + v4',
+        '            table.insert(out, string.char(b3 % 256))',
+        '        end',
+        '    end',
+        '    return table.concat(out)',
+        'end',
+        'local function _bxorByte(a, b)',
+        '    if bit32 and bit32.bxor then',
+        '        return bit32.bxor(a, b)',
+        '    end',
+        '    local res = 0',
+        '    local bitVal = 1',
+        '    local x = a',
+        '    local y = b',
+        '    while x > 0 or y > 0 do',
+        '        local bx = x % 2',
+        '        local by = y % 2',
+        '        if bx ~= by then',
+        '            res = res + bitVal',
+        '        end',
+        '        x = math.floor(x / 2)',
+        '        y = math.floor(y / 2)',
+        '        bitVal = bitVal * 2',
+        '    end',
+        '    return res',
+        'end'
+    ];
+
+    if (cleanExpectedKey) {
+        luaLines.push(
+            'local _rawKey = (getgenv and getgenv().script_key) or rawget(_G, "script_key") or script_key or ""',
+            'if tostring(_rawKey) ~= "' + cleanExpectedKey + '" then',
+            '    warn("[SADO PROTECT] Yanlis ve ya bos script_key!")',
+            '    return',
+            'end'
+        );
+    }
+
+    luaLines.push(
+        'local _decoded = _b64Decode(_b64)',
+        'local _chars = {}',
+        'local _keyLen = #_xor',
+        'for idx = 1, #_decoded do',
+        '    local byteVal = string.byte(_decoded, idx)',
+        '    local xorVal = _xor[((idx - 1) % _keyLen) + 1]',
+        '    table.insert(_chars, string.char(_bxorByte(byteVal, xorVal)))',
+        'end',
+        'local _scriptSource = table.concat(_chars)',
+        'local _loaderFn = loadstring or load',
+        'if type(_loaderFn) ~= "function" then',
+        '    warn("[SADO PROTECT] Executor loadstring desteklemir!")',
+        '    return',
+        'end',
+        'local _compiled, _compileErr = _loaderFn(_scriptSource)',
+        'if type(_compiled) == "function" then',
+        '    return _compiled()',
+        'end',
+        'warn("[SADO PROTECT] Script yuklenme xetasi: " .. tostring(_compileErr))'
+    );
+
+    return luaLines.join('\n');
+}
 
     const encodedB64 = Buffer.from(encBytes).toString('base64');
     const keyList = Array.from(xorKey).join(',');
