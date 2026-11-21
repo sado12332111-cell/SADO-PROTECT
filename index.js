@@ -338,8 +338,6 @@ function generateKeysForScript(scriptObj, { durationMs = null, amount = 1, creat
             createdAt: now,
             createdBy: String(createdBy),
             expiresAt,
-            maxUses: 1,
-            usedCount: assignedUserId ? 1 : 0,
             redeemed: Boolean(assignedUserId),
             redeemedBy: assignedUserId ? String(assignedUserId) : null,
             redeemedAt: assignedUserId ? now : null,
@@ -2095,15 +2093,6 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
   };
 
-  function escHtml(v) {
-    return String(v ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
   function apiHeaders() {
     const h = { 'Content-Type': 'application/json' };
     if (panelToken) h['x-panel-token'] = panelToken;
@@ -2162,10 +2151,10 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('botBtnForms').innerHTML = items.map(it => {
       const c = botBtnCfg[it.key] || {};
       return '<div class="card" style="background:var(--surface-2);">' +
-        '<h4>' + escHtml(it.title) + '</h4>' +
-        '<div><label>Ad</label><input id="cfg_' + it.key + '_label" value="' + escHtml(c.label || '') + '" /></div>' +
-        '<div><label>Emoji</label><input id="cfg_' + it.key + '_emoji" value="' + escHtml(c.emoji || '') + '" /></div>' +
-        '<div><label>Yer / Sıra (1-4)</label><input id="cfg_' + it.key + '_order" type="number" min="1" max="4" value="' + escHtml(c.order || 1) + '" /></div>' +
+        '<h4>' + it.title + '</h4>' +
+        '<div><label>Ad</label><input id="cfg_' + it.key + '_label" value="' + (c.label || '') + '" /></div>' +
+        '<div><label>Emoji</label><input id="cfg_' + it.key + '_emoji" value="' + (c.emoji || '') + '" /></div>' +
+        '<div><label>Yer / Sıra (1-4)</label><input id="cfg_' + it.key + '_order" type="number" min="1" max="4" value="' + (c.order || 1) + '" /></div>' +
         '<div><label>Rəng</label><select id="cfg_' + it.key + '_style">' +
         ['Success','Primary','Secondary','Danger'].map(st => '<option value="' + st + '"' + (c.style === st ? ' selected' : '') + '>' + st + '</option>').join('') +
         '</select></div></div>';
@@ -2180,7 +2169,7 @@ document.addEventListener('DOMContentLoaded', function() {
       roleSel.innerHTML = '<option value="">Rol tapılmadı</option>';
       return;
     }
-    roleSel.innerHTML = g.roles.map(r => '<option value="' + escHtml(r.id) + '">' + escHtml(r.name) + '</option>').join('');
+    roleSel.innerHTML = g.roles.map(r => '<option value="' + r.id + '">' + r.name + '</option>').join('');
   }
 
   async function refreshState() {
@@ -2208,23 +2197,23 @@ document.addEventListener('DOMContentLoaded', function() {
       document.getElementById('mKeys').style.width = Math.min(100, kCount * 4) + '%';
       document.getElementById('mWl').style.width = Math.min(100, wCount * 5) + '%';
 
-      const opts = (d.scripts || []).map(s => '<option value="' + escHtml(s.id) + '">' + escHtml(s.name) + '</option>').join('') || '<option value="">Skript yoxdur</option>';
+      const opts = (d.scripts || []).map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('') || '<option value="">Skript yoxdur</option>';
       document.getElementById('kScript').innerHTML = opts;
       document.getElementById('wScript').innerHTML = opts;
 
       guildsCache = d.guilds || [];
       const gSel = document.getElementById('rGuild');
       gSel.innerHTML = guildsCache.length
-        ? guildsCache.map(g => '<option value="' + escHtml(g.id) + '">' + escHtml(g.name) + '</option>').join('')
+        ? guildsCache.map(g => '<option value="' + g.id + '">' + g.name + '</option>').join('')
         : '<option value="">Server tapılmadı</option>';
       populateRoles();
 
       document.getElementById('wlList').innerHTML = (d.whitelists || []).length
-        ? d.whitelists.map(w => '<div class="user-row"><img src="' + escHtml(w.userAvatar || '') + '" alt="" /><div><div><b>' + escHtml(w.userName || w.userId) + '</b></div><div style="color:var(--muted);font-size:11px;">ID: ' + escHtml(w.userId || '-') + ' • Script: ' + escHtml(w.scriptId || '-') + '</div></div></div>').join('')
+        ? d.whitelists.map(w => '<div class="user-row"><img src="' + (w.userAvatar || '') + '" alt="" /><div><div><b>' + (w.userName || w.userId) + '</b></div><div style="color:var(--muted);font-size:11px;">ID: ' + (w.userId || '-') + ' • Script: ' + (w.scriptId || '-') + '</div></div></div>').join('')
         : '<div style="color:var(--muted);font-size:13px;">Hələ whitelist yoxdur.</div>';
 
       document.getElementById('keyList').innerHTML = (d.recentKeys || []).length
-        ? d.recentKeys.map(k => '<div class="user-row"><img src="' + escHtml(k.userAvatar || '') + '" alt="" /><div><div><b>' + escHtml(k.userName || 'İstifadə edilməyib') + '</b> • <code>' + escHtml(k.key) + '</code></div><div style="color:var(--muted);font-size:11px;">Script: ' + escHtml(k.scriptName || k.scriptId) + ' • HWID: ' + (k.hwid ? 'Bağlıdır' : 'Boş') + '</div></div></div>').join('')
+        ? d.recentKeys.map(k => '<div class="user-row"><img src="' + (k.userAvatar || '') + '" alt="" /><div><div><b>' + (k.userName || 'İstifadə edilməyib') + '</b> • <code>' + k.key + '</code></div><div style="color:var(--muted);font-size:11px;">Script: ' + (k.scriptName || k.scriptId) + ' • HWID: ' + (k.hwid ? 'Bağlıdır' : 'Boş') + '</div></div></div>').join('')
         : '<div style="color:var(--muted);font-size:13px;">Hələ key yoxdur.</div>';
 
       renderBotConfigForms(d.panelButtonConfig);
