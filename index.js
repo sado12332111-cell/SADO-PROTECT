@@ -23,7 +23,12 @@ const {
 
 const PORT = Number(process.env.PORT || 3000);
 const BOT_TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || '').trim();
-const CLIENT_ID = String(process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '').trim();
+const CLIENT_ID = String(
+    process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '1562080654282199121'
+).trim();
+const DISCORD_INVITE_URL =
+    String(process.env.DISCORD_INVITE_URL || '').trim() ||
+    `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=2147600384&integration_type=0&scope=bot+applications.commands`;
 const PUBLIC_BASE_URL = String(
     process.env.PUBLIC_BASE_URL ||
     process.env.RENDER_EXTERNAL_URL ||
@@ -47,7 +52,14 @@ function createDefaultState() {
         panels: [],
         hwidCooldowns: {},
         lastHwidReset: {},
-        guildSettings: {}
+        guildSettings: {},
+        userProfiles: {},
+        panelButtonConfig: {
+            redeem: { label: 'Redeem Key', emoji: '🔑', style: 'Success', order: 1 },
+            getScript: { label: 'Get Script', emoji: '📜', style: 'Primary', order: 2 },
+            resetHwid: { label: 'Reset HWID', emoji: '🔄', style: 'Secondary', order: 3 },
+            getStats: { label: 'Get Stats', emoji: '📊', style: 'Secondary', order: 4 }
+        }
     };
 }
 
@@ -70,6 +82,13 @@ function loadState() {
             state.hwidCooldowns = state.hwidCooldowns && typeof state.hwidCooldowns === 'object' ? state.hwidCooldowns : {};
             state.lastHwidReset = state.lastHwidReset && typeof state.lastHwidReset === 'object' ? state.lastHwidReset : {};
             state.guildSettings = state.guildSettings && typeof state.guildSettings === 'object' ? state.guildSettings : {};
+            state.userProfiles = state.userProfiles && typeof state.userProfiles === 'object' ? state.userProfiles : {};
+            state.panelButtonConfig = {
+                ...createDefaultState().panelButtonConfig,
+                ...(parsed && parsed.panelButtonConfig && typeof parsed.panelButtonConfig === 'object'
+                    ? parsed.panelButtonConfig
+                    : {})
+            };
         } else {
             persistState();
         }
@@ -78,22 +97,123 @@ function loadState() {
         state = createDefaultState();
     }
 }
-
-function persistState() {
-    ensureDataDir();
-    const tmpFile = `${DATA_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), 'utf8');
-    fs.renameSync(tmpFile, DATA_FILE);
+function getButtonStyleFromName(styleName) {
+    const map = {
+        Primary: ButtonStyle.Primary,
+        Secondary: ButtonStyle.Secondary,
+        Success: ButtonStyle.Success,
+        Danger: ButtonStyle.Danger
+    };
+    return map[String(styleName || '')] || ButtonStyle.Secondary;
 }
 
-loadState();
+function buildPanelComponents() {
+    const cfg = state.panelButtonConfig || createDefaultState().panelButtonConfig;
+    const defs = [
+        { key: 'redeem', customId: 'sp_btn_redeem', fallbackLabel: 'Redeem Key', fallbackEmoji: '🔑', fallbackStyle: ButtonStyle.Success },
+        { key: 'getScript', customId: 'sp_btn_get_script', fallbackLabel: 'Get Script', fallbackEmoji: '📜', fallbackStyle: ButtonStyle.Primary },
+        { key: 'resetHwid', customId: 'sp_btn_reset_hwid', fallbackLabel: 'Reset HWID', fallbackEmoji: '🔄', fallbackStyle: ButtonStyle.Secondary },
+        { key: 'getStats', customId: 'sp_btn_get_stats', fallbackLabel: 'Get Stats', fallbackEmoji: '📊', fallbackStyle: ButtonStyle.Secondary }
+    ];
 
-function parseDurationToMs(input) {
-    if (input === undefined || input === null) return null;
-    const str = String(input).trim().toLowerCase();
-    if (!str || str === '0' || str === 'lifetime' || str === 'perm' || str === 'unlimited') {
-        return null;
+    const ordered = defs
+        .map((d, idx) => {
+            const c = cfg[d.key] || {};
+            const ord = Number(c.order);
+            return {
+                ...d,
+                label: String(c.label || d.fallbackLabel).trim().slice(0, 80) || d.fallbackLabel,
+                emoji: String(c.emoji ?? d.fallbackEmoji).trim(),
+                style: getButtonStyleFromName(c.style) || d.fallbackStyle,
+                order: Number.isFinite(ord) && ord >= 1 && ord <= 4 ? ord : idx + 1
+            };
+        })
+        .sort((a, b) => a.order - b.order);
+
+    const buttons = ordered.map((item) => {
+        const btn = new ButtonBuilder()
+            .setCustomId(item.customId)
+            .setLabel(item.label)
+            .setStyle(item.style);
+        if (item.emoji) {
+            btn.setEmoji(item.emoji);
+        }
+        return btn;
+    });
+
+    const row1 = new ActionRowBuilder().addComponents(buttons.slice(0, 2));
+    const rows = [row1];
+    if (buttons.length > 2) {
+        rows.push(new ActionRowBuilder().addComponents(buttons.slice(2, 4)));
     }
+    return rows;
+}
+async function recordDiscordUserProfile(user) {
+    if (!user || !user.id) return;
+    const uid = String(user.id);
+    const displayName = user.globalName || user.username || `User_${uid}`;
+    const avatarUrl =
+        typeof user.displayAvatarURL === 'function'
+            ? user.displayAvatarURL({ extension: 'png', size: 128 })
+            : 'https://cdn.discordapp.com/embed/avatars/0.png';
+
+    state.userProfiles[uid] = {
+        userId: uid,
+        username: user.username || displayName,
+        displayName,
+        avatarUrl,
+        updatedAt: Date.now()
+    };
+
+    state.keys.forEach((k) => {
+        if (String(k.redeemedBy || '') === uid || String(k.boundUserId || '') === uid) {
+            k.userName = displayName;
+            k.userAvatar = avatarUrl;
+        }
+    });
+    state.whitelists.forEach((w) => {
+        if (String(w.userId) === uid) {
+            w.userName = displayName;
+            w.userAvatar = avatarUrl;
+        }
+    });
+    persistState();
+}
+
+function enrichMemberEntry(entry) {
+    const uid = String(entry.userId || entry.redeemedBy || entry.boundUserId || '');
+    const prof = (uid && state.userProfiles[uid]) || null;
+    return {
+        ...entry,
+        userId: uid || null,
+        userName: entry.userName || (prof && prof.displayName) || (uid ? `User ${uid}` : 'İstifadə edilməyib'),
+        userAvatar: entry.userAvatar || (prof && prof.avatarUrl) || 'https://cdn.discordapp.com/embed/avatars/0.png'
+    };
+}
+
+function getGuildsWithRolesSummary() {
+    if (!client || !client.isReady()) return [];
+    const list = [];
+    client.guilds.cache.forEach((guild) => {
+        const roles = guild.roles.cache
+            .filter((r) => !r.managed && r.id !== guild.id)
+            .sort((a, b) => b.position - a.position)
+            .map((r) => ({
+                id: r.id,
+                name: r.name,
+                color: r.hexColor || '#99aab5',
+                memberCount: r.members ? r.members.size : 0
+            }));
+        list.push({
+            id: guild.id,
+            name: guild.name,
+            iconUrl: typeof guild.iconURL === 'function' ? guild.iconURL({ extension: 'png', size: 128 }) : null,
+            memberCount: guild.memberCount || 0,
+            roles
+        });
+    });
+    return list;
+}
     const match = str.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day|w|wk|mo|y|yr)s?$/i);
     if (!match) return undefined;
     const amount = Number(match[1]);
@@ -669,8 +789,61 @@ client.once('ready', async () => {
     }
 });
 
+client.on('guildCreate', async (guild) => {
+    try {
+        state.guildSettings[String(guild.id)] = {
+            guildId: guild.id,
+            guildName: guild.name,
+            joinedAt: Date.now()
+        };
+        persistState();
+
+        const targetChannel =
+            guild.systemChannel ||
+            guild.channels.cache.find(
+                (ch) =>
+                    ch &&
+                    ch.isTextBased &&
+                    ch.isTextBased() &&
+                    typeof ch.permissionsFor === 'function' &&
+                    ch.permissionsFor(guild.members.me)?.has(PermissionFlagsBits.SendMessages)
+            );
+
+        if (targetChannel) {
+            const embed = new EmbedBuilder()
+                .setColor(0x3B82F6)
+                .setTitle('🛡️ SADO PROTECT — İdarəetmə Paneli')
+                .setDescription(
+                    [
+                        `Salam **${guild.name}**! SADO PROTECT botu serverinizə qoşuldu.`,
+                        `• Skript əlavə etmək: \`/addscript\``,
+                        `• Panel açmaq və skript seçmək: \`/panel\``,
+                        `• Key yaratmaq: \`/genkey\``,
+                        `• Whitelist / Unwhitelist: \`/whitelist\`, \`/unwhitelist\``,
+                        `• HWID sıfırlama və cooldown: \`/resethwid\`, \`/cooldownhwid\``,
+                        `• Veb Panel: ${PUBLIC_BASE_URL}`
+                    ].join('\n')
+                )
+                .setTimestamp();
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setLabel('Veb Paneli Aç')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(PUBLIC_BASE_URL)
+            );
+            await targetChannel.send({ embeds: [embed], components: [row] });
+        }
+    } catch (err) {
+        console.error('[SADO PROTECT] guildCreate bildiriş xətası:', err.message);
+    }
+});
+
 client.on('interactionCreate', async (interaction) => {
     try {
+        if (interaction.user) {
+            await recordDiscordUserProfile(interaction.user);
+        }
         if (interaction.isChatInputCommand()) {
             const { commandName } = interaction;
 
@@ -813,6 +986,7 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 const targetUser = interaction.options.getUser('user', true);
+                await recordDiscordUserProfile(targetUser);
                 const durationRaw = interaction.options.getString('duration') || '0';
                 const durationMs = parseDurationToMs(durationRaw);
                 if (durationMs === undefined) {
@@ -1289,6 +1463,9 @@ const server = http.createServer((req, res) => {
                 JSON.stringify({
                     ok: true,
                     botReady: Boolean(client && client.user),
+                    inviteUrl: DISCORD_INVITE_URL,
+                    panelButtonConfig: state.panelButtonConfig,
+                    guilds: getGuildsWithRolesSummary(),
                     scripts: state.scripts.map((s) => ({
                         id: s.id,
                         name: s.name,
@@ -1297,41 +1474,85 @@ const server = http.createServer((req, res) => {
                     })),
                     keysCount: state.keys.length,
                     whitelistsCount: state.whitelists.length,
-                    recentKeys: state.keys.slice(-15).reverse()
+                    recentKeys: state.keys.slice(-20).reverse().map(enrichMemberEntry),
+                    whitelists: state.whitelists.filter((w) => !w.revoked).slice(-25).reverse().map(enrichMemberEntry)
                 })
             );
             return;
         }
 
-        if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
+        if (reqUrl.pathname === '/api/bot-config' && req.method === 'POST') {
             let body = '';
             req.on('data', (chunk) => { body += chunk; });
             req.on('end', () => {
                 try {
                     const data = JSON.parse(body || '{}');
-                    const name = String(data.name || '').trim();
-                    const code = String(data.code || '');
-                    if (!name) {
-                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                        res.end(JSON.stringify({ ok: false, message: 'Skript adı mütləqdir.' }));
-                        return;
+                    const cfg = data.panelButtonConfig && typeof data.panelButtonConfig === 'object'
+                        ? data.panelButtonConfig
+                        : {};
+                    const current = state.panelButtonConfig || createDefaultState().panelButtonConfig;
+                    for (const k of ['redeem', 'getScript', 'resetHwid', 'getStats']) {
+                        if (cfg[k] && typeof cfg[k] === 'object') {
+                            current[k] = {
+                                label: String(cfg[k].label ?? current[k].label).trim().slice(0, 80) || current[k].label,
+                                emoji: String(cfg[k].emoji ?? current[k].emoji).trim().slice(0, 16),
+                                style: ['Primary', 'Secondary', 'Success', 'Danger'].includes(cfg[k].style)
+                                    ? cfg[k].style
+                                    : current[k].style,
+                                order: Math.max(1, Math.min(4, Number(cfg[k].order) || current[k].order))
+                            };
+                        }
                     }
-                    const id = `scr_${crypto.randomBytes(4).toString('hex')}`;
-                    const entry = {
-                        id,
-                        name,
-                        code,
-                        disabled: false,
-                        createdBy: 'web-panel',
-                        createdAt: Date.now()
-                    };
-                    state.scripts.push(entry);
+                    state.panelButtonConfig = current;
                     persistState();
                     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-                    res.end(JSON.stringify({ ok: true, script: entry }));
+                    res.end(JSON.stringify({ ok: true, panelButtonConfig: state.panelButtonConfig }));
                 } catch (err) {
                     res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                    res.end(JSON.stringify({ ok: false, message: 'Yanlış JSON sorğusu.' }));
+                    res.end(JSON.stringify({ ok: false, message: 'Bot ayarları saxlanarkən xəta baş verdi.' }));
+                }
+            });
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/role-whitelist' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', async () => {
+                try {
+                    const data = JSON.parse(body || '{}');
+                    const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
+                    const guildId = String(data.guildId || '').trim();
+                    const roleId = String(data.roleId || '').trim();
+                    const durationMs = parseDurationToMs(data.duration || '0');
+                    if (!scriptObj || !guildId || !roleId) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Skript, server və rol seçilməlidir.' }));
+                        return;
+                    }
+                    if (durationMs === undefined) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Müddət formatı yanlışdır.' }));
+                        return;
+                    }
+                    const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
+                    const members = await guild.members.fetch();
+                    const matched = members.filter((m) => !m.user.bot && m.roles.cache.has(roleId));
+                    const createdList = [];
+                    for (const [, member] of matched) {
+                        await recordDiscordUserProfile(member.user);
+                        const wlRes = ensureAutoWhitelistKey(scriptObj, member.id, durationMs || null, 'role-whitelist');
+                        createdList.push({
+                            userId: member.id,
+                            userName: member.user.globalName || member.user.username,
+                            key: wlRes.keyEntry.key
+                        });
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, count: createdList.length, items: createdList }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: `Rol whitelist xətası: ${err.message}` }));
                 }
             });
             return;
@@ -1453,41 +1674,75 @@ const server = http.createServer((req, res) => {
 <title>SADO PROTECT — Control Panel</title>
 <style>
   :root {
-    --bg: #0b0f19;
-    --card: #121826;
-    --border: #222c42;
-    --text: #e5ecf8;
-    --muted: #8fa0be;
+    --bg: #080d18;
+    --card: #10182b;
+    --card-2: #0b1220;
+    --border: #1e2d4a;
+    --text: #eef4ff;
+    --muted: #8fa3c7;
     --accent: #3b82f6;
     --accent-2: #10b981;
+    --discord: #5865F2;
   }
   * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
-  body { margin: 0; background: var(--bg); color: var(--text); padding: 20px; }
-  .wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
-  .top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: var(--card); border: 1px solid var(--border); padding: 16px 20px; border-radius: 14px; }
-  .badge { padding: 6px 12px; border-radius: 999px; font-size: 13px; background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--border); padding: 18px; border-radius: 14px; display: grid; gap: 10px; }
-  h1, h2, h3 { margin: 0; }
-  label { font-size: 13px; color: var(--muted); }
-  input, select, textarea, button { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: #0d1320; color: var(--text); font-size: 14px; }
-  textarea { min-height: 90px; resize: vertical; font-family: monospace; }
-  button { background: var(--accent); border: none; font-weight: 600; cursor: pointer; }
-  button.green { background: var(--accent-2); }
+  body { margin: 0; background: radial-gradient(circle at top right, #132242, var(--bg) 55%); color: var(--text); padding: 18px; }
+  .wrap { max-width: 1060px; margin: 0 auto; display: grid; gap: 16px; }
+  .top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; background: var(--card); border: 1px solid var(--border); padding: 16px 20px; border-radius: 16px; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
+  .left-head { display: flex; align-items: center; gap: 12px; }
+  .menu-btn { width: 42px; height: 42px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--border); color: var(--text); font-size: 20px; cursor: pointer; display: grid; place-items: center; }
+  .discord-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 12px; background: var(--discord); color: #fff; text-decoration: none; font-weight: 600; font-size: 14px; }
+  .badge { padding: 7px 13px; border-radius: 999px; font-size: 12px; background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
+  .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; z-index: 40; }
+  .drawer-backdrop.open { display: block; }
+  .drawer { position: fixed; top: 0; left: -310px; width: 300px; height: 100%; background: var(--card); border-right: 1px solid var(--border); padding: 20px; z-index: 50; transition: left .22s ease; display: flex; flex-direction: column; gap: 12px; }
+  .drawer.open { left: 0; }
+  .nav-item { padding: 11px 14px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--border); color: var(--text); text-align: left; cursor: pointer; font-weight: 600; }
+  .nav-item.active { border-color: var(--accent); background: rgba(59,130,246,.18); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); padding: 18px; border-radius: 16px; display: grid; gap: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  h1, h2, h3, h4 { margin: 0; }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  input, select, textarea, button.action { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--card-2); color: var(--text); font-size: 14px; }
+  textarea { min-height: 92px; resize: vertical; font-family: monospace; }
+  button.action { background: var(--accent); border: none; font-weight: 600; cursor: pointer; }
+  button.action.green { background: var(--accent-2); }
+  .drop-pills { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .pill-btn { padding: 8px 4px; border-radius: 9px; border: 1px solid var(--border); background: var(--card-2); color: var(--text); font-weight: 700; cursor: pointer; }
+  .pill-btn.active { background: var(--accent-2); border-color: var(--accent-2); color: #052e16; }
   .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center; }
-  .stat-box { background: #0d1320; border: 1px solid var(--border); padding: 12px; border-radius: 10px; }
-  .stat-num { font-size: 20px; font-weight: 700; }
-  .out { background: #090d16; border: 1px dashed var(--border); padding: 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; }
+  .stat-box { background: var(--card-2); border: 1px solid var(--border); padding: 12px; border-radius: 12px; }
+  .stat-num { font-size: 21px; font-weight: 800; margin-top: 4px; }
+  .user-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--card-2); border: 1px solid var(--border); font-size: 13px; }
+  .user-row img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+  .out { background: #070b14; border: 1px dashed var(--border); padding: 12px; border-radius: 12px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; }
+  .hidden-tab { display: none; }
 </style>
 </head>
 <body>
+<div id="backdrop" class="drawer-backdrop" onclick="toggleDrawer(false)"></div>
+<aside id="drawer" class="drawer">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h3>☰ Menyu</h3>
+    <button onclick="toggleDrawer(false)" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;">✕</button>
+  </div>
+  <button id="tabBtnMain" class="nav-item active" onclick="switchTab('main')">🏠 İdarəetmə Paneli</button>
+  <button id="tabBtnBot" class="nav-item" onclick="switchTab('bot')">🤖 Discord Bot</button>
+  <a class="discord-btn" id="drawerInvite" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener">➕ Discord Join</a>
+</aside>
+
 <div class="wrap">
   <div class="top">
-    <div>
-      <h1>SADO PROTECT</h1>
-      <div style="color:var(--muted);font-size:13px;">Hər skriptə ayrı whitelist • 1 nəfərlik key • Reset HWID • Local Lua</div>
+    <div class="left-head">
+      <button class="menu-btn" onclick="toggleDrawer(true)" aria-label="Menyu">☰</button>
+      <div>
+        <h1>SADO PROTECT</h1>
+        <div style="color:var(--muted);font-size:12px;">1 nəfərlik key &amp; skript kilidi • HWID Kick &amp; Reset • Local Lua</div>
+      </div>
     </div>
-    <div id="botStatus" class="badge">Yoxlanılır...</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <a class="discord-btn" id="topInvite" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener">Discord Join</a>
+      <div id="botStatus" class="badge">Yoxlanılır...</div>
+    </div>
   </div>
 
   <div class="card">
@@ -1498,31 +1753,67 @@ const server = http.createServer((req, res) => {
     </div>
   </div>
 
-  <div class="grid">
-    <div class="card">
-      <h3>Yeni Skript Əlavə Et</h3>
-      <div><label>Skript Adı</label><input id="sName" placeholder="Məs: SAE, Lagger, Duel" /></div>
-      <div><label>Lua Kodu</label><textarea id="sCode" placeholder="print('Salam Roblox!')"></textarea></div>
-      <button onclick="addScript()">Skripti Saxla</button>
-    </div>
-
-    <div class="card">
-      <h3>Key Yarat</h3>
-      <div><label>Skript</label><select id="kScript"></select></div>
-      <div><label>Müddət (0 = lifetime, 1d, 7d, 30d)</label><input id="kDur" value="0" /></div>
-      <div><label>Say</label><input id="kAmt" type="number" value="1" min="1" max="50" /></div>
-      <button class="green" onclick="genKey()">Key Yarat</button>
-    </div>
-
-    <div class="card">
-      <h3>Avto Whitelist + Reset HWID</h3>
-      <div><label>Skript</label><select id="wScript"></select></div>
-      <div><label>Discord User ID</label><input id="wUser" placeholder="123456789012345678" /></div>
-      <div><label>Müddət (0 = lifetime, 1d, 7d)</label><input id="wDur" value="0" /></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-        <button class="green" onclick="doWhitelist()">Whitelist + Key</button>
-        <button onclick="doResetHwid()">Reset HWID</button>
+  <div id="sectionMain">
+    <div class="grid">
+      <div class="card">
+        <h3>Yeni Skript Əlavə Et (Mətn və ya Fayl)</h3>
+        <div><label>Skript Adı</label><input id="sName" placeholder="Məs: SAE, Lagger, Duel" /></div>
+        <div><label>Lua Kodu</label><textarea id="sCode" placeholder="print('Salam Roblox!')"></textarea></div>
+        <div><label>Və ya .lua / .txt Fayl Seçin</label><input id="sFile" type="file" accept=".lua,.txt" onchange="loadScriptFile(event)" /></div>
+        <button class="action" onclick="addScript()">Skripti Saxla</button>
       </div>
+
+      <div class="card">
+        <h3>Drop Key Yarat (1 - 10 Nəfərlik)</h3>
+        <div><label>Skript</label><select id="kScript"></select></div>
+        <div><label>Nəfər / Drop Sayı</label>
+          <div class="drop-pills" id="dropPills">
+            <button type="button" class="pill-btn active" onclick="setDropCount(1, this)">1</button>
+            <button type="button" class="pill-btn" onclick="setDropCount(2, this)">2</button>
+            <button type="button" class="pill-btn" onclick="setDropCount(3, this)">3</button>
+            <button type="button" class="pill-btn" onclick="setDropCount(4, this)">4</button>
+            <button type="button" class="pill-btn" onclick="setDropCount(5, this)">5</button>
+            <button type="button" class="pill-btn" onclick="setDropCount(10, this)">10</button>
+          </div>
+        </div>
+        <div><label>Müddət (0 = lifetime, 1d, 7d, 30d)</label><input id="kDur" value="0" /></div>
+        <button class="action green" onclick="genKey()">Key Drop Yarat</button>
+      </div>
+
+      <div class="card">
+        <h3>Whitelist / Rol Whitelist / Reset HWID</h3>
+        <div><label>Skript</label><select id="wScript"></select></div>
+        <div><label>Discord User ID</label><input id="wUser" placeholder="123456789012345678" /></div>
+        <div><label>Müddət (0 = lifetime, 1d, 7d)</label><input id="wDur" value="0" /></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button class="action green" onclick="doWhitelist()">Whitelist + Key</button>
+          <button class="action" onclick="doResetHwid()">Reset HWID</button>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:4px 0;" />
+        <div><label>Discord Server</label><select id="rGuild" onchange="populateRoles()"></select></div>
+        <div><label>Server Rolu</label><select id="rRole"></select></div>
+        <button class="action green" onclick="doRoleWhitelist()">Rola Whitelist Ver</button>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <h3>Aktiv Whitelist İstifadəçiləri</h3>
+        <div id="wlList" style="display:grid;gap:8px;">Yüklənir...</div>
+      </div>
+      <div class="card">
+        <h3>Son Key İstifadəçiləri</h3>
+        <div id="keyList" style="display:grid;gap:8px;">Yüklənir...</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sectionBot" class="hidden-tab">
+    <div class="card">
+      <h3>🤖 Discord Bot — Panel Butonlarının Tənzimlənməsi</h3>
+      <div style="color:var(--muted);font-size:13px;">Redeem Key, Get Script, Reset HWID və Get Stats butonlarının adını, emojisini, sırasını (1-4) və rəngini dəyişin.</div>
+      <div class="grid" id="botBtnForms"></div>
+      <button class="action green" onclick="saveBotConfig()">Bot Ayarlarını Saxla</button>
     </div>
   </div>
 
@@ -1533,13 +1824,107 @@ const server = http.createServer((req, res) => {
 </div>
 
 <script>
-const out = (msg) => { document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2); };
+let selectedDropCount = 1;
+let guildsCache = [];
+let botBtnCfg = {};
+
+const out = (msg) => {
+  document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+};
+
+function toggleDrawer(open) {
+  document.getElementById('drawer').classList.toggle('open', open);
+  document.getElementById('backdrop').classList.toggle('open', open);
+}
+
+function switchTab(tab) {
+  toggleDrawer(false);
+  const isMain = tab === 'main';
+  document.getElementById('sectionMain').classList.toggle('hidden-tab', !isMain);
+  document.getElementById('sectionBot').classList.toggle('hidden-tab', isMain);
+  document.getElementById('tabBtnMain').classList.toggle('active', isMain);
+  document.getElementById('tabBtnBot').classList.toggle('active', !isMain);
+}
+
+function setDropCount(n, btnEl) {
+  selectedDropCount = n;
+  document.querySelectorAll('#dropPills .pill-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+}
+
+function loadScriptFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  if (!document.getElementById('sName').value.trim()) {
+    document.getElementById('sName').value = file.name.replace(/\.(lua|txt)$/i, '');
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('sCode').value = String(reader.result || '');
+  };
+  reader.readAsText(file);
+}
+
+function renderBotConfigForms(cfg) {
+  botBtnCfg = cfg || {};
+  const items = [
+    { key: 'redeem', title: 'Redeem Key Butonu' },
+    { key: 'getScript', title: 'Get Script Butonu' },
+    { key: 'resetHwid', title: 'Reset HWID Butonu' },
+    { key: 'getStats', title: 'Get Stats Butonu' }
+  ];
+  document.getElementById('botBtnForms').innerHTML = items.map(it => {
+    const c = botBtnCfg[it.key] || {};
+    return '<div class="card" style="background:var(--card-2);">' +
+      '<h4>' + it.title + '</h4>' +
+      '<div><label>Ad</label><input id="cfg_' + it.key + '_label" value="' + (c.label || '') + '" /></div>' +
+      '<div><label>Emoji</label><input id="cfg_' + it.key + '_emoji" value="' + (c.emoji || '') + '" /></div>' +
+      '<div><label>Yer / Sıra (1-4)</label><input id="cfg_' + it.key + '_order" type="number" min="1" max="4" value="' + (c.order || 1) + '" /></div>' +
+      '<div><label>Rəng</label><select id="cfg_' + it.key + '_style">' +
+      ['Success','Primary','Secondary','Danger'].map(st => '<option value="' + st + '"' + (c.style === st ? ' selected' : '') + '>' + st + '</option>').join('') +
+      '</select></div></div>';
+  }).join('');
+}
+
+async function saveBotConfig() {
+  const payload = { panelButtonConfig: {} };
+  for (const k of ['redeem', 'getScript', 'resetHwid', 'getStats']) {
+    payload.panelButtonConfig[k] = {
+      label: document.getElementById('cfg_' + k + '_label').value,
+      emoji: document.getElementById('cfg_' + k + '_emoji').value,
+      order: Number(document.getElementById('cfg_' + k + '_order').value || 1),
+      style: document.getElementById('cfg_' + k + '_style').value
+    };
+  }
+  const r = await fetch('/api/bot-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const d = await r.json();
+  out(d.ok ? 'Discord bot panel buton ayarları saxlanıldı!' : d.message);
+}
+
+function populateRoles() {
+  const gid = document.getElementById('rGuild').value;
+  const g = guildsCache.find(x => String(x.id) === String(gid));
+  const roleSel = document.getElementById('rRole');
+  if (!g || !g.roles || !g.roles.length) {
+    roleSel.innerHTML = '<option value="">Rol tapılmadı</option>';
+    return;
+  }
+  roleSel.innerHTML = g.roles.map(r => '<option value="' + r.id + '">' + r.name + '</option>').join('');
+}
 
 async function refreshState() {
   try {
     const r = await fetch('/api/state');
     const d = await r.json();
-    document.getElementById('botStatus').textContent = d.botReady ? 'Bot Aktivdir' : 'Bot Gözləmədə (Token yoxla)';
+    if (d.inviteUrl) {
+      document.getElementById('topInvite').href = d.inviteUrl;
+      document.getElementById('drawerInvite').href = d.inviteUrl;
+    }
+    document.getElementById('botStatus').textContent = d.botReady ? 'Bot Aktivdir' : 'Bot Gözləmədə';
     document.getElementById('cScripts').textContent = d.scripts.length;
     document.getElementById('cKeys').textContent = d.keysCount;
     document.getElementById('cWl').textContent = d.whitelistsCount;
@@ -1547,6 +1932,23 @@ async function refreshState() {
     const opts = d.scripts.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('') || '<option value="">Skript yoxdur</option>';
     document.getElementById('kScript').innerHTML = opts;
     document.getElementById('wScript').innerHTML = opts;
+
+    guildsCache = d.guilds || [];
+    const gSel = document.getElementById('rGuild');
+    gSel.innerHTML = guildsCache.length
+      ? guildsCache.map(g => '<option value="' + g.id + '">' + g.name + '</option>').join('')
+      : '<option value="">Server tapılmadı</option>';
+    populateRoles();
+
+    document.getElementById('wlList').innerHTML = (d.whitelists || []).length
+      ? d.whitelists.map(w => '<div class="user-row"><img src="' + (w.userAvatar || '') + '" alt="" /><div><div><b>' + (w.userName || w.userId) + '</b></div><div style="color:var(--muted);font-size:11px;">ID: ' + (w.userId || '-') + ' • Script: ' + (w.scriptId || '-') + '</div></div></div>').join('')
+      : '<div style="color:var(--muted);font-size:13px;">Hələ whitelist yoxdur.</div>';
+
+    document.getElementById('keyList').innerHTML = (d.recentKeys || []).length
+      ? d.recentKeys.map(k => '<div class="user-row"><img src="' + (k.userAvatar || '') + '" alt="" /><div><div><b>' + (k.userName || 'İstifadə edilməyib') + '</b> • <code>' + k.key + '</code></div><div style="color:var(--muted);font-size:11px;">Script: ' + (k.scriptName || k.scriptId) + ' • HWID: ' + (k.hwid ? 'Bağlıdır' : 'Boş') + '</div></div></div>').join('')
+      : '<div style="color:var(--muted);font-size:13px;">Hələ key yoxdur.</div>';
+
+    renderBotConfigForms(d.panelButtonConfig);
   } catch (e) {
     out('State yüklənmədi: ' + e.message);
   }
@@ -1564,10 +1966,10 @@ async function addScript() {
 async function genKey() {
   const scriptId = document.getElementById('kScript').value;
   const duration = document.getElementById('kDur').value;
-  const amount = Number(document.getElementById('kAmt').value || 1);
+  const amount = Number(selectedDropCount || 1);
   const r = await fetch('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, duration, amount }) });
   const d = await r.json();
-  out(d.ok ? 'Yaradılan Key-lər:\n' + d.keys.map(x => x.key).join('\n') : d.message);
+  out(d.ok ? 'Yaradılan (' + amount + ' nəfərlik drop) Key-lər:\n' + d.keys.map(x => x.key).join('\n') : d.message);
   refreshState();
 }
 
@@ -1586,7 +1988,18 @@ async function doResetHwid() {
   const userId = document.getElementById('wUser').value;
   const r = await fetch('/api/reset-hwid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, userId }) });
   const d = await r.json();
-  out(d.ok ? d.message : d.message);
+  out(d.message || 'HWID sıfırlandı.');
+  refreshState();
+}
+
+async function doRoleWhitelist() {
+  const scriptId = document.getElementById('wScript').value;
+  const guildId = document.getElementById('rGuild').value;
+  const roleId = document.getElementById('rRole').value;
+  const duration = document.getElementById('wDur').value;
+  const r = await fetch('/api/role-whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, guildId, roleId, duration }) });
+  const d = await r.json();
+  out(d.ok ? 'Rol üzrə ' + d.count + ' nəfər whitelist edildi!' : d.message);
   refreshState();
 }
 
