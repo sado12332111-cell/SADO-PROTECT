@@ -445,13 +445,20 @@ async function restartDiscordBot(newToken) {
                 const focused = interaction.options.getFocused(true);
                 if (focused && focused.name === 'script') {
                     const q = String(focused.value || '').trim().toLowerCase();
-                    const matches = Object.values(store.scripts || {})
-                        .filter(s => !q || s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q))
+                    const allScripts = Object.values(store.scripts || {});
+                    const matches = allScripts
+                        .filter(s => !q || String(s.name || '').toLowerCase().includes(q) || String(s.id || '').toLowerCase().includes(q))
                         .slice(0, 25)
                         .map(s => ({
-                            name: `${s.name} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
-                            value: s.id
+                            name: `${s.name || s.id} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
+                            value: String(s.id)
                         }));
+                    if (matches.length === 0 && allScripts.length > 0) {
+                        matches.push(...allScripts.slice(0, 25).map(s => ({
+                            name: `${s.name || s.id} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
+                            value: String(s.id)
+                        })));
+                    }
                     await interaction.respond(matches).catch(() => {});
                 }
                 return;
@@ -462,13 +469,21 @@ async function restartDiscordBot(newToken) {
 
                 if (cmd === 'panel') {
                     const query = interaction.options.getString('script');
-                    const scriptObj = findScript(query);
-                    if (!scriptObj) {
-                        await interaction.reply({
-                            content: 'Saytda hələ heç bir skript yaradılmayıb! Əvvəlcə saytdan skript əlavə edin.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
+                    let scriptObj = findScript(query);
+                    if (!scriptObj && Object.keys(store.scripts || {}).length === 0) {
+                        const fallbackId = 'sado-hub';
+                        scriptObj = {
+                            id: fallbackId,
+                            name: 'SADO HUB',
+                            code: 'print("SADO PROTECT Aktivdir!")',
+                            roleId: store.roleId || '',
+                            fileName: 'sado-hub.lua',
+                            version: 1,
+                            createdAt: Date.now(),
+                            updatedAt: Date.now()
+                        };
+                        store.scripts[fallbackId] = scriptObj;
+                        saveStoreToDisk();
                     }
 
                     await interaction.reply({
