@@ -41,12 +41,30 @@ const DEFAULT_PANEL_CONFIG = {
 };
 
 function defaultStore() {
+    const envScriptCode = String(process.env.DEFAULT_SCRIPT_CODE || '').trim();
+    const envScriptName = String(process.env.DEFAULT_SCRIPT_NAME || 'SADO HUB').trim();
+    const initialScripts = {};
+
+    if (envScriptCode) {
+        const sid = slugifyScriptId(envScriptName);
+        initialScripts[sid] = {
+            id: sid,
+            name: envScriptName,
+            code: envScriptCode,
+            roleId: String(process.env.DISCORD_ROLE_ID || '').trim(),
+            fileName: `${sid}.lua`,
+            version: 1,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+    }
+
     return {
         botToken: String(process.env.DISCORD_BOT_TOKEN || '').trim(),
         guildId: String(process.env.DISCORD_GUILD_ID || '').trim(),
         roleId: String(process.env.DISCORD_ROLE_ID || '').trim(),
         adminKey: String(process.env.ADMIN_KEY || 'sado123').trim(),
-        scripts: {},
+        scripts: initialScripts,
         keys: {},
         whitelist: {},
         panels: {},
@@ -67,7 +85,8 @@ function normalizeStore(raw) {
     base.guildId = String(raw.guildId || base.guildId || '').trim();
     base.roleId = String(raw.roleId || base.roleId || '').trim();
     base.adminKey = String(raw.adminKey || base.adminKey || 'sado123').trim();
-    base.scripts = raw.scripts && typeof raw.scripts === 'object' ? raw.scripts : {};
+    const rawScripts = raw.scripts && typeof raw.scripts === 'object' ? raw.scripts : {};
+    base.scripts = Object.keys(rawScripts).length > 0 ? rawScripts : base.scripts;
     base.keys = raw.keys && typeof raw.keys === 'object' ? raw.keys : {};
     base.whitelist = raw.whitelist && typeof raw.whitelist === 'object' ? raw.whitelist : {};
     base.panels = raw.panels && typeof raw.panels === 'object' ? raw.panels : {};
