@@ -23,12 +23,10 @@ const {
 
 const PORT = Number(process.env.PORT || 3000);
 const BOT_TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || '').trim();
+const PANEL_TOKEN = String(process.env.PANEL_TOKEN || process.env.ADMIN_TOKEN || '').trim();
 const CLIENT_ID = String(
     process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || '1562080654282199121'
 ).trim();
-const DISCORD_INVITE_URL =
-    String(process.env.DISCORD_INVITE_URL || '').trim() ||
-    `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=2147600384&integration_type=0&scope=bot+applications.commands`;
 const PUBLIC_BASE_URL = String(
     process.env.PUBLIC_BASE_URL ||
     process.env.RENDER_EXTERNAL_URL ||
@@ -1384,49 +1382,14 @@ client.on('interactionCreate', async (interaction) => {
                 });
                 return;
             }
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId.startsWith('sp_modal_redeem:')) {
-            const scriptIdFromCustom = interaction.customId.split(':')[1];
-            const scriptObj =
-                findScriptById(scriptIdFromCustom) ||
-                resolveScriptForContext({
-                    messageId: interaction.message ? interaction.message.id : null,
-                    channelId: interaction.channel ? interaction.channel.id : null
-                });
-
-            const rawKey = interaction.fields.getTextInputValue('sp_input_key');
-            const res = redeemKeyForScript(scriptObj, interaction.user.id, rawKey);
-            if (!res.ok) {
-                await interaction.reply({
-                    content: `❌ ${res.reason}`,
-                    flags: MessageFlags.Ephemeral
-                });
-                return;
-            }
-
-            await interaction.reply({
-                content: [
-                    `✅ Key **${scriptObj.name}** skripti üçün aktivləşdirildi!`,
-                    `🔑 Key yalnız <@${interaction.user.id}> hesabına bağlandı.`,
-                    `⏳ Müddət: **${formatDurationLabel(res.keyEntry.expiresAt)}**`
-                ].join('\n'),
-                flags: MessageFlags.Ephemeral
-            });
-            return;
-        }
-    } catch (err) {
-        console.error('[SADO PROTECT] Interaction xətası:', err);
-        try {
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({
-                    content: '❌ Əməliyyat zamanı gözlənilməz xəta baş verdi.',
-                    flags: MessageFlags.Ephemeral
-                });
-            }
-        } catch (_) {}
-    }
-});
+function checkPanelAuth(req, reqUrl, bodyData = null) {
+    if (!PANEL_TOKEN) return true;
+    const headerToken = String(req.headers['x-panel-token'] || '').trim();
+    const queryToken = String(reqUrl.searchParams.get('token') || '').trim();
+    const bodyToken = bodyData && typeof bodyData === 'object' ? String(bodyData.token || '').trim() : '';
+    const candidate = headerToken || queryToken || bodyToken;
+    return candidate.length > 0 && candidate === PANEL_TOKEN;
+}
 
 const server = http.createServer((req, res) => {
     try {
@@ -1447,12 +1410,17 @@ const server = http.createServer((req, res) => {
         }
 
         if (reqUrl.pathname === '/api/state' && req.method === 'GET') {
+            if (!checkPanelAuth(req, reqUrl)) {
+                res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Panel token tələb olunur.' }));
+                return;
+            }
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(
                 JSON.stringify({
                     ok: true,
+                    authRequired: Boolean(PANEL_TOKEN),
                     botReady: Boolean(client && client.user),
-                    inviteUrl: DISCORD_INVITE_URL,
                     panelButtonConfig: state.panelButtonConfig,
                     guilds: getGuildsWithRolesSummary(),
                     scripts: state.scripts.map((s) => ({
@@ -1476,6 +1444,11 @@ const server = http.createServer((req, res) => {
             req.on('end', () => {
                 try {
                     const data = JSON.parse(body || '{}');
+                    if (!checkPanelAuth(req, reqUrl, data)) {
+                        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Token yanlışdır və ya daxil edilməyib.' }));
+                        return;
+                    }
                     const name = String(data.name || '').trim();
                     const code = String(data.code || '');
                     if (!name) {
@@ -1510,6 +1483,11 @@ const server = http.createServer((req, res) => {
             req.on('end', () => {
                 try {
                     const data = JSON.parse(body || '{}');
+                    if (!checkPanelAuth(req, reqUrl, data)) {
+                        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Token yanlışdır və ya daxil edilməyib.' }));
+                        return;
+                    }
                     const cfg = data.panelButtonConfig && typeof data.panelButtonConfig === 'object'
                         ? data.panelButtonConfig
                         : {};
@@ -1544,6 +1522,11 @@ const server = http.createServer((req, res) => {
             req.on('end', async () => {
                 try {
                     const data = JSON.parse(body || '{}');
+                    if (!checkPanelAuth(req, reqUrl, data)) {
+                        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Token yanlışdır və ya daxil edilməyib.' }));
+                        return;
+                    }
                     const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
                     const guildId = String(data.guildId || '').trim();
                     const roleId = String(data.roleId || '').trim();
@@ -1587,6 +1570,11 @@ const server = http.createServer((req, res) => {
             req.on('end', () => {
                 try {
                     const data = JSON.parse(body || '{}');
+                    if (!checkPanelAuth(req, reqUrl, data)) {
+                        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Token yanlışdır və ya daxil edilməyib.' }));
+                        return;
+                    }
                     const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
                     if (!scriptObj) {
                         res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1621,6 +1609,11 @@ const server = http.createServer((req, res) => {
             req.on('end', () => {
                 try {
                     const data = JSON.parse(body || '{}');
+                    if (!checkPanelAuth(req, reqUrl, data)) {
+                        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Token yanlışdır və ya daxil edilməyib.' }));
+                        return;
+                    }
                     const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
                     const userId = String(data.userId || '').trim();
                     if (!scriptObj || !userId) {
@@ -1651,6 +1644,11 @@ const server = http.createServer((req, res) => {
             req.on('end', () => {
                 try {
                     const data = JSON.parse(body || '{}');
+                    if (!checkPanelAuth(req, reqUrl, data)) {
+                        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Token yanlışdır və ya daxil edilməyib.' }));
+                        return;
+                    }
                     const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
                     const userId = String(data.userId || '').trim();
                     const resetRes = resetHwidForUserScript(scriptObj, userId);
@@ -1694,102 +1692,187 @@ const server = http.createServer((req, res) => {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SADO PROTECT — Control Panel</title>
+<title>SADO PROTECT — Control Studio</title>
 <style>
   :root {
-    --bg: #080d18;
-    --card: #10182b;
-    --card-2: #0b1220;
-    --border: #1e2d4a;
-    --text: #eef4ff;
-    --muted: #8fa3c7;
-    --accent: #3b82f6;
-    --accent-2: #10b981;
-    --discord: #5865F2;
+    --bg: #070b14;
+    --surface: rgba(15, 23, 42, 0.86);
+    --surface-2: rgba(10, 16, 31, 0.92);
+    --border: rgba(148, 163, 184, 0.16);
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --primary: #6366f1;
+    --primary-glow: rgba(99, 102, 241, 0.35);
+    --emerald: #10b981;
+    --amber: #f59e0b;
   }
-  * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
-  body { margin: 0; background: radial-gradient(circle at top right, #132242, var(--bg) 55%); color: var(--text); padding: 18px; }
-  .wrap { max-width: 1060px; margin: 0 auto; display: grid; gap: 16px; }
-  .top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; background: var(--card); border: 1px solid var(--border); padding: 16px 20px; border-radius: 16px; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
-  .left-head { display: flex; align-items: center; gap: 12px; }
-  .menu-btn { width: 42px; height: 42px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--border); color: var(--text); font-size: 20px; cursor: pointer; display: grid; place-items: center; }
-  .discord-btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 12px; background: var(--discord); color: #fff; text-decoration: none; font-weight: 600; font-size: 14px; }
-  .badge { padding: 7px 13px; border-radius: 999px; font-size: 12px; background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
-  .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; z-index: 40; }
+  * { box-sizing: border-box; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 12% 10%, rgba(99, 102, 241, 0.22), transparent 42%),
+      radial-gradient(circle at 88% 15%, rgba(16, 185, 129, 0.14), transparent 38%),
+      var(--bg);
+    color: var(--text);
+    padding: 18px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+  .top {
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+    background: var(--surface); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); padding: 16px 20px; border-radius: 18px;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.4);
+  }
+  .left-head { display: flex; align-items: center; gap: 14px; }
+  .menu-btn {
+    width: 44px; height: 44px; border-radius: 13px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); font-size: 20px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: transform .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .menu-btn:hover { transform: scale(1.04); border-color: var(--primary); background: rgba(99,102,241,0.16); }
+  .brand-title { font-size: 20px; font-weight: 800; letter-spacing: 0.3px; background: linear-gradient(90deg, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .badge { padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(16,185,129,.14); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
+  .badge.offline { background: rgba(245,158,11,.14); color: #fbbf24; border-color: rgba(245,158,11,.35); }
+
+  .drawer-backdrop { position: fixed; inset: 0; background: rgba(2,6,23,0.68); backdrop-filter: blur(4px); display: none; z-index: 90; }
   .drawer-backdrop.open { display: block; }
-  .drawer { position: fixed; top: 0; left: -310px; width: 300px; height: 100%; background: var(--card); border-right: 1px solid var(--border); padding: 20px; z-index: 50; transition: left .22s ease; display: flex; flex-direction: column; gap: 12px; }
+  .drawer {
+    position: fixed; top: 0; left: -320px; width: 300px; height: 100%;
+    background: #0d1526; border-right: 1px solid var(--border);
+    padding: 22px 18px; z-index: 100; transition: left .24s cubic-bezier(.22,1,.36,1);
+    display: flex; flex-direction: column; gap: 10px; box-shadow: 18px 0 40px rgba(0,0,0,0.55);
+  }
   .drawer.open { left: 0; }
-  .nav-item { padding: 11px 14px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--border); color: var(--text); text-align: left; cursor: pointer; font-weight: 600; }
-  .nav-item.active { border-color: var(--accent); background: rgba(59,130,246,.18); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--border); padding: 18px; border-radius: 16px; display: grid; gap: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .nav-item {
+    padding: 12px 14px; border-radius: 12px; background: var(--surface-2);
+    border: 1px solid var(--border); color: var(--text); text-align: left;
+    cursor: pointer; font-weight: 600; font-size: 14px; transition: .15s ease;
+  }
+  .nav-item:hover { border-color: rgba(99,102,241,0.5); }
+  .nav-item.active { border-color: var(--primary); background: linear-gradient(135deg, rgba(99,102,241,0.25), rgba(79,70,229,0.12)); box-shadow: 0 0 20px var(--primary-glow); }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border); padding: 16px 18px; border-radius: 16px;
+    display: flex; flex-direction: column; gap: 8px; position: relative; overflow: hidden;
+  }
+  .stat-top { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; font-weight: 600; }
+  .stat-val { font-size: 26px; font-weight: 800; }
+  .meter { height: 6px; width: 100%; border-radius: 999px; background: rgba(148,163,184,0.15); overflow: hidden; }
+  .meter > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--primary), var(--emerald)); transition: width .35s ease; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface); backdrop-filter: blur(12px);
+    border: 1px solid var(--border); padding: 20px; border-radius: 18px;
+    display: grid; gap: 13px; box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+  }
   h1, h2, h3, h4 { margin: 0; }
-  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-  input, select, textarea, button.action { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--card-2); color: var(--text); font-size: 14px; }
-  textarea { min-height: 92px; resize: vertical; font-family: monospace; }
-  button.action { background: var(--accent); border: none; font-weight: 600; cursor: pointer; }
-  button.action.green { background: var(--accent-2); }
+  label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 5px; }
+  input, select, textarea, button.action {
+    width: 100%; padding: 10px 13px; border-radius: 11px;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); font-size: 14px; outline: none; transition: border-color .15s ease;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+  textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  button.action {
+    background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; font-weight: 700; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(79,70,229,0.3); transition: transform .12s ease, filter .15s ease;
+  }
+  button.action:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  button.action.green { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 8px 20px rgba(16,185,129,0.25); }
+
+  .mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mode-btn {
+    padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  .mode-btn.active { background: rgba(99,102,241,0.2); border-color: var(--primary); color: #fff; }
+
   .drop-pills { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
-  .pill-btn { padding: 8px 4px; border-radius: 9px; border: 1px solid var(--border); background: var(--card-2); color: var(--text); font-weight: 700; cursor: pointer; }
-  .pill-btn.active { background: var(--accent-2); border-color: var(--accent-2); color: #052e16; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center; }
-  .stat-box { background: var(--card-2); border: 1px solid var(--border); padding: 12px; border-radius: 12px; }
-  .stat-num { font-size: 21px; font-weight: 800; margin-top: 4px; }
-  .user-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--card-2); border: 1px solid var(--border); font-size: 13px; }
-  .user-row img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
-  .out { background: #070b14; border: 1px dashed var(--border); padding: 12px; border-radius: 12px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; }
+  .pill-btn {
+    padding: 9px 4px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); font-weight: 800; font-size: 13px; cursor: pointer;
+  }
+  .pill-btn.active { background: linear-gradient(135deg, #10b981, #059669); border-color: transparent; color: #022c22; }
+
+  .user-row {
+    display: flex; align-items: center; gap: 11px; padding: 9px 12px;
+    border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px;
+  }
+  .user-row img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); }
+  .out {
+    background: #050811; border: 1px solid var(--border); padding: 14px;
+    border-radius: 13px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #e2e8f0;
+  }
   .hidden-tab { display: none; }
 </style>
 </head>
 <body>
 <div id="backdrop" class="drawer-backdrop" onclick="toggleDrawer(false)"></div>
 <aside id="drawer" class="drawer">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h3>☰ Menyu</h3>
-    <button onclick="toggleDrawer(false)" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;">✕</button>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--border);">
+    <h3>☰ SADO Menyu</h3>
+    <button type="button" onclick="toggleDrawer(false)" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;">✕</button>
   </div>
-  <button id="tabBtnMain" class="nav-item active" onclick="switchTab('main')">🏠 İdarəetmə Paneli</button>
-  <button id="tabBtnBot" class="nav-item" onclick="switchTab('bot')">🤖 Discord Bot</button>
-  <a class="discord-btn" id="drawerInvite" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener">➕ Discord Join</a>
+  <button type="button" id="tabBtnMain" class="nav-item active" onclick="switchTab('main')">🏠 İdarəetmə Paneli</button>
+  <button type="button" id="tabBtnBot" class="nav-item" onclick="switchTab('bot')">🤖 Discord Bot</button>
+  <div style="margin-top:auto;display:grid;gap:8px;">
+    <label style="margin:0;">Panel Token (İsteğe bağlı)</label>
+    <input id="drawerToken" type="password" placeholder="PANEL_TOKEN varsa yazın" oninput="syncTokenInputs(this.value)" />
+    <button type="button" class="action green" onclick="applyTokenSave()">Tokeni Yadda Saxla</button>
+  </div>
 </aside>
 
 <div class="wrap">
   <div class="top">
     <div class="left-head">
-      <button class="menu-btn" onclick="toggleDrawer(true)" aria-label="Menyu">☰</button>
+      <button type="button" class="menu-btn" onclick="toggleDrawer(true)" aria-label="Menyu">☰</button>
       <div>
-        <h1>SADO PROTECT</h1>
+        <div class="brand-title">SADO PROTECT STUDIO</div>
         <div style="color:var(--muted);font-size:12px;">1 nəfərlik key &amp; skript kilidi • HWID Kick &amp; Reset • Local Lua</div>
       </div>
     </div>
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <a class="discord-btn" id="topInvite" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener">Discord Join</a>
-      <div id="botStatus" class="badge">Yoxlanılır...</div>
-    </div>
+    <div id="botStatus" class="badge offline">Yoxlanılır...</div>
   </div>
 
-  <div class="card">
-    <div class="stats">
-      <div class="stat-box"><div style="color:var(--muted);font-size:12px;">Skriptlər</div><div id="cScripts" class="stat-num">0</div></div>
-      <div class="stat-box"><div style="color:var(--muted);font-size:12px;">Key-lər</div><div id="cKeys" class="stat-num">0</div></div>
-      <div class="stat-box"><div style="color:var(--muted);font-size:12px;">Whitelist</div><div id="cWl" class="stat-num">0</div></div>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-top"><span>AKTİV SKRİPTLƏR</span><span>📜</span></div>
+      <div id="cScripts" class="stat-val">0</div>
+      <div class="meter"><span id="mScripts" style="width:0%"></span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><span>YARADILAN KEY-LƏR</span><span>🔑</span></div>
+      <div id="cKeys" class="stat-val">0</div>
+      <div class="meter"><span id="mKeys" style="width:0%"></span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><span>WHITELIST ÜZVLƏR</span><span>🛡️</span></div>
+      <div id="cWl" class="stat-val">0</div>
+      <div class="meter"><span id="mWl" style="width:0%"></span></div>
     </div>
   </div>
 
   <div id="sectionMain">
     <div class="grid">
       <div class="card">
-        <h3>Yeni Skript Əlavə Et (Mətn və ya Fayl)</h3>
+        <h3>Yeni Skript Əlavə Et</h3>
         <div><label>Skript Adı</label><input id="sName" placeholder="Məs: SAE, Lagger, Duel" /></div>
         <div><label>Lua Kodu</label><textarea id="sCode" placeholder="print('Salam Roblox!')"></textarea></div>
         <div><label>Və ya .lua / .txt Fayl Seçin</label><input id="sFile" type="file" accept=".lua,.txt" onchange="loadScriptFile(event)" /></div>
-        <button class="action" onclick="addScript()">Skripti Saxla</button>
+        <button type="button" class="action" onclick="addScript()">Skripti Saxla</button>
       </div>
 
       <div class="card">
         <h3>Drop Key Yarat (1 - 10 Nəfərlik)</h3>
         <div><label>Skript</label><select id="kScript"></select></div>
-        <div><label>Nəfər / Drop Sayı</label>
+        <div>
+          <label>Nəfər / Drop Sayı</label>
           <div class="drop-pills" id="dropPills">
             <button type="button" class="pill-btn active" onclick="setDropCount(1, this)">1</button>
             <button type="button" class="pill-btn" onclick="setDropCount(2, this)">2</button>
@@ -1799,23 +1882,59 @@ const server = http.createServer((req, res) => {
             <button type="button" class="pill-btn" onclick="setDropCount(10, this)">10</button>
           </div>
         </div>
-        <div><label>Müddət (0 = lifetime, 1d, 7d, 30d)</label><input id="kDur" value="0" /></div>
-        <button class="action green" onclick="genKey()">Key Drop Yarat</button>
+        <div>
+          <label>Müddət Rejimi</label>
+          <div class="mode-row">
+            <button type="button" id="kModeLife" class="mode-btn active" onclick="setDurationMode('key', 'lifetime')">♾️ Lifetime</button>
+            <button type="button" id="kModeTime" class="mode-btn" onclick="setDurationMode('key', 'timed')">⏳ Vaxt Seç</button>
+          </div>
+        </div>
+        <div id="kTimeBox" style="display:none;gap:8px;grid-template-columns:1fr 1fr;">
+          <div><label>Vaxt Dəyəri</label><input id="kTimeNum" type="number" min="1" value="7" /></div>
+          <div>
+            <label>Vahid</label>
+            <select id="kTimeUnit">
+              <option value="m">Dəqiqə (m)</option>
+              <option value="h">Saat (h)</option>
+              <option value="d" selected>Gün (d)</option>
+              <option value="w">Həftə (w)</option>
+            </select>
+          </div>
+        </div>
+        <button type="button" class="action green" onclick="genKey()">Key Drop Yarat</button>
       </div>
 
       <div class="card">
         <h3>Whitelist / Rol Whitelist / Reset HWID</h3>
         <div><label>Skript</label><select id="wScript"></select></div>
         <div><label>Discord User ID</label><input id="wUser" placeholder="123456789012345678" /></div>
-        <div><label>Müddət (0 = lifetime, 1d, 7d)</label><input id="wDur" value="0" /></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <button class="action green" onclick="doWhitelist()">Whitelist + Key</button>
-          <button class="action" onclick="doResetHwid()">Reset HWID</button>
+        <div>
+          <label>Whitelist Müddət Rejimi</label>
+          <div class="mode-row">
+            <button type="button" id="wModeLife" class="mode-btn active" onclick="setDurationMode('wl', 'lifetime')">♾️ Lifetime</button>
+            <button type="button" id="wModeTime" class="mode-btn" onclick="setDurationMode('wl', 'timed')">⏳ Vaxt Seç</button>
+          </div>
         </div>
-        <hr style="border:0;border-top:1px solid var(--border);margin:4px 0;" />
+        <div id="wTimeBox" style="display:none;gap:8px;grid-template-columns:1fr 1fr;">
+          <div><label>Vaxt Dəyəri</label><input id="wTimeNum" type="number" min="1" value="7" /></div>
+          <div>
+            <label>Vahid</label>
+            <select id="wTimeUnit">
+              <option value="m">Dəqiqə (m)</option>
+              <option value="h">Saat (h)</option>
+              <option value="d" selected>Gün (d)</option>
+              <option value="w">Həftə (w)</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button type="button" class="action green" onclick="doWhitelist()">Whitelist + Key</button>
+          <button type="button" class="action" onclick="doResetHwid()">Reset HWID</button>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:2px 0;" />
         <div><label>Discord Server</label><select id="rGuild" onchange="populateRoles()"></select></div>
         <div><label>Server Rolu</label><select id="rRole"></select></div>
-        <button class="action green" onclick="doRoleWhitelist()">Rola Whitelist Ver</button>
+        <button type="button" class="action green" onclick="doRoleWhitelist()">Rola Whitelist Ver</button>
       </div>
     </div>
 
@@ -1836,28 +1955,49 @@ const server = http.createServer((req, res) => {
       <h3>🤖 Discord Bot — Panel Butonlarının Tənzimlənməsi</h3>
       <div style="color:var(--muted);font-size:13px;">Redeem Key, Get Script, Reset HWID və Get Stats butonlarının adını, emojisini, sırasını (1-4) və rəngini dəyişin.</div>
       <div class="grid" id="botBtnForms"></div>
-      <button class="action green" onclick="saveBotConfig()">Bot Ayarlarını Saxla</button>
+      <button type="button" class="action green" onclick="saveBotConfig()">Bot Ayarlarını Saxla</button>
     </div>
   </div>
 
   <div class="card">
-    <h3>Nəticə</h3>
+    <h3>Konsol / Nəticə</h3>
     <div id="output" class="out">Hazırdır.</div>
   </div>
 </div>
 
 <script>
 let selectedDropCount = 1;
+let keyDurationMode = 'lifetime';
+let wlDurationMode = 'lifetime';
 let guildsCache = [];
 let botBtnCfg = {};
+let panelToken = localStorage.getItem('sado_panel_token') || '';
 
 const out = (msg) => {
   document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
 };
 
+function syncTokenInputs(val) {
+  panelToken = String(val || '').trim();
+  const drawerEl = document.getElementById('drawerToken');
+  if (drawerEl && drawerEl.value !== panelToken) drawerEl.value = panelToken;
+}
+
+function applyTokenSave() {
+  localStorage.setItem('sado_panel_token', panelToken);
+  out(panelToken ? 'Panel tokeni yadda saxlanıldı.' : 'Panel tokeni təmizləndi.');
+  refreshState();
+}
+
+function apiHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (panelToken) h['x-panel-token'] = panelToken;
+  return h;
+}
+
 function toggleDrawer(open) {
-  document.getElementById('drawer').classList.toggle('open', open);
-  document.getElementById('backdrop').classList.toggle('open', open);
+  document.getElementById('drawer').classList.toggle('open', Boolean(open));
+  document.getElementById('backdrop').classList.toggle('open', Boolean(open));
 }
 
 function switchTab(tab) {
@@ -1870,9 +2010,36 @@ function switchTab(tab) {
 }
 
 function setDropCount(n, btnEl) {
-  selectedDropCount = n;
+  selectedDropCount = Number(n) || 1;
   document.querySelectorAll('#dropPills .pill-btn').forEach(b => b.classList.remove('active'));
   if (btnEl) btnEl.classList.add('active');
+}
+
+function setDurationMode(target, mode) {
+  if (target === 'key') {
+    keyDurationMode = mode;
+    document.getElementById('kModeLife').classList.toggle('active', mode === 'lifetime');
+    document.getElementById('kModeTime').classList.toggle('active', mode === 'timed');
+    document.getElementById('kTimeBox').style.display = mode === 'timed' ? 'grid' : 'none';
+  } else {
+    wlDurationMode = mode;
+    document.getElementById('wModeLife').classList.toggle('active', mode === 'lifetime');
+    document.getElementById('wModeTime').classList.toggle('active', mode === 'timed');
+    document.getElementById('wTimeBox').style.display = mode === 'timed' ? 'grid' : 'none';
+  }
+}
+
+function getDurationValue(target) {
+  if (target === 'key') {
+    if (keyDurationMode === 'lifetime') return '0';
+    const num = Math.max(1, Number(document.getElementById('kTimeNum').value || 1));
+    const unit = document.getElementById('kTimeUnit').value || 'd';
+    return `${num}${unit}`;
+  }
+  if (wlDurationMode === 'lifetime') return '0';
+  const num = Math.max(1, Number(document.getElementById('wTimeNum').value || 1));
+  const unit = document.getElementById('wTimeUnit').value || 'd';
+  return `${num}${unit}`;
 }
 
 function loadScriptFile(event) {
@@ -1898,7 +2065,7 @@ function renderBotConfigForms(cfg) {
   ];
   document.getElementById('botBtnForms').innerHTML = items.map(it => {
     const c = botBtnCfg[it.key] || {};
-    return '<div class="card" style="background:var(--card-2);">' +
+    return '<div class="card" style="background:var(--surface-2);">' +
       '<h4>' + it.title + '</h4>' +
       '<div><label>Ad</label><input id="cfg_' + it.key + '_label" value="' + (c.label || '') + '" /></div>' +
       '<div><label>Emoji</label><input id="cfg_' + it.key + '_emoji" value="' + (c.emoji || '') + '" /></div>' +
@@ -1910,7 +2077,7 @@ function renderBotConfigForms(cfg) {
 }
 
 async function saveBotConfig() {
-  const payload = { panelButtonConfig: {} };
+  const payload = { token: panelToken, panelButtonConfig: {} };
   for (const k of ['redeem', 'getScript', 'resetHwid', 'getStats']) {
     payload.panelButtonConfig[k] = {
       label: document.getElementById('cfg_' + k + '_label').value,
@@ -1921,11 +2088,11 @@ async function saveBotConfig() {
   }
   const r = await fetch('/api/bot-config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(),
     body: JSON.stringify(payload)
   });
   const d = await r.json();
-  out(d.ok ? 'Discord bot panel buton ayarları saxlanıldı!' : d.message);
+  out(d.ok ? 'Discord bot panel buton ayarları saxlanıldı!' : (d.message || 'Xəta'));
 }
 
 function populateRoles() {
@@ -1940,17 +2107,29 @@ function populateRoles() {
 }
 
 async function refreshState() {
+  syncTokenInputs(panelToken);
   try {
-    const r = await fetch('/api/state');
+    const query = panelToken ? ('?token=' + encodeURIComponent(panelToken)) : '';
+    const r = await fetch('/api/state' + query, { headers: apiHeaders() });
     const d = await r.json();
-    if (d.inviteUrl) {
-      document.getElementById('topInvite').href = d.inviteUrl;
-      document.getElementById('drawerInvite').href = d.inviteUrl;
+    if (!d.ok) {
+      out(d.message || 'Giriş tələb olunur. Sol menyudan Token daxil edin.');
+      return;
     }
-    document.getElementById('botStatus').textContent = d.botReady ? 'Bot Aktivdir' : 'Bot Gözləmədə';
-    document.getElementById('cScripts').textContent = d.scripts.length;
-    document.getElementById('cKeys').textContent = d.keysCount;
-    document.getElementById('cWl').textContent = d.whitelistsCount;
+
+    const statusEl = document.getElementById('botStatus');
+    statusEl.textContent = d.botReady ? '● Bot Aktivdir' : '● Bot Gözləmədə';
+    statusEl.classList.toggle('offline', !d.botReady);
+
+    const scCount = Number(d.scripts.length || 0);
+    const kCount = Number(d.keysCount || 0);
+    const wCount = Number(d.whitelistsCount || 0);
+    document.getElementById('cScripts').textContent = scCount;
+    document.getElementById('cKeys').textContent = kCount;
+    document.getElementById('cWl').textContent = wCount;
+    document.getElementById('mScripts').style.width = Math.min(100, scCount * 10) + '%';
+    document.getElementById('mKeys').style.width = Math.min(100, kCount * 4) + '%';
+    document.getElementById('mWl').style.width = Math.min(100, wCount * 5) + '%';
 
     const opts = d.scripts.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('') || '<option value="">Skript yoxdur</option>';
     document.getElementById('kScript').innerHTML = opts;
@@ -1980,50 +2159,70 @@ async function refreshState() {
 async function addScript() {
   const name = document.getElementById('sName').value;
   const code = document.getElementById('sCode').value;
-  const r = await fetch('/api/scripts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, code }) });
+  const r = await fetch('/api/scripts', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ name, code, token: panelToken })
+  });
   const d = await r.json();
-  out(d.ok ? 'Skript əlavə edildi: ' + d.script.name + ' (' + d.script.id + ')' : d.message);
-  refreshState();
+  out(d.ok ? 'Skript əlavə edildi: ' + d.script.name + ' (' + d.script.id + ')' : (d.message || 'Skript əlavə edilə bilmədi'));
+  if (d.ok) refreshState();
 }
 
 async function genKey() {
   const scriptId = document.getElementById('kScript').value;
-  const duration = document.getElementById('kDur').value;
+  const duration = getDurationValue('key');
   const amount = Number(selectedDropCount || 1);
-  const r = await fetch('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, duration, amount }) });
+  const r = await fetch('/api/keys', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ scriptId, duration, amount, token: panelToken })
+  });
   const d = await r.json();
-  out(d.ok ? 'Yaradılan (' + amount + ' nəfərlik drop) Key-lər:\n' + d.keys.map(x => x.key).join('\n') : d.message);
-  refreshState();
+  out(d.ok ? 'Yaradılan (' + amount + ' nəfərlik drop • ' + duration + ') Key-lər:\n' + d.keys.map(x => x.key).join('\n') : (d.message || 'Xəta'));
+  if (d.ok) refreshState();
 }
 
 async function doWhitelist() {
   const scriptId = document.getElementById('wScript').value;
   const userId = document.getElementById('wUser').value;
-  const duration = document.getElementById('wDur').value;
-  const r = await fetch('/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, userId, duration }) });
+  const duration = getDurationValue('wl');
+  const r = await fetch('/api/whitelist', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ scriptId, userId, duration, token: panelToken })
+  });
   const d = await r.json();
-  out(d.ok ? 'Whitelist edildi! Avto Key: ' + d.key : d.message);
-  refreshState();
+  out(d.ok ? 'Whitelist edildi (' + duration + ')! Avto Key: ' + d.key : (d.message || 'Xəta'));
+  if (d.ok) refreshState();
 }
 
 async function doResetHwid() {
   const scriptId = document.getElementById('wScript').value;
   const userId = document.getElementById('wUser').value;
-  const r = await fetch('/api/reset-hwid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, userId }) });
+  const r = await fetch('/api/reset-hwid', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ scriptId, userId, token: panelToken })
+  });
   const d = await r.json();
   out(d.message || 'HWID sıfırlandı.');
-  refreshState();
+  if (d.ok) refreshState();
 }
 
 async function doRoleWhitelist() {
   const scriptId = document.getElementById('wScript').value;
   const guildId = document.getElementById('rGuild').value;
   const roleId = document.getElementById('rRole').value;
-  const duration = document.getElementById('wDur').value;
-  const r = await fetch('/api/role-whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, guildId, roleId, duration }) });
+  const duration = getDurationValue('wl');
+  const r = await fetch('/api/role-whitelist', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ scriptId, guildId, roleId, duration, token: panelToken })
+  });
   const d = await r.json();
-  out(d.ok ? 'Rol üzrə ' + d.count + ' nəfər whitelist edildi!' : d.message);
-  refreshState();
+  out(d.ok ? 'Rol üzrə ' + d.count + ' nəfər whitelist edildi!' : (d.message || 'Xəta'));
+  if (d.ok) refreshState();
 }
 
 refreshState();
