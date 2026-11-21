@@ -330,9 +330,9 @@ function getSlashCommands() {
         .setDescription('Skript idarəetmə panelini bu kanala göndərir')
         .addStringOption(opt =>
             opt.setName('script')
-                .setDescription('Skript seçin (boş buraxsanız ilk skript seçilir)')
+                .setDescription('Skript adı və ya ID-si (boş buraxsanız ilk skript seçilir)')
                 .setRequired(false)
-                .setAutocomplete(true)
+                .setAutocomplete(false)
         );
 
     const whitelistCmd = new SlashCommandBuilder()
@@ -515,7 +515,8 @@ async function restartDiscordBot(newToken) {
                 if (cmd === 'panel') {
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-                    const query = interaction.options.getString('script');
+                    const rawQuery = interaction.options.getString('script');
+                    const query = rawQuery && String(rawQuery).trim() ? String(rawQuery).trim() : '';
                     let scriptObj = findScript(query, interaction.guildId || '');
                     if (!scriptObj) {
                         const fallbackId = 'sado-hub';
