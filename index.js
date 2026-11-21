@@ -86,17 +86,3 @@ function resetUserHwidForScript(scriptObj, userId) {
     persistState();
     return { ok: true };
 }
-
-client.on('interactionCreate', async (interaction) => {
-    try {
-        if (interaction.isChatInputCommand()) {
-            const cmd = interaction.commandName;
-
-            if (cmd === 'genkey') {
-            }
-        }
-    } catch (err) {
-        console.error('Interaction error:', err);
-    }
-});
-// ... existing code ...
