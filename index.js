@@ -2041,11 +2041,6 @@ function getDurationValue(target) {
   const unit = document.getElementById('wTimeUnit').value || 'd';
   return String(num) + String(unit);
 }
-  if (wlDurationMode === 'lifetime') return '0';
-  const num = Math.max(1, Number(document.getElementById('wTimeNum').value || 1));
-  const unit = document.getElementById('wTimeUnit').value || 'd';
-  return `${num}${unit}`;
-}
 
 function loadScriptFile(event) {
   const file = event.target.files && event.target.files[0];
