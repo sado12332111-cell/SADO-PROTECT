@@ -378,12 +378,14 @@ async function syncAllDiscordPanels(targetScriptId = null) {
     return { updated };
 }
 
-function findScript(query) {
-    const all = Object.values(store.scripts);
+function findScript(query, guildId = '') {
+    const gFilter = normalizeGuildId(guildId);
+    const pool = Object.values(store.scripts).filter(s => !gFilter || normalizeGuildId(s.guildId) === gFilter);
+    const all = pool.length > 0 ? pool : Object.values(store.scripts);
     if (all.length === 0) return null;
     if (!query) return all[0];
     const q = String(query).trim().toLowerCase();
-    return store.scripts[q] || all.find(s => s.id.toLowerCase() === q || s.name.toLowerCase() === q) || all[0];
+    return all.find(s => s.id.toLowerCase() === q || s.name.toLowerCase() === q) || all[0];
 }
 
 function checkUserAccess(userId, scriptId) {
@@ -445,7 +447,10 @@ async function restartDiscordBot(newToken) {
                 const focused = interaction.options.getFocused(true);
                 if (focused && focused.name === 'script') {
                     const q = String(focused.value || '').trim().toLowerCase();
-                    const allScripts = Object.values(store.scripts || {});
+                    const gFilter = normalizeGuildId(interaction.guildId || '');
+                    const allScripts = Object.values(store.scripts || {}).filter(
+                        s => !gFilter || normalizeGuildId(s.guildId) === gFilter
+                    );
                     const matches = allScripts
                         .filter(s => !q || String(s.name || '').toLowerCase().includes(q) || String(s.id || '').toLowerCase().includes(q))
                         .slice(0, 25)
@@ -469,11 +474,12 @@ async function restartDiscordBot(newToken) {
 
                 if (cmd === 'panel') {
                     const query = interaction.options.getString('script');
-                    let scriptObj = findScript(query);
-                    if (!scriptObj && Object.keys(store.scripts || {}).length === 0) {
+                    let scriptObj = findScript(query, interaction.guildId || '');
+                    if (!scriptObj) {
                         const fallbackId = 'sado-hub';
                         scriptObj = {
                             id: fallbackId,
+                            guildId: normalizeGuildId(interaction.guildId || ''),
                             name: 'SADO HUB',
                             code: 'print("SADO PROTECT Aktivdir!")',
                             roleId: store.roleId || '',
@@ -512,7 +518,7 @@ async function restartDiscordBot(newToken) {
                     const targetUser = interaction.options.getUser('user', true);
                     const timeLabel = interaction.options.getString('time', true);
                     const scriptQuery = interaction.options.getString('script');
-                    const scriptObj = findScript(scriptQuery);
+                    const scriptObj = findScript(scriptQuery, interaction.guildId || '');
 
                     if (!scriptObj) {
                         await interaction.reply({ content: 'Skript tapılmadı!', flags: MessageFlags.Ephemeral });
@@ -524,6 +530,7 @@ async function restartDiscordBot(newToken) {
                     const existing = store.whitelist[wlKey];
 
                     store.whitelist[wlKey] = {
+                        guildId: normalizeGuildId(interaction.guildId || scriptObj.guildId || ''),
                         scriptId: scriptObj.id,
                         userId: targetUser.id,
                         username: targetUser.username,
@@ -632,7 +639,8 @@ async function restartDiscordBot(newToken) {
 
                     const loaderCode =
                         `local hwid = game:GetService("RbxAnalyticsService"):GetClientId()\n` +
-                        `loadstring(game:HttpGet("${host}/loader?ticket=${ticketId}&hwid=" .. hwid))()`;
+                        `local base = "${host}"\n` +
+                        `loadstring(game:HttpGet(base .. "/loader?ticket=" .. "${ticketId}" .. "&hwid=" .. hwid))()`;
 
                     store.tickets[ticketId] = {
                         scriptId,
@@ -795,7 +803,6 @@ function resolveGuildScope(req, body = null, parsedUrl = null) {
         (body && body.guildId) ||
         req.headers['x-guild-id'] ||
         (parsedUrl && parsedUrl.searchParams.get('guildId')) ||
-        store.guildId ||
         '';
     return normalizeGuildId(raw);
 }
@@ -803,7 +810,7 @@ function resolveGuildScope(req, body = null, parsedUrl = null) {
 function belongsToGuild(record, activeGuildId) {
     if (!record || typeof record !== 'object') return false;
     const recGuild = normalizeGuildId(record.guildId || '');
-    if (!activeGuildId) return true;
+    if (!activeGuildId) return false;
     return recGuild === activeGuildId;
 }
 
@@ -874,10 +881,10 @@ function renderDashboardHtml() {
   <p class="sub">Serverə bağlı skript qoruma, Key/Whitelist idarəetmə və Avto-Panel sinxronizasiyası</p>
 
   <div class="guild-bar">
-    <span id="guildBadge" class="badge ok">🌐 Server seçilməyib (Ümumi)</span>
+    <span id="guildBadge" class="badge err">🔒 Server seçilməyib (Server ID yazın)</span>
     <input type="text" id="activeGuildInput" placeholder="Öz Discord Server (Guild) ID-nizi yazın...">
     <button class="blue" onclick="connectGuild()">Serverə Qoşul / Dəyiş</button>
-    <button class="sm" style="background:#334155;" onclick="clearGuild()">Ümumi</button>
+    <button class="sm" style="background:#334155;" onclick="clearGuild()">Çıx</button>
   </div>
 
   <div class="card">
@@ -1058,7 +1065,7 @@ function connectGuild() {
 function clearGuild() {
   setSelectedGuildId('');
   document.getElementById('activeGuildInput').value = '';
-  showToast('Ümumi görünüşə keçildi');
+  showToast('Server seçimi sıfırlandı');
   loadState();
 }
 
@@ -1144,8 +1151,8 @@ async function loadState() {
       guildBadge.textContent = '🌐 Aktiv Server ID: ' + activeGid;
       guildBadge.className = 'badge ok';
     } else {
-      guildBadge.textContent = '🌐 Server seçilməyib (Ümumi)';
-      guildBadge.className = 'badge';
+      guildBadge.textContent = '🔒 Server seçilməyib (Server ID yazın)';
+      guildBadge.className = 'badge err';
     }
   }
 
@@ -1159,7 +1166,7 @@ async function loadState() {
   }
 
   document.getElementById('roleId').value = stateData.roleId || '';
-  document.getElementById('guildId').value = stateData.guildId || activeGid || '';
+  document.getElementById('guildId').value = activeGid || '';
 
   const scripts = Object.values(stateData.scripts || {});
   const targetSel = document.getElementById('targetScriptId');
@@ -1177,7 +1184,9 @@ async function loadState() {
   if (prevEdit && stateData.scripts[prevEdit]) editSel.value = prevEdit;
 
   const scriptsList = document.getElementById('scriptsList');
-  scriptsList.innerHTML = scripts.length ? scripts.map(s => `
+  scriptsList.innerHTML = !activeGid
+    ? '<div class="muted">Öz serverinizin skriptlərini görmək üçün yuxarıda Server (Guild) ID daxil edin.</div>'
+    : (scripts.length ? scripts.map(s => `
     <div class="list-item">
       <div>
         <strong>${s.name}</strong> <span class="badge">ID: ${s.id}</span> <span class="badge ok">v${s.version || 1}</span>
@@ -1186,7 +1195,7 @@ async function loadState() {
       </div>
       <button class="danger" onclick="deleteScript('${s.id}')">Sil</button>
     </div>
-  `).join('') : '<div class="muted">Hələ skript əlavə edilməyib.</div>';
+  `).join('') : '<div class="muted">Bu serverdə hələ skript əlavə edilməyib.</div>');
 
   const holders = [];
   Object.values(stateData.whitelist || {}).forEach(w => {
@@ -1223,7 +1232,9 @@ async function loadState() {
   });
 
   const holdersList = document.getElementById('holdersList');
-  holdersList.innerHTML = holders.length ? holders.map(h => {
+  holdersList.innerHTML = !activeGid
+    ? '<div class="muted">Server seçildikdən sonra yalnız həmin serverin istifadəçiləri görünəcək.</div>'
+    : (holders.length ? holders.map(h => {
     const expText = h.expiresAt ? new Date(h.expiresAt).toLocaleString('az-AZ') : 'Lifetime';
     return `
       <div class="list-item">
@@ -1238,7 +1249,7 @@ async function loadState() {
         <button class="danger" onclick="${h.removeAction}">Sil</button>
       </div>
     `;
-  }).join('') : '<div class="muted">Hələ aktiv key və ya whitelist istifadəçisi yoxdur.</div>';
+  }).join('') : '<div class="muted">Bu serverdə hələ aktiv key və ya whitelist istifadəçisi yoxdur.</div>');
 
   const cfg = stateData.panelConfig || {};
   document.getElementById('panelTitle').value = cfg.title || '';
@@ -1276,13 +1287,16 @@ async function saveOrUpdateScript() {
   const fileName = document.getElementById('fileNameLabel').textContent.trim();
   const activeGid = getSelectedGuildId();
 
+  if (!activeGid) {
+    return showToast('Əvvəlcə yuxarıda öz Server (Guild) ID-nizi daxil edib qoşulun!', true);
+  }
   if (!name || !code.trim()) {
     return showToast('Skript adı və Lua kodu mütləqdir!', true);
   }
 
   const res = await api('/api/scripts', 'POST', {
     id: existingId || undefined,
-    guildId: activeGid || undefined,
+    guildId: activeGid,
     name,
     roleId,
     code,
@@ -1306,6 +1320,8 @@ async function deleteScript(id) {
 }
 
 async function generateKeys() {
+  const activeGid = getSelectedGuildId();
+  if (!activeGid) return showToast('Əvvəlcə Server ID daxil edin!', true);
   const scriptId = document.getElementById('targetScriptId').value;
   const durationLabel = document.getElementById('durationSelect').value;
   const amount = Number(document.getElementById('keyAmount').value || 1);
@@ -1321,6 +1337,8 @@ async function generateKeys() {
 }
 
 async function addWhitelistManual() {
+  const activeGid = getSelectedGuildId();
+  if (!activeGid) return showToast('Əvvəlcə Server ID daxil edin!', true);
   const scriptId = document.getElementById('targetScriptId').value;
   const userId = document.getElementById('wlUserId').value.trim();
   const durationLabel = document.getElementById('durationSelect').value;
@@ -1438,6 +1456,30 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'GET' && pathname === '/loader') {
             const ticketId = parsed.searchParams.get('ticket') || '';
             const hwid = (parsed.searchParams.get('hwid') || '').trim();
+            const ua = String(req.headers['user-agent'] || '').toLowerCase();
+            const accept = String(req.headers['accept'] || '').toLowerCase();
+            const secFetchMode = String(req.headers['sec-fetch-mode'] || '').toLowerCase();
+
+            // Brauzerdən (Chrome, Mobile browser, Discord in-app browser və s.) açılmanı tam blokla
+            const isBrowser =
+                secFetchMode === 'navigate' ||
+                accept.includes('text/html') ||
+                ua.includes('mozilla/') ||
+                ua.includes('chrome/') ||
+                ua.includes('safari/') ||
+                ua.includes('firefox/') ||
+                ua.includes('edge/') ||
+                ua.includes('opera/');
+
+            if (isBrowser || !hwid) {
+                res.writeHead(403, {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'Cache-Control': 'no-store'
+                });
+                res.end('<html><body style="background:#0b0f19;color:#ef4444;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;"><h2>403 Forbidden — SADO PROTECT: Brauzerdən giriş qadağandır!</h2></body></html>');
+                return;
+            }
+
             const ticket = store.tickets[ticketId];
 
             if (!ticket) {
@@ -1466,37 +1508,63 @@ const server = http.createServer(async (req, res) => {
                 }
             }
 
-            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end(scriptObj.code);
+            // Skripti şifrələnmiş (XOR + Byte array) şəkildə göndər ki, şəbəkə dinləməsində açıq mətn görünməsin
+            const xorKey = crypto.randomBytes(16);
+            const rawBytes = Buffer.from(String(scriptObj.code || ''), 'utf8');
+            const encBytes = new Array(rawBytes.length);
+            for (let i = 0; i < rawBytes.length; i++) {
+                encBytes[i] = rawBytes[i] ^ xorKey[i % xorKey.length];
+            }
+
+            const protectedPayload =
+                `-- SADO PROTECT PROTECTED CHUNK\n` +
+                `local _k={${Array.from(xorKey).join(',')}}\n` +
+                `local _d={${encBytes.join(',')}}\n` +
+                `local _b=table.create(#_d)\n` +
+                `for i=1,#_d do _b[i]=string.char(bit32.bxor(_d[i],_k[((i-1)%#_k)+1])) end\n` +
+                `local _f,err=loadstring(table.concat(_b))\n` +
+                `if _f then return _f() else warn("[SADO PROTECT] "..tostring(err)) end`;
+
+            res.writeHead(200, {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'no-store'
+            });
+            res.end(protectedPayload);
             return;
         }
 
         if (req.method === 'GET' && pathname === '/api/state') {
             const activeGuildId = resolveGuildScope(req, null, parsed);
             const scopedScripts = {};
-            for (const [k, v] of Object.entries(store.scripts || {})) {
-                if (belongsToGuild(v, activeGuildId)) {
-                    scopedScripts[k] = v;
+            if (activeGuildId) {
+                for (const [k, v] of Object.entries(store.scripts || {})) {
+                    if (belongsToGuild(v, activeGuildId)) {
+                        scopedScripts[k] = v;
+                    }
                 }
             }
             const scopedKeys = {};
-            for (const [k, v] of Object.entries(store.keys || {})) {
-                const sc = store.scripts[v.scriptId];
-                if (belongsToGuild(v, activeGuildId) || (activeGuildId && sc && normalizeGuildId(sc.guildId) === activeGuildId) || !activeGuildId) {
-                    scopedKeys[k] = v;
+            if (activeGuildId) {
+                for (const [k, v] of Object.entries(store.keys || {})) {
+                    const sc = store.scripts[v.scriptId];
+                    if (belongsToGuild(v, activeGuildId) || (sc && normalizeGuildId(sc.guildId) === activeGuildId)) {
+                        scopedKeys[k] = v;
+                    }
                 }
             }
             const scopedWhitelist = {};
-            for (const [k, v] of Object.entries(store.whitelist || {})) {
-                const sc = store.scripts[v.scriptId];
-                if (belongsToGuild(v, activeGuildId) || (activeGuildId && sc && normalizeGuildId(sc.guildId) === activeGuildId) || !activeGuildId) {
-                    scopedWhitelist[k] = v;
+            if (activeGuildId) {
+                for (const [k, v] of Object.entries(store.whitelist || {})) {
+                    const sc = store.scripts[v.scriptId];
+                    if (belongsToGuild(v, activeGuildId) || (sc && normalizeGuildId(sc.guildId) === activeGuildId)) {
+                        scopedWhitelist[k] = v;
+                    }
                 }
             }
 
             sendJson(res, 200, {
-                guildId: activeGuildId || store.guildId,
-                roleId: store.roleId,
+                guildId: activeGuildId,
+                roleId: activeGuildId ? store.roleId : '',
                 botStatus,
                 scripts: scopedScripts,
                 keys: scopedKeys,
@@ -1528,6 +1596,10 @@ const server = http.createServer(async (req, res) => {
             const code = String(body.code || '');
             const roleId = String(body.roleId || '').trim();
             const fileName = String(body.fileName || '').trim();
+            if (!guildId) {
+                sendJson(res, 400, { ok: false, error: 'Əvvəlcə Server (Guild) ID daxil edin' });
+                return;
+            }
             if (!name || !code.trim()) {
                 sendJson(res, 400, { ok: false, error: 'Skript adı və kodu mütləqdir' });
                 return;
@@ -1538,7 +1610,7 @@ const server = http.createServer(async (req, res) => {
                 ? store.scripts[requestedId]
                 : Object.values(store.scripts).find(s =>
                     s.name.toLowerCase() === name.toLowerCase() &&
-                    (!guildId || normalizeGuildId(s.guildId) === guildId)
+                    normalizeGuildId(s.guildId) === guildId
                 );
 
             let scriptId;
@@ -1546,7 +1618,7 @@ const server = http.createServer(async (req, res) => {
                 scriptId = existing.id;
                 store.scripts[scriptId] = {
                     ...existing,
-                    guildId: guildId || existing.guildId || '',
+                    guildId,
                     name,
                     code,
                     roleId,
@@ -1590,8 +1662,8 @@ const server = http.createServer(async (req, res) => {
             const body = await readJsonBody(req);
             const guildId = resolveGuildScope(req, body, parsed);
             const scriptId = String(body.scriptId || '').trim();
-            if (!store.scripts[scriptId]) {
-                sendJson(res, 400, { ok: false, error: 'Əvvəlcə skript seçin' });
+            if (!guildId || !store.scripts[scriptId]) {
+                sendJson(res, 400, { ok: false, error: 'Server ID və skript seçilməlidir' });
                 return;
             }
             const durationLabel = String(body.durationLabel || 'lifetime');
@@ -1603,7 +1675,7 @@ const server = http.createServer(async (req, res) => {
                 const code = generateLicenseKey();
                 store.keys[code] = {
                     code,
-                    guildId: guildId || normalizeGuildId(store.scripts[scriptId].guildId),
+                    guildId,
                     scriptId,
                     durationLabel,
                     durationMs,
@@ -1633,8 +1705,8 @@ const server = http.createServer(async (req, res) => {
             const scriptId = String(body.scriptId || '').trim();
             const userId = String(body.userId || '').trim();
             const durationLabel = String(body.durationLabel || 'lifetime');
-            if (!store.scripts[scriptId] || !userId) {
-                sendJson(res, 400, { ok: false, error: 'Skript və ya User ID yanlışdır' });
+            if (!guildId || !store.scripts[scriptId] || !userId) {
+                sendJson(res, 400, { ok: false, error: 'Server ID, skript və ya User ID yanlışdır' });
                 return;
             }
 
@@ -1654,7 +1726,7 @@ const server = http.createServer(async (req, res) => {
 
             const wlKey = `${scriptId}:${userId}`;
             store.whitelist[wlKey] = {
-                guildId: guildId || normalizeGuildId(store.scripts[scriptId].guildId),
+                guildId,
                 scriptId,
                 userId,
                 username,
