@@ -1266,10 +1266,346 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 const server = http.createServer((req, res) => {
-    const reqUrl = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
+    try {
+        const reqUrl = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
 
-    if (reqUrl.pathname === '/health' || reqUrl.pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        if (reqUrl.pathname === '/health') {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(
+                JSON.stringify({
+                    ok: true,
+                    botReady: Boolean(client && client.user),
+                    scriptsCount: state.scripts.length,
+                    keysCount: state.keys.length,
+                    whitelistsCount: state.whitelists.length
+                })
+            );
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/state' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(
+                JSON.stringify({
+                    ok: true,
+                    botReady: Boolean(client && client.user),
+                    scripts: state.scripts.map((s) => ({
+                        id: s.id,
+                        name: s.name,
+                        disabled: Boolean(s.disabled),
+                        createdAt: s.createdAt
+                    })),
+                    keysCount: state.keys.length,
+                    whitelistsCount: state.whitelists.length,
+                    recentKeys: state.keys.slice(-15).reverse()
+                })
+            );
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+                try {
+                    const data = JSON.parse(body || '{}');
+                    const name = String(data.name || '').trim();
+                    const code = String(data.code || '');
+                    if (!name) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Skript adı mütləqdir.' }));
+                        return;
+                    }
+                    const id = `scr_${crypto.randomBytes(4).toString('hex')}`;
+                    const entry = {
+                        id,
+                        name,
+                        code,
+                        disabled: false,
+                        createdBy: 'web-panel',
+                        createdAt: Date.now()
+                    };
+                    state.scripts.push(entry);
+                    persistState();
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, script: entry }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: 'Yanlış JSON sorğusu.' }));
+                }
+            });
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/keys' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+                try {
+                    const data = JSON.parse(body || '{}');
+                    const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
+                    if (!scriptObj) {
+                        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                        return;
+                    }
+                    const durationMs = parseDurationToMs(data.duration || '0');
+                    if (durationMs === undefined) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Müddət formatı yanlışdır.' }));
+                        return;
+                    }
+                    const amount = Math.max(1, Math.min(50, Number(data.amount) || 1));
+                    const created = generateKeysForScript(scriptObj, {
+                        durationMs: durationMs || null,
+                        amount,
+                        createdBy: 'web-panel'
+                    });
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, keys: created }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: 'Key yaradılarkən xəta baş verdi.' }));
+                }
+            });
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/whitelist' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+                try {
+                    const data = JSON.parse(body || '{}');
+                    const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
+                    const userId = String(data.userId || '').trim();
+                    if (!scriptObj || !userId) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Skript və Discord User ID mütləqdir.' }));
+                        return;
+                    }
+                    const durationMs = parseDurationToMs(data.duration || '0');
+                    if (durationMs === undefined) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Müddət formatı yanlışdır.' }));
+                        return;
+                    }
+                    const wlRes = ensureAutoWhitelistKey(scriptObj, userId, durationMs || null, 'web-panel');
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, key: wlRes.keyEntry.key, alreadyHadKey: wlRes.alreadyHadKey }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: 'Whitelist xətası.' }));
+                }
+            });
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/reset-hwid' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+                try {
+                    const data = JSON.parse(body || '{}');
+                    const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
+                    const userId = String(data.userId || '').trim();
+                    const resetRes = resetHwidForUserScript(scriptObj, userId);
+                    if (!resetRes.ok) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: resetRes.reason }));
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, message: 'HWID sıfırlandı.' }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: 'HWID sıfırlanarkən xəta baş verdi.' }));
+                }
+            });
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/local-script') {
+            const scriptId = reqUrl.searchParams.get('scriptId');
+            const userId = reqUrl.searchParams.get('userId');
+            const hwid = reqUrl.searchParams.get('hwid');
+            const scriptObj = findScriptById(scriptId) || state.scripts[0] || null;
+            const access = checkUserAccessForScript(scriptObj, userId, hwid);
+
+            if (!access.ok) {
+                res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, error: access.code, message: access.reason }));
+                return;
+            }
+
+            const luaCode = buildLocalLuaScript(access.script, access.keyEntry, userId);
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(luaCode);
+            return;
+        }
+
+        if (reqUrl.pathname === '/') {
+            const html = `<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SADO PROTECT — Control Panel</title>
+<style>
+  :root {
+    --bg: #0b0f19;
+    --card: #121826;
+    --border: #222c42;
+    --text: #e5ecf8;
+    --muted: #8fa0be;
+    --accent: #3b82f6;
+    --accent-2: #10b981;
+  }
+  * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); padding: 20px; }
+  .wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
+  .top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: var(--card); border: 1px solid var(--border); padding: 16px 20px; border-radius: 14px; }
+  .badge { padding: 6px 12px; border-radius: 999px; font-size: 13px; background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); padding: 18px; border-radius: 14px; display: grid; gap: 10px; }
+  h1, h2, h3 { margin: 0; }
+  label { font-size: 13px; color: var(--muted); }
+  input, select, textarea, button { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: #0d1320; color: var(--text); font-size: 14px; }
+  textarea { min-height: 90px; resize: vertical; font-family: monospace; }
+  button { background: var(--accent); border: none; font-weight: 600; cursor: pointer; }
+  button.green { background: var(--accent-2); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center; }
+  .stat-box { background: #0d1320; border: 1px solid var(--border); padding: 12px; border-radius: 10px; }
+  .stat-num { font-size: 20px; font-weight: 700; }
+  .out { background: #090d16; border: 1px dashed var(--border); padding: 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>SADO PROTECT</h1>
+      <div style="color:var(--muted);font-size:13px;">Hər skriptə ayrı whitelist • 1 nəfərlik key • Reset HWID • Local Lua</div>
+    </div>
+    <div id="botStatus" class="badge">Yoxlanılır...</div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div class="stat-box"><div style="color:var(--muted);font-size:12px;">Skriptlər</div><div id="cScripts" class="stat-num">0</div></div>
+      <div class="stat-box"><div style="color:var(--muted);font-size:12px;">Key-lər</div><div id="cKeys" class="stat-num">0</div></div>
+      <div class="stat-box"><div style="color:var(--muted);font-size:12px;">Whitelist</div><div id="cWl" class="stat-num">0</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Yeni Skript Əlavə Et</h3>
+      <div><label>Skript Adı</label><input id="sName" placeholder="Məs: SAE, Lagger, Duel" /></div>
+      <div><label>Lua Kodu</label><textarea id="sCode" placeholder="print('Salam Roblox!')"></textarea></div>
+      <button onclick="addScript()">Skripti Saxla</button>
+    </div>
+
+    <div class="card">
+      <h3>Key Yarat</h3>
+      <div><label>Skript</label><select id="kScript"></select></div>
+      <div><label>Müddət (0 = lifetime, 1d, 7d, 30d)</label><input id="kDur" value="0" /></div>
+      <div><label>Say</label><input id="kAmt" type="number" value="1" min="1" max="50" /></div>
+      <button class="green" onclick="genKey()">Key Yarat</button>
+    </div>
+
+    <div class="card">
+      <h3>Avto Whitelist + Reset HWID</h3>
+      <div><label>Skript</label><select id="wScript"></select></div>
+      <div><label>Discord User ID</label><input id="wUser" placeholder="123456789012345678" /></div>
+      <div><label>Müddət (0 = lifetime, 1d, 7d)</label><input id="wDur" value="0" /></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <button class="green" onclick="doWhitelist()">Whitelist + Key</button>
+        <button onclick="doResetHwid()">Reset HWID</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Nəticə</h3>
+    <div id="output" class="out">Hazırdır.</div>
+  </div>
+</div>
+
+<script>
+const out = (msg) => { document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2); };
+
+async function refreshState() {
+  try {
+    const r = await fetch('/api/state');
+    const d = await r.json();
+    document.getElementById('botStatus').textContent = d.botReady ? 'Bot Aktivdir' : 'Bot Gözləmədə (Token yoxla)';
+    document.getElementById('cScripts').textContent = d.scripts.length;
+    document.getElementById('cKeys').textContent = d.keysCount;
+    document.getElementById('cWl').textContent = d.whitelistsCount;
+
+    const opts = d.scripts.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('') || '<option value="">Skript yoxdur</option>';
+    document.getElementById('kScript').innerHTML = opts;
+    document.getElementById('wScript').innerHTML = opts;
+  } catch (e) {
+    out('State yüklənmədi: ' + e.message);
+  }
+}
+
+async function addScript() {
+  const name = document.getElementById('sName').value;
+  const code = document.getElementById('sCode').value;
+  const r = await fetch('/api/scripts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, code }) });
+  const d = await r.json();
+  out(d.ok ? 'Skript əlavə edildi: ' + d.script.name + ' (' + d.script.id + ')' : d.message);
+  refreshState();
+}
+
+async function genKey() {
+  const scriptId = document.getElementById('kScript').value;
+  const duration = document.getElementById('kDur').value;
+  const amount = Number(document.getElementById('kAmt').value || 1);
+  const r = await fetch('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, duration, amount }) });
+  const d = await r.json();
+  out(d.ok ? 'Yaradılan Key-lər:\n' + d.keys.map(x => x.key).join('\n') : d.message);
+  refreshState();
+}
+
+async function doWhitelist() {
+  const scriptId = document.getElementById('wScript').value;
+  const userId = document.getElementById('wUser').value;
+  const duration = document.getElementById('wDur').value;
+  const r = await fetch('/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, userId, duration }) });
+  const d = await r.json();
+  out(d.ok ? 'Whitelist edildi! Avto Key: ' + d.key : d.message);
+  refreshState();
+}
+
+async function doResetHwid() {
+  const scriptId = document.getElementById('wScript').value;
+  const userId = document.getElementById('wUser').value;
+  const r = await fetch('/api/reset-hwid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scriptId, userId }) });
+  const d = await r.json();
+  out(d.ok ? d.message : d.message);
+  refreshState();
+}
+
+refreshState();
+</script>
+</body>
+</html>`;
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(html);
+            return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, message: 'Not Found' }));
+    } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, message: 'Server xətası' }));
+    }
+});
         res.end(
             JSON.stringify({
                 ok: true,
