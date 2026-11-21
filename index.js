@@ -831,6 +831,7 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.user) {
             await recordDiscordUserProfile(interaction.user);
         }
+
         if (interaction.isChatInputCommand()) {
             const { commandName } = interaction;
 
@@ -1382,6 +1383,47 @@ client.on('interactionCreate', async (interaction) => {
                 });
                 return;
             }
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('sp_modal_redeem:')) {
+            const scriptIdPart = interaction.customId.split(':')[1];
+            const scriptObj = resolveScriptForContext({
+                scriptId: scriptIdPart !== 'default' ? scriptIdPart : null,
+                channelId: interaction.channel ? interaction.channel.id : null
+            });
+
+            const rawKey = interaction.fields.getTextInputValue('sp_input_key');
+            const redeemRes = redeemKeyForScript(scriptObj, interaction.user.id, rawKey);
+            if (!redeemRes.ok) {
+                await interaction.reply({
+                    content: `❌ ${redeemRes.reason}`,
+                    flags: MessageFlags.Ephemeral
+                });
+                return;
+            }
+
+            await interaction.reply({
+                content: [
+                    `✅ **${scriptObj.name}** üçün key uğurla aktivləşdirildi!`,
+                    `🔑 Key: \`${redeemRes.keyEntry.key}\` (yalnız sizin 1 hesabınıza bağlıdır)`,
+                    `⏳ Müddət: **${formatDurationLabel(redeemRes.keyEntry.expiresAt)}**`,
+                    `İndi **Get Script** düyməsinə basıb skripti ala bilərsiniz.`
+                ].join('\n'),
+                flags: MessageFlags.Ephemeral
+            });
+            return;
+        }
+    } catch (err) {
+        console.error('[SADO PROTECT] Interaction xətası:', err);
+        if (interaction && !interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content: '❌ Əməliyyat zamanı xəta baş verdi. Yenidən cəhd edin.',
+                flags: MessageFlags.Ephemeral
+            }).catch(() => {});
+        }
+    }
+});
+
 function checkPanelAuth(req, reqUrl, bodyData = null) {
     if (!PANEL_TOKEN) return true;
     const headerToken = String(req.headers['x-panel-token'] || '').trim();
