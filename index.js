@@ -239,8 +239,9 @@ function getSlashCommands() {
         .setDescription('Skript idarəetmə panelini bu kanala göndərir')
         .addStringOption(opt =>
             opt.setName('script')
-                .setDescription('Skript ID və ya adı (boş buraxsanız ilk skript seçilir)')
+                .setDescription('Skript seçin (boş buraxsanız ilk skript seçilir)')
                 .setRequired(false)
+                .setAutocomplete(true)
         );
 
     const whitelistCmd = new SlashCommandBuilder()
@@ -261,6 +262,7 @@ function getSlashCommands() {
             opt.setName('script')
                 .setDescription('Hansı skript üçün (boş buraxsanız ilk skript)')
                 .setRequired(false)
+                .setAutocomplete(true)
         );
 
     const unwhitelistCmd = new SlashCommandBuilder()
@@ -275,6 +277,7 @@ function getSlashCommands() {
             opt.setName('script')
                 .setDescription('Hansı skriptdən (boş buraxsanız hamısından)')
                 .setRequired(false)
+                .setAutocomplete(true)
         );
 
     return [panelCmd.toJSON(), whitelistCmd.toJSON(), unwhitelistCmd.toJSON()];
@@ -386,6 +389,23 @@ async function restartDiscordBot(newToken) {
 
     client.on('interactionCreate', async (interaction) => {
         try {
+            // 0. AUTOCOMPLETE (SKRİPT SİYAHISI)
+            if (interaction.isAutocomplete()) {
+                const focused = interaction.options.getFocused(true);
+                if (focused && focused.name === 'script') {
+                    const q = String(focused.value || '').trim().toLowerCase();
+                    const matches = Object.values(store.scripts || {})
+                        .filter(s => !q || s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q))
+                        .slice(0, 25)
+                        .map(s => ({
+                            name: `${s.name} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
+                            value: s.id
+                        }));
+                    await interaction.respond(matches).catch(() => {});
+                }
+                return;
+            }
+
             // 1. SLASH ƏMRLƏRİ
             if (interaction.isChatInputCommand()) {
                 const cmd = interaction.commandName;
