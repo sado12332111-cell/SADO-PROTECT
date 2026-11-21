@@ -1606,40 +1606,6 @@ refreshState();
         res.end(JSON.stringify({ ok: false, message: 'Server xətası' }));
     }
 });
-        res.end(
-            JSON.stringify({
-                ok: true,
-                botReady: Boolean(client && client.user),
-                scriptsCount: state.scripts.length,
-                keysCount: state.keys.length,
-                whitelistsCount: state.whitelists.length
-            })
-        );
-        return;
-    }
-
-    if (reqUrl.pathname === '/api/local-script') {
-        const scriptId = reqUrl.searchParams.get('scriptId');
-        const userId = reqUrl.searchParams.get('userId');
-        const hwid = reqUrl.searchParams.get('hwid');
-        const scriptObj = findScriptById(scriptId) || state.scripts[0] || null;
-        const access = checkUserAccessForScript(scriptObj, userId, hwid);
-
-        if (!access.ok) {
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, error: access.code, message: access.reason }));
-            return;
-        }
-
-        const luaCode = buildLocalLuaScript(access.script, access.keyEntry, userId);
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end(luaCode);
-        return;
-    }
-
-    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: false, message: 'Not Found' }));
-});
 
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`[SADO PROTECT] HTTP server ${PORT} portunda işləyir (${PUBLIC_BASE_URL})`);
