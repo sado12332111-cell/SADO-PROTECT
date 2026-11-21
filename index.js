@@ -19,14 +19,14 @@ const {
     MessageFlags
 } = require('discord.js');
 
-// ================= SABİT YADDAŞ (PERSISTENT STORAGE) =================
-// Render Disk istifadə edirsinizsə DATA_DIR=/var/data təyin edin, əks halda cari qovluqda saxlanır
+// ================= SABİT YADDAŞ (PERSISTENT STORAGE + AUTO-SNAPSHOT) =================
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 const STORE_FILE = path.join(DATA_DIR, 'sado_protect_data.json');
 const BACKUP_FILE = path.join(DATA_DIR, 'sado_protect_data.bak.json');
+const SNAPSHOT_FILE = path.join(DATA_DIR, 'sado_protect_snapshot.json');
 
 const DEFAULT_PANEL_CONFIG = {
     title: '{script} — Control Panel',
@@ -39,6 +39,14 @@ const DEFAULT_PANEL_CONFIG = {
         getStats: { label: 'Get Stats', emoji: '', style: 'Primary', order: 4 }
     }
 };
+
+function slugifyScriptId(name) {
+    const s = String(name || 'script')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return s || 'sado-hub';
+}
 
 function defaultStore() {
     const envScriptCode = String(process.env.DEFAULT_SCRIPT_CODE || '').trim();
@@ -73,52 +81,87 @@ function defaultStore() {
     };
 }
 
-function normalizeStore(raw) {
-    const base = defaultStore();
-    if (!raw || typeof raw !== 'object') return base;
+function mergeObjectsPreserve(primaryObj, secondaryObj) {
+    const out = {};
+    if (secondaryObj && typeof secondaryObj === 'object') {
+        for (const [k, v] of Object.entries(secondaryObj)) {
+            if (v && typeof v === 'object') out[k] = { ...v };
+        }
+    }
+    if (primaryObj && typeof primaryObj === 'object') {
+        for (const [k, v] of Object.entries(primaryObj)) {
+            if (v && typeof v === 'object') {
+                out[k] = out[k] ? { ...out[k], ...v } : { ...v };
+            }
+        }
+    }
+    return out;
+}
 
-    // Əgər mühit dəyişənində token varsa və faylda boşdursa, onu götür; faylda varsa həmişə qoru
-    const savedToken = String(raw.botToken || '').trim();
+function normalizeStore(raw, fallbackRaw = null) {
+    const base = defaultStore();
+    const a = raw && typeof raw === 'object' ? raw : {};
+    const b = fallbackRaw && typeof fallbackRaw === 'object' ? fallbackRaw : {};
+
+    const savedToken = String(a.botToken || b.botToken || '').trim();
     const envToken = String(process.env.DISCORD_BOT_TOKEN || '').trim();
     base.botToken = savedToken || envToken;
 
-    base.guildId = String(raw.guildId || base.guildId || '').trim();
-    base.roleId = String(raw.roleId || base.roleId || '').trim();
-    base.adminKey = String(raw.adminKey || base.adminKey || 'sado123').trim();
-    const rawScripts = raw.scripts && typeof raw.scripts === 'object' ? raw.scripts : {};
-    base.scripts = Object.keys(rawScripts).length > 0 ? rawScripts : base.scripts;
-    base.keys = raw.keys && typeof raw.keys === 'object' ? raw.keys : {};
-    base.whitelist = raw.whitelist && typeof raw.whitelist === 'object' ? raw.whitelist : {};
-    base.panels = raw.panels && typeof raw.panels === 'object' ? raw.panels : {};
+    base.guildId = String(a.guildId || b.guildId || base.guildId || '').trim();
+    base.roleId = String(a.roleId || b.roleId || base.roleId || '').trim();
+    base.adminKey = String(a.adminKey || b.adminKey || base.adminKey || 'sado123').trim();
+
+    const mergedScripts = mergeObjectsPreserve(a.scripts, b.scripts);
+    base.scripts = Object.keys(mergedScripts).length > 0 ? mergedScripts : base.scripts;
+    base.keys = mergeObjectsPreserve(a.keys, b.keys);
+    base.whitelist = mergeObjectsPreserve(a.whitelist, b.whitelist);
+    base.panels = mergeObjectsPreserve(a.panels, b.panels);
     base.tickets = {};
 
-    const cfg = raw.panelConfig && typeof raw.panelConfig === 'object' ? raw.panelConfig : {};
+    const cfgSource = (a.panelConfig && typeof a.panelConfig === 'object' && Object.keys(a.panelConfig).length > 0)
+        ? a.panelConfig
+        : (b.panelConfig && typeof b.panelConfig === 'object' ? b.panelConfig : {});
+
     base.panelConfig = {
-        title: typeof cfg.title === 'string' && cfg.title.trim() ? cfg.title : DEFAULT_PANEL_CONFIG.title,
-        description: typeof cfg.description === 'string' && cfg.description.trim() ? cfg.description : DEFAULT_PANEL_CONFIG.description,
-        color: typeof cfg.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(cfg.color.trim()) ? cfg.color.trim() : DEFAULT_PANEL_CONFIG.color,
+        title: typeof cfgSource.title === 'string' && cfgSource.title.trim() ? cfgSource.title : DEFAULT_PANEL_CONFIG.title,
+        description: typeof cfgSource.description === 'string' && cfgSource.description.trim() ? cfgSource.description : DEFAULT_PANEL_CONFIG.description,
+        color: typeof cfgSource.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(cfgSource.color.trim()) ? cfgSource.color.trim() : DEFAULT_PANEL_CONFIG.color,
         buttons: {
-            redeem: { ...DEFAULT_PANEL_CONFIG.buttons.redeem, ...(cfg.buttons && cfg.buttons.redeem ? cfg.buttons.redeem : {}) },
-            getScript: { ...DEFAULT_PANEL_CONFIG.buttons.getScript, ...(cfg.buttons && cfg.buttons.getScript ? cfg.buttons.getScript : {}) },
-            resetHwid: { ...DEFAULT_PANEL_CONFIG.buttons.resetHwid, ...(cfg.buttons && cfg.buttons.resetHwid ? cfg.buttons.resetHwid : {}) },
-            getStats: { ...DEFAULT_PANEL_CONFIG.buttons.getStats, ...(cfg.buttons && cfg.buttons.getStats ? cfg.buttons.getStats : {}) }
+            redeem: { ...DEFAULT_PANEL_CONFIG.buttons.redeem, ...(cfgSource.buttons && cfgSource.buttons.redeem ? cfgSource.buttons.redeem : {}) },
+            getScript: { ...DEFAULT_PANEL_CONFIG.buttons.getScript, ...(cfgSource.buttons && cfgSource.buttons.getScript ? cfgSource.buttons.getScript : {}) },
+            resetHwid: { ...DEFAULT_PANEL_CONFIG.buttons.resetHwid, ...(cfgSource.buttons && cfgSource.buttons.resetHwid ? cfgSource.buttons.resetHwid : {}) },
+            getStats: { ...DEFAULT_PANEL_CONFIG.buttons.getStats, ...(cfgSource.buttons && cfgSource.buttons.getStats ? cfgSource.buttons.getStats : {}) }
         }
     };
     return base;
 }
 
-function loadStoreFromDisk() {
-    for (const file of [STORE_FILE, BACKUP_FILE]) {
-        try {
-            if (fs.existsSync(file)) {
-                const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-                return normalizeStore(raw);
+function readJsonSafe(filePath) {
+    try {
+        if (fs.existsSync(filePath)) {
+            const txt = fs.readFileSync(filePath, 'utf8');
+            if (txt && txt.trim()) {
+                return JSON.parse(txt);
             }
-        } catch (err) {
-            console.error(`Fayl oxuma xətası (${file}):`, err.message);
         }
+    } catch (err) {
+        console.error(`Fayl oxuma xətası (${filePath}):`, err.message);
     }
-    return defaultStore();
+    return null;
+}
+
+function loadStoreFromDisk() {
+    const primary = readJsonSafe(STORE_FILE);
+    const backup = readJsonSafe(BACKUP_FILE);
+    const snapshot = readJsonSafe(SNAPSHOT_FILE);
+
+    const mainData = primary || backup || snapshot;
+    const secondaryData = backup || snapshot || primary;
+
+    if (!mainData && !secondaryData) {
+        return defaultStore();
+    }
+    return normalizeStore(mainData, secondaryData);
 }
 
 let store = loadStoreFromDisk();
@@ -127,19 +170,19 @@ function saveStoreToDisk() {
     try {
         const snapshot = {
             ...store,
-            tickets: {} // Birdəfəlik biletləri diski şişirməmək üçün yazmırıq
+            tickets: {}
         };
         const json = JSON.stringify(snapshot, null, 2);
         const tmpFile = `${STORE_FILE}.tmp`;
         fs.writeFileSync(tmpFile, json, 'utf8');
         fs.renameSync(tmpFile, STORE_FILE);
         fs.writeFileSync(BACKUP_FILE, json, 'utf8');
+        fs.writeFileSync(SNAPSHOT_FILE, json, 'utf8');
     } catch (err) {
         console.error('Məlumat saxlama xətası:', err.message);
     }
 }
 
-// İlk başlanğıcda faylı təmin et
 saveStoreToDisk();
 
 // ================= VAXT VƏ KÖMƏKÇİ FUNKSİYALAR =================
@@ -166,14 +209,6 @@ function parseDurationLabelToExpiresAt(label) {
 function isExpired(expiresAt) {
     if (!expiresAt) return false;
     return Date.now() > Number(expiresAt);
-}
-
-function slugifyScriptId(name) {
-    const s = String(name || 'script')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-    return s || 'sado-hub';
 }
 
 function generateLicenseKey() {
@@ -314,7 +349,6 @@ async function assignRoleToUser(guild, userId, roleId) {
     }
 }
 
-// Skript və ya panel ayarları update olanda mövcud Discord panellərini avtomatik yeniləyir
 async function syncAllDiscordPanels(targetScriptId = null) {
     if (!discordClient || !botStatus.online) return { updated: 0 };
     let updated = 0;
@@ -408,7 +442,6 @@ async function restartDiscordBot(newToken) {
 
     client.on('interactionCreate', async (interaction) => {
         try {
-            // 0. AUTOCOMPLETE (SKRİPT SİYAHISI)
             if (interaction.isAutocomplete()) {
                 const focused = interaction.options.getFocused(true);
                 if (focused && focused.name === 'script') {
@@ -425,7 +458,6 @@ async function restartDiscordBot(newToken) {
                 return;
             }
 
-            // 1. SLASH ƏMRLƏRİ
             if (interaction.isChatInputCommand()) {
                 const cmd = interaction.commandName;
 
@@ -526,7 +558,6 @@ async function restartDiscordBot(newToken) {
                 }
             }
 
-            // 2. PANEL DÜYMƏLƏRİ
             if (interaction.isButton() && interaction.customId.startsWith('sp:')) {
                 const [, action, param] = interaction.customId.split(':');
 
@@ -665,7 +696,6 @@ async function restartDiscordBot(newToken) {
                 }
             }
 
-            // 3. REDEEM MODAL CAVABI
             if (interaction.isModalSubmit() && interaction.customId.startsWith('spmodal:redeem:')) {
                 const scriptId = interaction.customId.split(':')[2];
                 const scriptObj = store.scripts[scriptId];
@@ -766,7 +796,6 @@ function renderDashboardHtml() {
     font-weight: 600; font-size: 0.9rem; cursor: pointer; margin-top: 10px; width: 100%;
   }
   button.blue { background: #3b82f6; }
-  button.warn { background: #f59e0b; color: #0b0f19; }
   button.danger { background: #ef4444; width: auto; padding: 5px 10px; font-size: 0.78rem; margin-top: 0; }
   button.sm { width: auto; padding: 6px 10px; font-size: 0.8rem; margin-top: 0; }
   .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; background: #1e293b; color: #38bdf8; }
@@ -796,7 +825,6 @@ function renderDashboardHtml() {
   <h1>🛡️ SADO PROTECT</h1>
   <p class="sub">Skript qoruma, Key/Whitelist idarəetmə və Avto-Panel sinxronizasiyası</p>
 
-  <!-- 1. DISCORD BOT AYARLARI -->
   <div class="card">
     <h2>
       <span>🤖 Discord Bot Ayarları</span>
@@ -817,7 +845,6 @@ function renderDashboardHtml() {
     <button class="blue" onclick="saveBotSettings()">Bot Ayarlarını Saxla & Qoşul</button>
   </div>
 
-  <!-- 2. SKRİPT ƏLAVƏ ET VƏ YA UPDATE ET (KEYLƏR QALIR + AUTO PANEL) -->
   <div class="card">
     <h2>
       <span>📜 Skript Əlavə Et / Update Et</span>
@@ -851,7 +878,6 @@ function renderDashboardHtml() {
     <div id="scriptsList" style="margin-top:12px;"></div>
   </div>
 
-  <!-- 3. KEY YARAT & WHITELIST VER -->
   <div class="card">
     <h2>🔑 Key Yarat & Whitelist</h2>
     <div class="row">
@@ -891,13 +917,11 @@ function renderDashboardHtml() {
     </div>
   </div>
 
-  <!-- 4. AKTİV KEYLƏR VƏ WHITELIST (ALAN ŞƏXSLƏRİN PROFİLİ İLƏ) -->
   <div class="card">
     <h2>👥 Aktiv İstifadəçilər (Key & Whitelist)</h2>
     <div id="holdersList"></div>
   </div>
 
-  <!-- 5. DISCORD PANEL GÖRÜNÜŞÜ & BUTON YERLƏRİ -->
   <div class="card">
     <h2>🎨 Discord Panel Görünüşü & Butonları</h2>
     <label>Panel Başlığı (Title):</label>
@@ -911,7 +935,6 @@ function renderDashboardHtml() {
     <button onclick="savePanelConfig()">Panel Ayarlarını Saxla & Discord-da Yenilə</button>
   </div>
 
-  <!-- 6. BACKUP / RESTORE -->
   <div class="card">
     <h2>💾 Yedəkləmə (Backup / Restore)</h2>
     <p class="muted">Bütün skriptlərinizi, keylərinizi, whitelistləri və tokeni JSON kimi endirib istənilən vaxt geri yükləyə bilərsiniz.</p>
@@ -1024,7 +1047,6 @@ async function loadState() {
   if (prevEdit && stateData.scripts[prevEdit]) editSel.value = prevEdit;
   if (prevTarget && stateData.scripts[prevTarget]) targetSel.value = prevTarget;
 
-  // Panel ayarları
   const cfg = stateData.panelConfig;
   document.getElementById('panelTitle').value = cfg.title || '';
   document.getElementById('panelDesc').value = cfg.description || '';
@@ -1062,7 +1084,6 @@ async function loadState() {
       '</div>';
   });
 
-  // Aktiv istifadəçilər (Key + Whitelist)
   const holdersDiv = document.getElementById('holdersList');
   holdersDiv.innerHTML = '';
 
@@ -1290,7 +1311,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Roblox Executor Loader Endpoint
         if (req.method === 'GET' && pathname === '/loader') {
             const ticketId = parsed.searchParams.get('ticket') || '';
             const hwid = (parsed.searchParams.get('hwid') || '').trim();
@@ -1328,7 +1348,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Dashboard State
         if (req.method === 'GET' && pathname === '/api/state') {
             sendJson(res, 200, {
                 hasToken: Boolean(store.botToken),
@@ -1343,7 +1362,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Bot Settings
         if (req.method === 'POST' && pathname === '/api/bot-settings') {
             const body = await readJsonBody(req);
             if (body.roleId !== undefined) store.roleId = String(body.roleId).trim();
@@ -1352,12 +1370,13 @@ const server = http.createServer(async (req, res) => {
 
             if (body.botToken !== undefined && String(body.botToken).trim()) {
                 await restartDiscordBot(String(body.botToken).trim());
+            } else if (store.botToken && !botStatus.online) {
+                await restartDiscordBot(store.botToken);
             }
             sendJson(res, 200, { ok: true, botStatus });
             return;
         }
 
-        // Skript Yarat və ya Update Et (Keylər və Whitelistlər 100% qorunur + Auto-Panel)
         if (req.method === 'POST' && pathname === '/api/scripts') {
             const body = await readJsonBody(req);
             const name = String(body.name || '').trim();
@@ -1376,7 +1395,6 @@ const server = http.createServer(async (req, res) => {
 
             let scriptId;
             if (existing) {
-                // UPDATE REJİMİ: Eyni ID saxlanılır ki, bütün mövcud key və whitelistlər işləməyə davam etsin
                 scriptId = existing.id;
                 store.scripts[scriptId] = {
                     ...existing,
@@ -1418,7 +1436,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Key Yaratma
         if (req.method === 'POST' && pathname === '/api/keys') {
             const body = await readJsonBody(req);
             const scriptId = String(body.scriptId || '').trim();
@@ -1458,7 +1475,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Manual Whitelist
         if (req.method === 'POST' && pathname === '/api/whitelist') {
             const body = await readJsonBody(req);
             const scriptId = String(body.scriptId || '').trim();
@@ -1509,17 +1525,15 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Panel Config & Auto-Sync
         if (req.method === 'POST' && pathname === '/api/panel-config') {
             const body = await readJsonBody(req);
-            store.panelConfig = normalizeStore({ ...store, panelConfig: body }).panelConfig;
+            store.panelConfig = normalizeStore({ ...store, panelConfig: body }, store).panelConfig;
             saveStoreToDisk();
             const syncRes = await syncAllDiscordPanels(null);
             sendJson(res, 200, { ok: true, panelsUpdated: syncRes.updated });
             return;
         }
 
-        // Backup & Restore
         if (req.method === 'GET' && pathname === '/api/backup') {
             res.writeHead(200, {
                 'Content-Type': 'application/json; charset=utf-8',
@@ -1531,7 +1545,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'POST' && pathname === '/api/restore') {
             const body = await readJsonBody(req);
-            store = normalizeStore(body);
+            store = normalizeStore(body, store);
             saveStoreToDisk();
             if (store.botToken) {
                 await restartDiscordBot(store.botToken);
