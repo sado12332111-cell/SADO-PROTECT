@@ -506,12 +506,19 @@ async function restartDiscordBot(newToken) {
                 if (cmd === 'panel') {
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-                    let scriptObj = findScript('', interaction.guildId || '');
-                    if (!scriptObj) {
+                    const gFilter = normalizeGuildId(interaction.guildId || '');
+                    let guildScripts = Object.values(store.scripts || {}).filter(
+                        s => !gFilter || normalizeGuildId(s.guildId) === gFilter
+                    );
+                    if (guildScripts.length === 0) {
+                        guildScripts = Object.values(store.scripts || {});
+                    }
+
+                    if (guildScripts.length === 0) {
                         const fallbackId = 'sado-hub';
-                        scriptObj = {
+                        const fallbackScript = {
                             id: fallbackId,
-                            guildId: normalizeGuildId(interaction.guildId || ''),
+                            guildId: gFilter,
                             name: 'SADO HUB',
                             code: 'print("SADO PROTECT Aktivdir!")',
                             roleId: store.roleId || '',
@@ -520,27 +527,55 @@ async function restartDiscordBot(newToken) {
                             createdAt: Date.now(),
                             updatedAt: Date.now()
                         };
-                        store.scripts[fallbackId] = scriptObj;
+                        store.scripts[fallbackId] = fallbackScript;
                         saveStoreToDisk();
+                        guildScripts = [fallbackScript];
                     }
 
-                    const sent = await interaction.channel.send({
-                        embeds: [buildPanelEmbed(scriptObj)],
-                        components: buildPanelRows(scriptObj.id)
-                    });
+                    if (guildScripts.length === 1) {
+                        const scriptObj = guildScripts[0];
+                        const sent = await interaction.channel.send({
+                            embeds: [buildPanelEmbed(scriptObj)],
+                            components: buildPanelRows(scriptObj.id)
+                        });
 
-                    const pKey = `${interaction.guildId || 'dm'}:${interaction.channelId}:${scriptObj.id}`;
-                    store.panels[pKey] = {
-                        guildId: interaction.guildId || '',
-                        channelId: interaction.channelId,
-                        messageId: sent.id,
-                        scriptId: scriptObj.id,
-                        updatedAt: Date.now()
-                    };
-                    saveStoreToDisk();
+                        const pKey = `${interaction.guildId || 'dm'}:${interaction.channelId}:${scriptObj.id}`;
+                        store.panels[pKey] = {
+                            guildId: interaction.guildId || '',
+                            channelId: interaction.channelId,
+                            messageId: sent.id,
+                            scriptId: scriptObj.id,
+                            updatedAt: Date.now()
+                        };
+                        saveStoreToDisk();
+
+                        await interaction.editReply({
+                            content: `**${scriptObj.name}** paneli kanala göndərildi (skript update olanda avtomatik yenilənəcək).`
+                        }).catch(() => {});
+                        return;
+                    }
+
+                    const pickerRows = [];
+                    let currentRow = new ActionRowBuilder();
+                    for (const sc of guildScripts.slice(0, 10)) {
+                        if (currentRow.components.length >= 5) {
+                            pickerRows.push(currentRow);
+                            currentRow = new ActionRowBuilder();
+                        }
+                        currentRow.addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`sppick:${interaction.channelId}:${sc.id}`)
+                                .setLabel(String(sc.name || sc.id).slice(0, 80))
+                                .setStyle(ButtonStyle.Primary)
+                        );
+                    }
+                    if (currentRow.components.length > 0) {
+                        pickerRows.push(currentRow);
+                    }
 
                     await interaction.editReply({
-                        content: `**${scriptObj.name}** paneli kanala göndərildi (skript update olanda avtomatik yenilənəcək).`
+                        content: `Bu serverdə **${guildScripts.length}** skript var. Hansı skriptin panelini bu kanala göndərmək istəyirsiniz?`,
+                        components: pickerRows
                     }).catch(() => {});
                     return;
                 }
@@ -751,6 +786,45 @@ async function restartDiscordBot(newToken) {
                     await interaction.reply({ embeds: [statEmbed], flags: MessageFlags.Ephemeral });
                     return;
                 }
+            }
+
+            if (interaction.isButton() && interaction.customId.startsWith('sppick:')) {
+                const parts = interaction.customId.split(':');
+                const targetChannelId = parts[1];
+                const chosenScriptId = parts.slice(2).join(':');
+                const scriptObj = store.scripts[chosenScriptId];
+
+                if (!scriptObj) {
+                    await interaction.update({ content: 'Seçilən skript tapılmadı.', components: [] }).catch(() => {});
+                    return;
+                }
+
+                const targetChannel = await discordClient.channels.fetch(targetChannelId).catch(() => interaction.channel);
+                if (!targetChannel || !targetChannel.isTextBased()) {
+                    await interaction.update({ content: 'Kanal tapılmadı.', components: [] }).catch(() => {});
+                    return;
+                }
+
+                const sent = await targetChannel.send({
+                    embeds: [buildPanelEmbed(scriptObj)],
+                    components: buildPanelRows(scriptObj.id)
+                });
+
+                const pKey = `${interaction.guildId || 'dm'}:${targetChannel.id}:${scriptObj.id}`;
+                store.panels[pKey] = {
+                    guildId: interaction.guildId || '',
+                    channelId: targetChannel.id,
+                    messageId: sent.id,
+                    scriptId: scriptObj.id,
+                    updatedAt: Date.now()
+                };
+                saveStoreToDisk();
+
+                await interaction.update({
+                    content: `✅ **${scriptObj.name}** paneli <#${targetChannel.id}> kanalına göndərildi!`,
+                    components: []
+                }).catch(() => {});
+                return;
             }
 
             if (interaction.isModalSubmit() && interaction.customId.startsWith('spmodal:redeem:')) {
