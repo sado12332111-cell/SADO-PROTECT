@@ -118,6 +118,17 @@ function normalizeStore(raw, fallbackRaw = null) {
     base.panels = mergeObjectsPreserve(a.panels, b.panels);
     base.tickets = mergeObjectsPreserve(a.tickets, b.tickets);
 
+    // Əgər əsas bazada skript/key/whitelist varsa, heç vaxt boş qalmasın
+    if (Object.keys(base.scripts).length === 0 && store && store.scripts && Object.keys(store.scripts).length > 0) {
+        base.scripts = mergeObjectsPreserve(base.scripts, store.scripts);
+    }
+    if (Object.keys(base.keys).length === 0 && store && store.keys && Object.keys(store.keys).length > 0) {
+        base.keys = mergeObjectsPreserve(base.keys, store.keys);
+    }
+    if (Object.keys(base.whitelist).length === 0 && store && store.whitelist && Object.keys(store.whitelist).length > 0) {
+        base.whitelist = mergeObjectsPreserve(base.whitelist, store.whitelist);
+    }
+
     const cfgSource = (a.panelConfig && typeof a.panelConfig === 'object' && Object.keys(a.panelConfig).length > 0)
         ? a.panelConfig
         : (b.panelConfig && typeof b.panelConfig === 'object' ? b.panelConfig : {});
@@ -168,8 +179,37 @@ let store = loadStoreFromDisk();
 
 function saveStoreToDisk() {
     try {
-        const snapshot = { ...store };
-        const json = JSON.stringify(snapshot, null, 2);
+        // Mövcud skript, key və whitelist-ləri qoruyaraq yaz ki, heç vaxt silinməsinlər
+        const existingPrimary = readJsonSafe(STORE_FILE) || {};
+        const safeStore = {
+            ...store,
+            scripts: mergeObjectsPreserve(store.scripts, existingPrimary.scripts),
+            keys: mergeObjectsPreserve(store.keys, existingPrimary.keys),
+            whitelist: mergeObjectsPreserve(store.whitelist, existingPrimary.whitelist)
+        };
+        // Yalnız açıq şəkildə silinmiş açarları burax (store-da olmayan və existingPrimary-də olanları qoru)
+        for (const k of Object.keys(existingPrimary.scripts || {})) {
+            if (!(k in (store.scripts || {})) && store._explicitDeletedScripts && store._explicitDeletedScripts.includes(k)) {
+                delete safeStore.scripts[k];
+            }
+        }
+        for (const k of Object.keys(existingPrimary.keys || {})) {
+            if (!(k in (store.keys || {})) && store._explicitDeletedKeys && store._explicitDeletedKeys.includes(k)) {
+                delete safeStore.keys[k];
+            }
+        }
+        for (const k of Object.keys(existingPrimary.whitelist || {})) {
+            if (!(k in (store.whitelist || {})) && store._explicitDeletedWhitelist && store._explicitDeletedWhitelist.includes(k)) {
+                delete safeStore.whitelist[k];
+            }
+        }
+
+        const toWrite = { ...safeStore };
+        delete toWrite._explicitDeletedScripts;
+        delete toWrite._explicitDeletedKeys;
+        delete toWrite._explicitDeletedWhitelist;
+
+        const json = JSON.stringify(toWrite, null, 2);
         const tmpFile = `${STORE_FILE}.tmp`;
         fs.writeFileSync(tmpFile, json, 'utf8');
         fs.renameSync(tmpFile, STORE_FILE);
@@ -381,9 +421,14 @@ function findScript(query, guildId = '') {
     const pool = Object.values(store.scripts).filter(s => !gFilter || normalizeGuildId(s.guildId) === gFilter);
     const all = pool.length > 0 ? pool : Object.values(store.scripts);
     if (all.length === 0) return null;
-    if (!query) return all[0];
+    if (!query || !String(query).trim()) return all[0];
     const q = String(query).trim().toLowerCase();
-    return all.find(s => s.id.toLowerCase() === q || s.name.toLowerCase() === q) || all[0];
+    return all.find(s =>
+        String(s.id || '').toLowerCase() === q ||
+        String(s.name || '').toLowerCase() === q ||
+        String(s.name || '').toLowerCase().includes(q) ||
+        String(s.id || '').toLowerCase().includes(q)
+    ) || all[0];
 }
 
 function checkUserAccess(userId, scriptId) {
@@ -446,23 +491,20 @@ async function restartDiscordBot(newToken) {
                 if (focused && focused.name === 'script') {
                     const q = String(focused.value || '').trim().toLowerCase();
                     const gFilter = normalizeGuildId(interaction.guildId || '');
-                    const allScripts = Object.values(store.scripts || {}).filter(
+                    const guildScripts = Object.values(store.scripts || {}).filter(
                         s => !gFilter || normalizeGuildId(s.guildId) === gFilter
                     );
-                    const matches = allScripts
-                        .filter(s => !q || String(s.name || '').toLowerCase().includes(q) || String(s.id || '').toLowerCase().includes(q))
-                        .slice(0, 25)
-                        .map(s => ({
-                            name: `${s.name || s.id} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
-                            value: String(s.id)
-                        }));
-                    if (matches.length === 0 && allScripts.length > 0) {
-                        matches.push(...allScripts.slice(0, 25).map(s => ({
-                            name: `${s.name || s.id} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
-                            value: String(s.id)
-                        })));
-                    }
-                    await interaction.respond(matches).catch(() => {});
+                    const sourceList = guildScripts.length > 0 ? guildScripts : Object.values(store.scripts || {});
+                    const filtered = sourceList.filter(s =>
+                        !q ||
+                        String(s.name || '').toLowerCase().includes(q) ||
+                        String(s.id || '').toLowerCase().includes(q)
+                    );
+                    const finalList = (filtered.length > 0 ? filtered : sourceList).slice(0, 25).map(s => ({
+                        name: `${s.name || s.id} (v${s.version || 1}) — ${s.id}`.slice(0, 100),
+                        value: String(s.id)
+                    }));
+                    await interaction.respond(finalList).catch(() => {});
                 }
                 return;
             }
@@ -1353,6 +1395,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'DELETE' && pathname.startsWith('/api/scripts/')) {
             const id = decodeURIComponent(pathname.slice('/api/scripts/'.length));
+            store._explicitDeletedScripts = Array.from(new Set([...(store._explicitDeletedScripts || []), id]));
             delete store.scripts[id];
             saveStoreToDisk();
             sendJson(res, 200, { ok: true });
@@ -1394,6 +1437,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'DELETE' && pathname.startsWith('/api/keys/')) {
             const code = decodeURIComponent(pathname.slice('/api/keys/'.length));
+            store._explicitDeletedKeys = Array.from(new Set([...(store._explicitDeletedKeys || []), code]));
             delete store.keys[code];
             saveStoreToDisk();
             sendJson(res, 200, { ok: true });
@@ -1446,6 +1490,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'DELETE' && pathname.startsWith('/api/whitelist/')) {
             const wlKey = decodeURIComponent(pathname.slice('/api/whitelist/'.length));
+            store._explicitDeletedWhitelist = Array.from(new Set([...(store._explicitDeletedWhitelist || []), wlKey]));
             delete store.whitelist[wlKey];
             saveStoreToDisk();
             sendJson(res, 200, { ok: true });
