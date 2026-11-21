@@ -28,11 +28,9 @@ app.use(express.urlencoded({ extended: true }));
 const DATA_FILE = path.join(__dirname, 'sado_protect_data.json');
 const DEFAULT_CLIENT_ID = "1562080654282199121";
 const EMBEDDED_BOT_TOKEN = String(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
-// Loader sorğularının kənar brauzer/scraper tərəfindən kopyalanmasının və key sızmasının qarşısını almaq üçün imzalama açarı
 const SIGNING_SECRET = String(process.env.SADO_SIGNING_SECRET || crypto.randomBytes(24).toString('hex')).trim();
 let panelBaseUrl = process.env.RENDER_EXTERNAL_URL || "";
 
-// Qısa müddətli loader bilet (nonce/ticket) anbarı: key birbaşa URL-də açıq qalmır və biletlər tez bitir
 const loaderTickets = new Map();
 const TICKET_TTL_MS = 90 * 1000;
 
@@ -48,8 +46,8 @@ const DURATION_MS_MAP = {
 
 const DURATION_LABEL_MAP = {
     "1h": "1 hour",
-    "5h": "5 hours",
-    "24h": "24 hours",
+    "5h": "5 hour",
+    "24h": "24 hour",
     "3d": "3 day",
     "5d": "5 day",
     "7d": "7 day",
@@ -99,7 +97,8 @@ let store = {
             users: [],
             autoRoleId: "",
             expiresAt: null,
-            durationLabel: "lifetime"
+            durationLabel: "lifetime",
+            redeemedBy: null
         }
     }
 };
@@ -125,12 +124,24 @@ function makeSlugId(name) {
     return (clean || "script") + "-" + Math.random().toString(36).substring(2, 6);
 }
 
-// Açarları tam şəkildə qaytarır (istifadəçi açarları tam görmək istəyir)
 function formatFullKeyDisplay(rawKey) {
     return String(rawKey || "").trim();
 }
 
-// Key və script üçün qorunan qısa ömürlü loader bileti yaradır
+function formatRemainingTime(entry) {
+    if (!entry || typeof entry.expiresAt !== "number") return "Sonsuz";
+    const diff = entry.expiresAt - Date.now();
+    if (diff <= 0) return "Vaxtı bitib";
+    const totalMinutes = Math.ceil(diff / 60000);
+    if (totalMinutes < 60) return `${totalMinutes} dəq qalıb`;
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    if (hours < 24) return mins > 0 ? `${hours} saat ${mins} dəq` : `${hours} saat`;
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return remHours > 0 ? `${days} gün ${remHours} saat` : `${days} gün`;
+}
+
 function issueProtectedLoaderTicket({ mode, identifier, scriptId, discordUserId }) {
     const ticketId = crypto.randomBytes(18).toString('hex');
     const expiresAt = Date.now() + TICKET_TTL_MS;
@@ -170,11 +181,6 @@ function isBotCurrentlyOnline() {
     return Boolean(discordClient && discordClient.isReady && discordClient.isReady() && discordClient.user);
 }
 
-function isAdminAuthorized() {
-    // Admin şifrəsi deaktivdir — birbaşa daxil olma aktivdir
-    return true;
-}
-
 function saveStoreToDisk() {
     try {
         const safeStore = {
@@ -188,19 +194,19 @@ function saveStoreToDisk() {
                 panelEmbedDesc: String(store.discordConfig.panelEmbedDesc || ""),
                 panelEmbedColor: String(store.discordConfig.panelEmbedColor || "#7c3aed"),
                 btnRedeemLabel: String(store.discordConfig.btnRedeemLabel || "Redeem Key"),
-                btnRedeemStyle: String(store.discordConfig.btnRedeemStyle || "Success"),
+                btnRedeemStyle: String(store.discordConfig.btnRedeemStyle || "Primary"),
                 btnRedeemEmoji: String(store.discordConfig.btnRedeemEmoji || ""),
                 btnRedeemOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnRedeemOrder, 10) || 1)),
                 btnScriptLabel: String(store.discordConfig.btnScriptLabel || "Get Script"),
-                btnScriptStyle: String(store.discordConfig.btnScriptStyle || "Primary"),
+                btnScriptStyle: String(store.discordConfig.btnScriptStyle || "Success"),
                 btnScriptEmoji: String(store.discordConfig.btnScriptEmoji || ""),
                 btnScriptOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnScriptOrder, 10) || 2)),
                 btnHwidLabel: String(store.discordConfig.btnHwidLabel || "Reset HWID"),
                 btnHwidStyle: String(store.discordConfig.btnHwidStyle || "Secondary"),
                 btnHwidEmoji: String(store.discordConfig.btnHwidEmoji || ""),
                 btnHwidOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnHwidOrder, 10) || 3)),
-                btnStatsLabel: String(store.discordConfig.btnStatsLabel || "Get Stats"),
-                btnStatsStyle: String(store.discordConfig.btnStatsStyle || "Secondary"),
+                btnStatsLabel: String(store.discordConfig.btnStatsLabel || "Key Info"),
+                btnStatsStyle: String(store.discordConfig.btnStatsStyle || "Primary"),
                 btnStatsEmoji: String(store.discordConfig.btnStatsEmoji || ""),
                 btnStatsOrder: Math.min(4, Math.max(1, parseInt(store.discordConfig.btnStatsOrder, 10) || 4))
             },
@@ -219,6 +225,7 @@ function saveStoreToDisk() {
         console.error("Məlumat fayla yazıla bilmədi:", err.message);
     }
 }
+
 function buildLoaderSnippet(keyStr, scriptId = "", discordUserId = null) {
     const base = getBaseUrl();
     const cleanKey = String(keyStr || "").trim();
@@ -240,6 +247,9 @@ function buildLoaderSnippet(keyStr, scriptId = "", discordUserId = null) {
 function loadStoreFromDisk() {
     try {
         if (!fs.existsSync(DATA_FILE)) {
+            if (EMBEDDED_BOT_TOKEN) {
+                store.discordConfig.token = EMBEDDED_BOT_TOKEN;
+            }
             saveStoreToDisk();
             return;
         }
@@ -256,9 +266,6 @@ function loadStoreFromDisk() {
                 }
                 if (typeof parsed.discordConfig.clientId === 'string' && parsed.discordConfig.clientId.trim()) {
                     store.discordConfig.clientId = parsed.discordConfig.clientId.trim();
-                }
-                if (typeof parsed.discordConfig.permissions === 'string' && parsed.discordConfig.permissions.trim()) {
-                    store.discordConfig.permissions = parsed.discordConfig.permissions.trim();
                 }
                 store.discordConfig.autoRoleId = String(parsed.discordConfig.autoRoleId || "").trim();
                 store.discordConfig.welcomeChannelId = String(parsed.discordConfig.welcomeChannelId || "").trim();
@@ -433,6 +440,7 @@ function purgeExpiredKeys() {
         saveStoreToDisk();
     }
 }
+
 function createKeyForUser(ownerName, durationKey = "lifetime", scriptId = "", maxUsers = 1, autoRoleId = "", profileInfo = null) {
     purgeExpiredKeys();
     const normDuration = normalizeDuration(durationKey);
@@ -568,11 +576,6 @@ function removeFromWhitelist(rawIdentifier) {
     return removed;
 }
 
-function buildLoaderSnippet(keyStr) {
-    const base = getBaseUrl();
-    return `script_key = "${keyStr}"\nlocal hwid = game:GetService("RbxAnalyticsService"):GetClientId()\nloadstring(game:HttpGet("${base}/loader?key=" .. script_key .. "&hwid=" .. hwid))()`;
-}
-
 function buildOneTapCopyUrl(textToCopy) {
     const base = getBaseUrl();
     const encoded = encodeURIComponent(textToCopy);
@@ -586,9 +589,7 @@ async function refreshGuildRoles(client) {
         for (const [, guild] of client.guilds.cache) {
             try {
                 await guild.roles.fetch();
-            } catch (_) {
-                // Bəzi keşlənmiş rollar fetch olmadan da mövcud ola bilər
-            }
+            } catch (_) {}
             for (const [, role] of guild.roles.cache) {
                 if (!role.managed && role.id !== guild.id) {
                     rolesMap.set(role.id, {
@@ -671,10 +672,10 @@ function parseHexColorInt(hexStr, fallbackInt = 0x7c3aed) {
 
 function buildScriptControlPanelMessage(scriptObj, guildName = "SADOPROTECT") {
     const cfg = store.discordConfig;
-    const rawTitle = String(cfg.panelEmbedTitle || "SADOPROTECT Panel");
+    const rawTitle = String(cfg.panelEmbedTitle || "{script} — Control Panel");
     const rawDesc = String(
         cfg.panelEmbedDesc ||
-        "Welcome to the management panel for **{script}**.\n\nClick the buttons below to redeem a key, reset your HWID, or get your loadscript."
+        "This control panel is for the project:\n**{script}**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or reset HWID"
     );
 
     const finalTitle = rawTitle.replace(/\{script\}/gi, scriptObj.name).slice(0, 256);
@@ -801,18 +802,7 @@ function buildPanelSlashCommands() {
 
     const panelCmd = new SlashCommandBuilder()
         .setName('panel')
-        .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir veya whitelist idare edir')
-        .addStringOption(option =>
-            option
-                .setName('action')
-                .setDescription('Emeliyyat: panel, whitelist veya unwhitelist')
-                .setRequired(false)
-                .addChoices(
-                    { name: 'panel', value: 'panel' },
-                    { name: 'whitelist', value: 'whitelist' },
-                    { name: 'unwhitelist', value: 'unwhitelist' }
-                )
-        )
+        .setDescription('Secilen skripte aid SADOPROTECT Control Panelini gonderir')
         .addStringOption(option => {
             option
                 .setName('name')
@@ -822,13 +812,7 @@ function buildPanelSlashCommands() {
                 option.addChoices(...scriptChoices);
             }
             return option;
-        })
-        .addStringOption(option =>
-            option
-                .setName('user')
-                .setDescription('Whitelist / Unwhitelist ucun Discord ID, @mention ve ya HWID')
-                .setRequired(false)
-        );
+        });
 
     const whitelistCmd = new SlashCommandBuilder()
         .setName('whitelist')
@@ -843,7 +827,7 @@ function buildPanelSlashCommands() {
             option
                 .setName('time')
                 .setDescription('Muddet secin: lifetime, 7 day, 5 day, 3 day, 24 hour, 5 hour, 1 hour')
-                .setRequired(false)
+                .setRequired(true)
                 .addChoices(
                     { name: 'lifetime', value: 'lifetime' },
                     { name: '7 day', value: '7d' },
@@ -897,6 +881,8 @@ async function syncDiscordSlashCommands(tokenOverride = null) {
 
         const rest = new REST({ version: '10' }).setToken(cleanToken);
         const commands = buildPanelSlashCommands();
+
+        // Köhnə dublikat əmrləri təmizləyib yeni sxemi dərhal tətbiq edirik
         await rest.put(Routes.applicationCommands(appId), { body: commands });
 
         if (discordClient && discordClient.guilds && discordClient.guilds.cache) {
@@ -927,7 +913,7 @@ async function startDiscordBot() {
 
     const cleanToken = getRuntimeBotToken();
     if (!cleanToken) {
-        botConnectionState = "Join Discord Hazırdır (Bot Token mühitdə təyin edilməyib)";
+        botConnectionState = "Bot Token daxil edilməyib";
         return;
     }
 
@@ -971,86 +957,43 @@ async function startDiscordBot() {
             try {
                 purgeExpiredKeys();
 
-                if (interaction.isAutocomplete()) {
-                    return;
-                }
-
                 if (interaction.isChatInputCommand()) {
-                    if (interaction.commandName === 'whitelist' || interaction.commandName === 'unwhitelist') {
+                    if (interaction.commandName === 'whitelist') {
                         await interaction.deferReply({ ephemeral: true }).catch(() => {});
                         const rawUserOption = interaction.options.getString('user');
                         const rawTimeOption = interaction.options.getString('time') || 'lifetime';
                         const rawNameOption = interaction.options.getString('name');
 
-                        if (interaction.commandName === 'whitelist') {
-                            const chosenScript = rawNameOption
-                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
-                                : getScriptById("");
-                            const resAdd = await addToWhitelist(rawUserOption, chosenScript.id, rawTimeOption);
-                            if (!resAdd.ok) {
-                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` }).catch(() => {});
-                                return;
-                            }
-                            await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.buyerName || resAdd.entry.id)}** (\`${escapeHtml(resAdd.entry.id)}\`) whitelist-e elave olundu | Skript: **${escapeHtml(chosenScript.name)}** | Muddet: **${escapeHtml(resAdd.entry.durationLabel)}**.`
-                            }).catch(() => {});
-                            return;
-                        }
+                        const chosenScript = rawNameOption
+                            ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
+                            : getScriptById("");
 
-                        if (interaction.commandName === 'unwhitelist') {
-                            const removed = removeFromWhitelist(rawUserOption);
-                            await interaction.editReply({
-                                content: removed
-                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
-                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
-                            }).catch(() => {});
+                        const resAdd = await addToWhitelist(rawUserOption, chosenScript.id, rawTimeOption);
+                        if (!resAdd.ok) {
+                            await interaction.editReply({ content: `Xəta: ${resAdd.reason}` }).catch(() => {});
                             return;
                         }
+                        await interaction.editReply({
+                            content: `**${escapeHtml(resAdd.entry.buyerName || resAdd.entry.id)}** (\`${escapeHtml(resAdd.entry.id)}\`) whitelist-ə əlavə olundu | Skript: **${escapeHtml(chosenScript.name)}** | Müddət: **${escapeHtml(resAdd.entry.durationLabel)}**.`
+                        }).catch(() => {});
+                        return;
+                    }
+
+                    if (interaction.commandName === 'unwhitelist') {
+                        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+                        const rawUserOption = interaction.options.getString('user');
+                        const removed = removeFromWhitelist(rawUserOption);
+                        await interaction.editReply({
+                            content: removed
+                                ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahısından çıxarıldı.`
+                                : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahısında tapılmadı.`
+                        }).catch(() => {});
+                        return;
                     }
 
                     if (interaction.commandName === 'panel') {
                         await interaction.deferReply({ ephemeral: true }).catch(() => {});
-
-                        const actionChoice = String(interaction.options.getString('action') || 'panel').toLowerCase();
                         const rawNameOption = interaction.options.getString('name');
-                        const rawUserOption = interaction.options.getString('user');
-
-                        if (actionChoice === 'whitelist') {
-                            if (!rawUserOption || !rawUserOption.trim()) {
-                                await interaction.editReply({
-                                    content: 'Whitelist ucun `user` sahesine Discord ID, mention ve ya HWID daxil edin. Mes: `/panel action:whitelist user:123456789012345678`'
-                                }).catch(() => {});
-                                return;
-                            }
-                            const chosenScript = rawNameOption
-                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
-                                : getScriptById("");
-                            const resAdd = await addToWhitelist(rawUserOption, chosenScript.id, 'lifetime');
-                            if (!resAdd.ok) {
-                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` }).catch(() => {});
-                                return;
-                            }
-                            await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.buyerName || resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**, Muddet: **${escapeHtml(resAdd.entry.durationLabel)}**).`
-                            }).catch(() => {});
-                            return;
-                        }
-
-                        if (actionChoice === 'unwhitelist') {
-                            if (!rawUserOption || !rawUserOption.trim()) {
-                                await interaction.editReply({
-                                    content: 'Unwhitelist ucun `user` sahesine cixarilacaq ID/HWID yazin. Mes: `/panel action:unwhitelist user:123456789012345678`'
-                                }).catch(() => {});
-                                return;
-                            }
-                            const removed = removeFromWhitelist(rawUserOption);
-                            await interaction.editReply({
-                                content: removed
-                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
-                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
-                            }).catch(() => {});
-                            return;
-                        }
 
                         if (!store.scripts.length) {
                             store.scripts.push({
@@ -1071,7 +1014,7 @@ async function startDiscordBot() {
 
                             if (!channel || typeof channel.send !== 'function') {
                                 await interaction.editReply({
-                                    content: 'Bu kanalda panel gonderile bilmedi (botun kanal icazelerini yoxlayin).'
+                                    content: 'Bu kanalda panel göndərilə bilmədi (botun kanal icazələrini yoxlayın).'
                                 }).catch(() => {});
                                 return;
                             }
@@ -1079,7 +1022,7 @@ async function startDiscordBot() {
                             const panelMsg = buildScriptControlPanelMessage(targetScript, interaction.guild?.name || "SADOPROTECT");
                             await channel.send(panelMsg);
                             await interaction.editReply({
-                                content: `**${targetScript.name}** skriptine aid panel kanala gonderildi.`
+                                content: `**${targetScript.name}** skriptinə aid panel kanala göndərildi.`
                             }).catch(() => {});
                             return;
                         }
@@ -1090,126 +1033,6 @@ async function startDiscordBot() {
                         }
                         const selectorPayload = buildScriptSelectorMessage(interaction.guild?.name || "SADOPROTECT");
                         await interaction.editReply(selectorPayload).catch(() => {});
-                    }
-                    return;
-                }
-
-                if (interaction.isChatInputCommand()) {
-                    if (interaction.commandName === 'whitelist' || interaction.commandName === 'unwhitelist') {
-                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                        const rawUserOption = interaction.options.getString('user');
-                        const rawNameOption = interaction.options.getString('name');
-
-                        if (interaction.commandName === 'whitelist') {
-                            const chosenScript = rawNameOption
-                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
-                                : getScriptById("");
-                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
-                            if (!resAdd.ok) {
-                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` });
-                                return;
-                            }
-                            await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**).`
-                            });
-                            return;
-                        }
-
-                        if (interaction.commandName === 'unwhitelist') {
-                            const removed = removeFromWhitelist(rawUserOption);
-                            await interaction.editReply({
-                                content: removed
-                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
-                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
-                            });
-                            return;
-                        }
-                    }
-
-                    if (interaction.commandName === 'panel') {
-                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                        const actionChoice = String(interaction.options.getString('action') || 'panel').toLowerCase();
-                        const rawNameOption = interaction.options.getString('name');
-                        const rawUserOption = interaction.options.getString('user');
-
-                        if (actionChoice === 'whitelist') {
-                            if (!rawUserOption || !rawUserOption.trim()) {
-                                await interaction.editReply({
-                                    content: 'Whitelist ucun `user` sahesine Discord ID, mention ve ya HWID daxil edin. Mes: `/panel action:whitelist user:123456789012345678`'
-                                });
-                                return;
-                            }
-                            const chosenScript = rawNameOption
-                                ? (store.scripts.find(s => s.id === rawNameOption || s.name.toLowerCase() === rawNameOption.toLowerCase()) || getScriptById(rawNameOption))
-                                : getScriptById("");
-                            const resAdd = addToWhitelist(rawUserOption, chosenScript.id);
-                            if (!resAdd.ok) {
-                                await interaction.editReply({ content: `Xeta: ${resAdd.reason}` });
-                                return;
-                            }
-                            await interaction.editReply({
-                                content: `**${escapeHtml(resAdd.entry.id)}** whitelist-e elave olundu (Skript: **${escapeHtml(chosenScript.name)}**). Bu istifadeci key ve HWID limiti olmadan skripti islede biler.`
-                            });
-                            return;
-                        }
-
-                        if (actionChoice === 'unwhitelist') {
-                            if (!rawUserOption || !rawUserOption.trim()) {
-                                await interaction.editReply({
-                                    content: 'Unwhitelist ucun `user` sahesine cixarilacaq ID/HWID yazin. Mes: `/panel action:unwhitelist user:123456789012345678`'
-                                });
-                                return;
-                            }
-                            const removed = removeFromWhitelist(rawUserOption);
-                            await interaction.editReply({
-                                content: removed
-                                    ? `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisindan cixarildi.`
-                                    : `**${escapeHtml(normalizeWhitelistIdentifier(rawUserOption))}** whitelist siyahisinda tapilmadi.`
-                            });
-                            return;
-                        }
-
-                        if (!store.scripts.length) {
-                            await interaction.editReply({
-                                content: 'Hec bir skript yaradilmayib. Evvelce saytda **+ NEW SCRIPTS** ile skript yaradin.'
-                            });
-                            return;
-                        }
-
-                        const channel = interaction.channel;
-
-                        if (rawNameOption) {
-                            const byId = store.scripts.find(s => s.id === rawNameOption);
-                            const byName = store.scripts.find(s => s.name.toLowerCase() === rawNameOption.toLowerCase());
-                            const partialName = store.scripts.find(s => s.name.toLowerCase().includes(rawNameOption.toLowerCase()));
-                            const targetScript = byId || byName || partialName;
-
-                            if (!targetScript) {
-                                const availableNames = store.scripts.map(s => `• ${s.name}`).join('\n');
-                                await interaction.editReply({
-                                    content: `\`${rawNameOption}\` adli skript tapilmadi.\nMovcud skriptler:\n${availableNames}`
-                                });
-                                return;
-                            }
-
-                            if (!channel || typeof channel.send !== 'function') {
-                                await interaction.editReply({
-                                    content: 'Bu kanalda panel gonderile bilmedi.'
-                                });
-                                return;
-                            }
-
-                            const panelMsg = buildScriptControlPanelMessage(targetScript, interaction.guild?.name || "SADOPROTECT");
-                            await channel.send(panelMsg);
-                            await interaction.editReply({
-                                content: `**${targetScript.name}** skriptine aid panel kanala gonderildi.`
-                            });
-                            return;
-                        }
-
-                        const selectorPayload = buildScriptSelectorMessage(interaction.guild?.name || "SADOPROTECT");
-                        await interaction.editReply(selectorPayload);
                     }
                     return;
                 }
@@ -1225,13 +1048,13 @@ async function startDiscordBot() {
                             const panelMsg = buildScriptControlPanelMessage(chosenScript, interaction.guild?.name || "SADOPROTECT");
                             await channel.send(panelMsg);
                             await interaction.editReply({
-                                content: `**${chosenScript.name}** paneli kanala gonderildi.`,
+                                content: `**${chosenScript.name}** paneli kanala göndərildi.`,
                                 embeds: [],
                                 components: []
                             }).catch(() => {});
                         } else {
                             await interaction.followUp({
-                                content: 'Bu kanalda mesaj gonderile bilmedi.',
+                                content: 'Bu kanalda mesaj göndərilə bilmədi.',
                                 flags: MessageFlags.Ephemeral
                             }).catch(() => {});
                         }
@@ -1249,7 +1072,7 @@ async function startDiscordBot() {
                             .setTitle(`Redeem Key — ${activeScript.name.slice(0, 28)}`);
                         const input = new TextInputBuilder()
                             .setCustomId('key_input')
-                            .setLabel('Acarinizi (Key) daxil edin')
+                            .setLabel('Açarınızı (Key) daxil edin')
                             .setStyle(TextInputStyle.Short)
                             .setRequired(true);
                         modal.addComponents(new ActionRowBuilder().addComponents(input));
@@ -1310,24 +1133,6 @@ async function startDiscordBot() {
                         return;
                     }
 
-                    if (actionPart === 'sado_btn_hwid') {
-                        const redeemed = getRedeemedKeyForDiscordUser(interaction.user.id);
-                        if (!redeemed) {
-                            await interaction.editReply({
-                                content: 'Key aktivləşməyib! Əvvəlcə **Redeem Key** düyməsinə basıb key-inizi aktivləşdirin.'
-                            });
-                            return;
-                        }
-
-                        redeemed.entry.users = [];
-                        saveStoreToDisk();
-
-                        await interaction.editReply({
-                            content: `HWID sıfırlandı (\`${maskKeyValue(redeemed.key)}\`)! İndi key-i verdiyiniz şəxs **Redeem Key** edib skripti işlədə bilər.`
-                        });
-                        return;
-                    }
-
                     if (actionPart === 'sado_btn_stats') {
                         const scriptKeys = Object.entries(store.keys).filter(([, v]) => v.scriptId === activeScript.id);
                         const activeCount = scriptKeys.length;
@@ -1335,7 +1140,7 @@ async function startDiscordBot() {
 
                         const embed = new EmbedBuilder()
                             .setColor(0x38bdf8)
-                            .setTitle(`${activeScript.name} — Stats`)
+                            .setTitle(`${activeScript.name} — Key Info`)
                             .addFields(
                                 { name: 'Script', value: activeScript.name, inline: true },
                                 { name: 'Active Keys', value: String(activeCount), inline: true },
@@ -1354,7 +1159,7 @@ async function startDiscordBot() {
 
                     if (!entry) {
                         await interaction.editReply({
-                            content: `Key tapilmadi ve ya vaxti bitib: \`${submittedKey}\``
+                            content: `Key tapılmadı və ya vaxtı bitib: \`${submittedKey}\``
                         });
                         return;
                     }
@@ -1369,7 +1174,7 @@ async function startDiscordBot() {
 
                         if (!existingUser && entry.users.length >= maxLimit) {
                             await interaction.editReply({
-                                content: `Bu key-i basqasi isledib! (Limit: ${maxLimit} nefer)`
+                                content: `Bu key-i başqası işlədib! (Limit: ${maxLimit} nəfər)`
                             });
                             return;
                         }
@@ -1393,7 +1198,6 @@ async function startDiscordBot() {
                             redeemedAt: Date.now()
                         };
                         saveStoreToDisk();
-                        }
 
                         const roleResult = await assignRoleToDiscordUser(interaction.user.id, entry.autoRoleId);
                         const roleNote = roleResult.ok
@@ -1401,7 +1205,7 @@ async function startDiscordBot() {
                             : "";
 
                         await interaction.editReply({
-                            content: `Key ugurla tesdiqlendi (\`${formatFullKeyDisplay(submittedKey)}\`). Indi **Get Script** ve **Reset HWID** duymeleri aktivdir. Muddet: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
+                            content: `Key uğurla təsdiqləndi (\`${formatFullKeyDisplay(submittedKey)}\`). İndi **Get Script** və **Reset HWID** düymələri aktivdir. Müddət: **${entry.durationLabel || "lifetime"}** (${formatRemainingTime(entry)}).${roleNote}`
                         });
                         return;
                     }
@@ -1409,9 +1213,9 @@ async function startDiscordBot() {
             } catch (interErr) {
                 console.error("Interaction xətası:", interErr.message);
                 if (interaction && (interaction.deferred || interaction.replied)) {
-                    await interaction.editReply({ content: `Xeta bas verdi: ${interErr.message}` }).catch(() => {});
+                    await interaction.editReply({ content: `Xəta baş verdi: ${interErr.message}` }).catch(() => {});
                 } else if (interaction && typeof interaction.reply === 'function') {
-                    await interaction.reply({ content: `Xeta bas verdi: ${interErr.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                    await interaction.reply({ content: `Xəta baş verdi: ${interErr.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
                 }
             }
         });
@@ -1500,6 +1304,7 @@ app.get('/', async (req, res) => {
                     <a href="/delete-script?id=${encodeURIComponent(sc.id)}" class="sp-link-danger">[Sil]</a>
                 </summary>
                 <form action="/edit-script" method="POST" class="sp-mt-12">
+                    <input type="hidden" name="scriptId" value="${escapeHtml(sc.id)}">
                     <label class="sp-label">Skriptin adı:</label>
                     <input type="text" name="scriptName" value="${escapeHtml(sc.name)}" required class="sp-input sp-mb-8">
                     <label class="sp-label">Skriptin kodu (yalnız icazəli loader biletinə ötürülür):</label>
@@ -1529,7 +1334,6 @@ app.get('/', async (req, res) => {
             const maxU = Math.max(1, parseInt(item.maxUsers, 10) || 1);
             const usedU = Array.isArray(item.users) ? item.users.length : 0;
             const roleBadge = item.autoRoleId ? escapeHtml(item.autoRoleId) : "Yoxdur";
-            // İstifadəçi açarları tam şəkildə görmək istədiyi üçün maskalanmadan göstərilir
             const fullKeyText = escapeHtml(formatFullKeyDisplay(k));
             const sampleLoader = escapeHtml(buildLoaderSnippet(k, item.scriptId));
 
@@ -1612,10 +1416,7 @@ app.get('/', async (req, res) => {
       font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       padding: 20px;
     }
-    .sp-container {
-      max-width: 1060px;
-      margin: 0 auto;
-    }
+    .sp-container { max-width: 1060px; margin: 0 auto; }
     .sp-header {
       display: flex;
       flex-wrap: wrap;
@@ -1630,12 +1431,7 @@ app.get('/', async (req, res) => {
       margin-bottom: 18px;
       box-shadow: 0 14px 36px rgba(0, 0, 0, 0.4);
     }
-    .sp-brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      text-decoration: none;
-    }
+    .sp-brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
     .sp-brand-mark {
       width: 38px;
       height: 38px;
@@ -1648,22 +1444,9 @@ app.get('/', async (req, res) => {
       color: #ffffff;
       box-shadow: 0 8px 20px rgba(124, 58, 237, 0.35);
     }
-    .sp-brand-title {
-      font-size: 18px;
-      font-weight: 900;
-      letter-spacing: 0.04em;
-      color: #ffffff;
-    }
-    .sp-brand-sub {
-      font-size: 11.5px;
-      color: var(--text-secondary);
-    }
-    .sp-nav {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
+    .sp-brand-title { font-size: 18px; font-weight: 900; letter-spacing: 0.04em; color: #ffffff; }
+    .sp-brand-sub { font-size: 11.5px; color: var(--text-secondary); }
+    .sp-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .sp-nav-btn {
       text-decoration: none;
       padding: 9px 15px;
@@ -1698,37 +1481,16 @@ app.get('/', async (req, res) => {
       background: ${botOnline ? "#10b981" : "#f59e0b"};
       box-shadow: 0 0 10px ${botOnline ? "#10b981" : "#f59e0b"};
     }
-
-    .sp-stats-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 12px;
-      margin-bottom: 18px;
-    }
+    .sp-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
     .sp-stat-card {
       background: rgba(13, 19, 36, 0.85);
       border: 1px solid var(--border-subtle);
       border-radius: 14px;
       padding: 14px 16px;
     }
-    .sp-stat-label {
-      font-size: 11.5px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--text-secondary);
-      margin-bottom: 6px;
-    }
-    .sp-stat-value {
-      font-size: 20px;
-      font-weight: 800;
-      color: #ffffff;
-    }
-    .sp-stat-hint {
-      font-size: 11.5px;
-      color: var(--cyan);
-      margin-top: 4px;
-    }
-
+    .sp-stat-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 6px; }
+    .sp-stat-value { font-size: 20px; font-weight: 800; color: #ffffff; }
+    .sp-stat-hint { font-size: 11.5px; color: var(--cyan); margin-top: 4px; }
     .sp-panel {
       background: rgba(13, 19, 36, 0.88);
       border: 1px solid var(--border-subtle);
@@ -1756,13 +1518,7 @@ app.get('/', async (req, res) => {
       padding: 4px 10px;
       border-radius: 999px;
     }
-    .sp-label {
-      display: block;
-      font-size: 12.5px;
-      font-weight: 600;
-      color: #cbd5e1;
-      margin-bottom: 6px;
-    }
+    .sp-label { display: block; font-size: 12.5px; font-weight: 600; color: #cbd5e1; margin-bottom: 6px; }
     .sp-input, .sp-textarea, .sp-select {
       width: 100%;
       padding: 10px 12px;
@@ -1771,11 +1527,6 @@ app.get('/', async (req, res) => {
       background: #060913;
       color: #f8fafc;
       font-size: 13.5px;
-      transition: border-color 0.15s ease;
-    }
-    .sp-input:focus, .sp-textarea:focus, .sp-select:focus {
-      outline: none;
-      border-color: var(--violet-bright);
     }
     .sp-inline-input, .sp-inline-select {
       padding: 9px 12px;
@@ -1795,16 +1546,8 @@ app.get('/', async (req, res) => {
       font-size: 12.5px;
       max-width: 100%;
     }
-    .sp-btn-controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-    .sp-textarea {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      line-height: 1.5;
-    }
+    .sp-btn-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sp-textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.5; }
     .sp-btn {
       border: none;
       padding: 10px 16px;
@@ -1813,13 +1556,10 @@ app.get('/', async (req, res) => {
       font-size: 13px;
       color: #ffffff;
       cursor: pointer;
-      transition: transform 0.15s ease, filter 0.15s ease;
     }
-    .sp-btn:hover { transform: translateY(-1px); filter: brightness(1.08); }
     .sp-btn-emerald { background: linear-gradient(135deg, #10b981, #059669); }
     .sp-btn-blue { background: linear-gradient(135deg, #3b82f6, #2563eb); }
     .sp-btn-violet { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
-
     .sp-script-card {
       background: rgba(6, 9, 19, 0.72);
       border: 1px solid var(--border-subtle);
@@ -1827,28 +1567,10 @@ app.get('/', async (req, res) => {
       padding: 12px 14px;
       margin-bottom: 10px;
     }
-    .sp-script-head {
-      cursor: pointer;
-      list-style: none;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
+    .sp-script-head { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .sp-script-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .sp-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--cyan);
-    }
-    .sp-pill-muted {
-      font-size: 11.5px;
-      color: var(--text-secondary);
-      background: rgba(148, 163, 184, 0.1);
-      padding: 2px 8px;
-      border-radius: 999px;
-    }
+    .sp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); }
+    .sp-pill-muted { font-size: 11.5px; color: var(--text-secondary); background: rgba(148, 163, 184, 0.1); padding: 2px 8px; border-radius: 999px; }
     .sp-wl-row {
       display: flex;
       justify-content: space-between;
@@ -1859,6 +1581,7 @@ app.get('/', async (req, res) => {
       border-radius: 10px;
       margin-bottom: 8px;
       font-size: 13px;
+      gap: 10px;
     }
     .sp-table {
       width: 100%;
@@ -1869,55 +1592,13 @@ app.get('/', async (req, res) => {
       overflow: hidden;
       text-align: left;
     }
-    .sp-table-head {
-      background: rgba(19, 28, 52, 0.96);
-      color: var(--cyan);
-      font-size: 12.5px;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .sp-th, .sp-td {
-      padding: 11px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-      font-size: 13px;
-    }
-    .sp-key-chip {
-      background: rgba(124, 58, 237, 0.18);
-      border: 1px solid rgba(167, 139, 250, 0.35);
-      color: #ddd6fe;
-      padding: 4px 8px;
-      border-radius: 7px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .sp-badge-count {
-      background: rgba(34, 211, 238, 0.12);
-      color: var(--cyan);
-      padding: 3px 8px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .sp-loader-cell {
-      padding: 9px 12px 13px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-      background: rgba(6, 9, 19, 0.78);
-    }
-    .sp-loader-caption {
-      font-size: 11.5px;
-      color: var(--text-secondary);
-      margin-bottom: 5px;
-    }
-    .sp-loader-code {
-      margin: 0;
-      padding: 10px 12px;
-      background: #03050b;
-      border: 1px solid rgba(34, 211, 238, 0.18);
-      border-radius: 9px;
-      color: var(--cyan);
-      font-size: 12px;
-      overflow-x: auto;
-    }
+    .sp-table-head { background: rgba(19, 28, 52, 0.96); color: var(--cyan); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .sp-th, .sp-td { padding: 11px 12px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
+    .sp-key-chip { background: rgba(124, 58, 237, 0.18); border: 1px solid rgba(167, 139, 250, 0.35); color: #ddd6fe; padding: 4px 8px; border-radius: 7px; font-size: 12px; font-weight: 700; }
+    .sp-badge-count { background: rgba(34, 211, 238, 0.12); color: var(--cyan); padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .sp-loader-cell { padding: 9px 12px 13px 12px; border-bottom: 1px solid var(--border-subtle); background: rgba(6, 9, 19, 0.78); }
+    .sp-loader-caption { font-size: 11.5px; color: var(--text-secondary); margin-bottom: 5px; }
+    .sp-loader-code { margin: 0; padding: 10px 12px; background: #03050b; border: 1px solid rgba(34, 211, 238, 0.18); border-radius: 9px; color: var(--cyan); font-size: 12px; overflow-x: auto; }
     .sp-sub-muted { color: var(--text-secondary); font-size: 12px; }
     .sp-profile-chip { display: flex; align-items: center; gap: 9px; }
     .sp-avatar-sm { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(167, 139, 250, 0.45); flex-shrink: 0; }
@@ -1930,37 +1611,15 @@ app.get('/', async (req, res) => {
     .sp-mb-8 { margin-bottom: 8px; }
     .sp-mb-12 { margin-bottom: 12px; }
     .sp-mt-12 { margin-top: 12px; }
-
-    .sp-toast {
-      padding: 11px 15px;
-      border-radius: 12px;
-      margin-bottom: 16px;
-      font-size: 13px;
-      font-weight: 600;
-    }
+    .sp-toast { padding: 11px 15px; border-radius: 12px; margin-bottom: 16px; font-size: 13px; font-weight: 600; }
     .sp-toast-ok { background: rgba(16, 185, 129, 0.16); border: 1px solid rgba(16, 185, 129, 0.4); color: #a7f3d0; }
     .sp-toast-info { background: rgba(59, 130, 246, 0.16); border: 1px solid rgba(59, 130, 246, 0.4); color: #bfdbfe; }
     .sp-toast-err { background: rgba(244, 63, 94, 0.16); border: 1px solid rgba(244, 63, 94, 0.4); color: #fecdd3; }
     .sp-toast-violet { background: rgba(139, 92, 246, 0.18); border: 1px solid rgba(139, 92, 246, 0.45); color: #ddd6fe; }
-
-    .btn-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-bottom: 14px;
-    }
-    .sp-btn-box {
-      background: rgba(6, 9, 19, 0.72);
-      border: 1px solid var(--border-subtle);
-      border-radius: 12px;
-      padding: 11px;
-    }
-    @media (max-width: 820px) {
-      .sp-stats-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 640px) {
-      .sp-stats-grid, .btn-grid { grid-template-columns: 1fr; }
-    }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .sp-btn-box { background: rgba(6, 9, 19, 0.72); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 11px; }
+    @media (max-width: 820px) { .sp-stats-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 640px) { .sp-stats-grid, .btn-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -2125,9 +1784,10 @@ app.get('/', async (req, res) => {
       </select>
       <select name="duration" class="sp-inline-select">
         <option value="1h">1 hour</option>
-        <option value="5h">5 hours</option>
-        <option value="24h">24 hours</option>
+        <option value="5h">5 hour</option>
+        <option value="24h">24 hour</option>
         <option value="3d">3 day</option>
+        <option value="5d">5 day</option>
         <option value="7d">7 day</option>
         <option value="lifetime" selected>lifetime</option>
       </select>
@@ -2161,19 +1821,21 @@ app.get('/', async (req, res) => {
       ${wlListHtml}
     </div>
 
-    <table class="sp-table">
-      <tr class="sp-table-head">
-        <th class="sp-th">Açar (Tam)</th>
-        <th class="sp-th">Sahibi</th>
-        <th class="sp-th">Alan / Profil</th>
-        <th class="sp-th">Skript</th>
-        <th class="sp-th">Limit</th>
-        <th class="sp-th">Müddət</th>
-        <th class="sp-th">Auto Role</th>
-        <th class="sp-th">Əməliyyat</th>
-      </tr>
-      ${rows}
-    </table>
+    <div style="overflow-x:auto;">
+      <table class="sp-table">
+        <tr class="sp-table-head">
+          <th class="sp-th">Açar (Tam)</th>
+          <th class="sp-th">Sahibi</th>
+          <th class="sp-th">Alan / Profil</th>
+          <th class="sp-th">Skript</th>
+          <th class="sp-th">Limit</th>
+          <th class="sp-th">Müddət</th>
+          <th class="sp-th">Auto Role</th>
+          <th class="sp-th">Əməliyyat</th>
+        </tr>
+        ${rows}
+      </table>
+    </div>
     `}
   </div>
 </body>
@@ -2200,6 +1862,7 @@ app.post('/save-bot', async (req, res) => {
         await startDiscordBot();
         if (isBotCurrentlyOnline()) {
             await refreshGuildRoles(discordClient);
+            await syncDiscordSlashCommands();
         }
         res.redirect('/?tab=discord&msg=bot_saved');
     } catch (err) {
@@ -2221,12 +1884,12 @@ app.post('/save-panel-style', (req, res) => {
         }
 
         store.discordConfig.btnRedeemLabel = String(req.body.btnRedeemLabel || "Redeem Key").trim().slice(0, 80);
-        store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Success");
+        store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Primary");
         store.discordConfig.btnRedeemEmoji = String(req.body.btnRedeemEmoji || "").trim().slice(0, 24);
         store.discordConfig.btnRedeemOrder = cleanOrder(req.body.btnRedeemOrder, 1);
 
         store.discordConfig.btnScriptLabel = String(req.body.btnScriptLabel || "Get Script").trim().slice(0, 80);
-        store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Primary");
+        store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Success");
         store.discordConfig.btnScriptEmoji = String(req.body.btnScriptEmoji || "").trim().slice(0, 24);
         store.discordConfig.btnScriptOrder = cleanOrder(req.body.btnScriptOrder, 2);
 
@@ -2235,8 +1898,8 @@ app.post('/save-panel-style', (req, res) => {
         store.discordConfig.btnHwidEmoji = String(req.body.btnHwidEmoji || "").trim().slice(0, 24);
         store.discordConfig.btnHwidOrder = cleanOrder(req.body.btnHwidOrder, 3);
 
-        store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Get Stats").trim().slice(0, 80);
-        store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Secondary");
+        store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Key Info").trim().slice(0, 80);
+        store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Primary");
         store.discordConfig.btnStatsEmoji = String(req.body.btnStatsEmoji || "").trim().slice(0, 24);
         store.discordConfig.btnStatsOrder = cleanOrder(req.body.btnStatsOrder, 4);
 
@@ -2312,106 +1975,6 @@ app.get('/delete-script', async (req, res) => {
     }
 });
 
-app.post('/save-panel-style', (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        const allowedStyles = new Set(["Success", "Primary", "Secondary", "Danger"]);
-        const cleanStyle = (val, def) => allowedStyles.has(String(val || "")) ? String(val) : def;
-
-        store.discordConfig.panelEmbedTitle = String(req.body.panelEmbedTitle || "{script} — Control Panel").trim().slice(0, 200);
-        store.discordConfig.panelEmbedDesc = String(req.body.panelEmbedDesc || "").trim().slice(0, 2000) || store.discordConfig.panelEmbedDesc;
-        const hex = String(req.body.panelEmbedColor || "#7c3aed").trim();
-        if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
-            store.discordConfig.panelEmbedColor = hex;
-        }
-
-        store.discordConfig.btnRedeemLabel = String(req.body.btnRedeemLabel || "Redeem Key").trim().slice(0, 80);
-        store.discordConfig.btnRedeemStyle = cleanStyle(req.body.btnRedeemStyle, "Success");
-
-        store.discordConfig.btnScriptLabel = String(req.body.btnScriptLabel || "Get Script").trim().slice(0, 80);
-        store.discordConfig.btnScriptStyle = cleanStyle(req.body.btnScriptStyle, "Primary");
-
-        store.discordConfig.btnHwidLabel = String(req.body.btnHwidLabel || "Reset HWID").trim().slice(0, 80);
-        store.discordConfig.btnHwidStyle = cleanStyle(req.body.btnHwidStyle, "Secondary");
-
-        store.discordConfig.btnStatsLabel = String(req.body.btnStatsLabel || "Get Stats").trim().slice(0, 80);
-        store.discordConfig.btnStatsStyle = cleanStyle(req.body.btnStatsStyle, "Secondary");
-
-        saveStoreToDisk();
-        res.redirect('/?view=panel&tab=discord&msg=panel_style_saved');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/new-script', async (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        const sName = String(req.body.scriptName || "").trim();
-        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
-        if (!sName) {
-            return res.redirect('/?view=panel');
-        }
-        store.scripts.push({
-            id: makeSlugId(sName),
-            name: sName.slice(0, 60),
-            code: sCode
-        });
-        saveStoreToDisk();
-        await syncDiscordSlashCommands();
-        res.redirect('/?view=panel&msg=script_created');
-    } catch (err) {
-        res.status(500).send("Xeta bas verdi");
-    }
-});
-
-app.post('/edit-script', async (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        const targetId = String(req.body.scriptId || "");
-        const sName = String(req.body.scriptName || "").trim();
-        const sCode = typeof req.body.scriptCode === "string" ? req.body.scriptCode : "";
-        const found = store.scripts.find(s => s.id === targetId);
-        if (found && sName) {
-            found.name = sName.slice(0, 60);
-            found.code = sCode;
-            saveStoreToDisk();
-            await syncDiscordSlashCommands();
-        }
-        res.redirect('/?msg=script_updated');
-    } catch (err) {
-        res.status(500).send("Xəta baş verdi");
-    }
-});
-
-app.get('/delete-script', async (req, res) => {
-    try {
-        if (!isAdminAuthorized(req)) return res.status(403).send("Icase yoxdur!");
-        const targetId = String(req.query.id || "").trim();
-        if (targetId) {
-            store.scripts = store.scripts.filter(s => s.id !== targetId);
-            if (store.scripts.length === 0) {
-                store.scripts.push({
-                    id: "sado-hub",
-                    name: "SADO HUB",
-                    code: `-- SADO HUB Script\nprint("SADOPROTECT Aktivdir!")`
-                });
-            }
-            const fallbackId = store.scripts[0].id;
-            for (const k in store.keys) {
-                if (store.keys[k].scriptId === targetId) {
-                    store.keys[k].scriptId = fallbackId;
-                }
-            }
-            saveStoreToDisk();
-            await syncDiscordSlashCommands();
-        }
-        res.redirect('/?msg=script_deleted');
-    } catch (err) {
-        res.status(500).send("Xəta baş verdi");
-    }
-});
-
 app.get('/copy', (req, res) => {
     const rawText = String(req.query.text || "");
     const safeJsLiteral = JSON.stringify(rawText);
@@ -2447,12 +2010,7 @@ app.get('/copy', (req, res) => {
       box-shadow: 0 12px 30px rgba(0,0,0,0.45);
       cursor: pointer;
     }
-    .status {
-      font-size: 14px;
-      font-weight: 700;
-      color: #34d399;
-      margin-bottom: 10px;
-    }
+    .status { font-size: 14px; font-weight: 700; color: #34d399; margin-bottom: 10px; }
     pre {
       margin: 0;
       padding: 14px;
@@ -2464,11 +2022,7 @@ app.get('/copy', (req, res) => {
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .hint {
-      margin-top: 10px;
-      font-size: 12px;
-      color: #94a3b8;
-    }
+    .hint { margin-top: 10px; font-size: 12px; color: #94a3b8; }
   </style>
 </head>
 <body onclick="copyNow()">
@@ -2520,9 +2074,27 @@ app.get('/create', (req, res) => {
             req.query.owner,
             req.query.duration,
             req.query.scriptId,
+            req.query.maxUsers,
+            req.query.autoRoleId
+        );
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
 app.post('/whitelist', async (req, res) => {
     try {
         await addToWhitelist(req.body.target, req.body.scriptId, req.body.duration);
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send("Xəta baş verdi");
+    }
+});
+
+app.get('/unwhitelist', (req, res) => {
+    try {
+        removeFromWhitelist(req.query.id);
         res.redirect('/');
     } catch (err) {
         res.status(500).send("Xəta baş verdi");
@@ -2555,24 +2127,6 @@ app.get('/delete', (req, res) => {
     }
 });
 
-app.post('/whitelist', (req, res) => {
-    try {
-        addToWhitelist(req.body.target, req.body.scriptId);
-        res.redirect('/');
-    } catch (err) {
-        res.status(500).send("Xəta baş verdi");
-    }
-});
-
-app.get('/unwhitelist', (req, res) => {
-    try {
-        removeFromWhitelist(req.query.id);
-        res.redirect('/');
-    } catch (err) {
-        res.status(500).send("Xəta baş verdi");
-    }
-});
-
 app.get('/loader', (req, res) => {
     try {
         purgeExpiredKeys();
@@ -2582,7 +2136,6 @@ app.get('/loader', (req, res) => {
         const userHwid = String(req.query.hwid || "").trim();
         const userAgent = String(req.headers['user-agent'] || "");
 
-        // Yalnız Roblox sorğularına icazə verilir; brauzer/curl/scraper sorğularında heç bir key və ya kod sızdırılmır
         if (!userAgent.includes("Roblox")) {
             return res.status(403).type('text/plain').send('-- SADOPROTECT: Access Denied!');
         }
@@ -2609,7 +2162,6 @@ app.get('/loader', (req, res) => {
             return res.status(403).type('text/plain').send('game.Players.LocalPlayer:Kick("SADOPROTECT: Loader biletinin vaxti bitib! Yeniden Get Script basin.")');
         }
 
-        // Bilet bir dəfə istifadə olunur ki, link başqasına ötürülsə belə təkrar kod sızdırmasın
         ticketData.used = true;
         loaderTickets.delete(ticketId);
 
