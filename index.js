@@ -116,7 +116,7 @@ function normalizeStore(raw, fallbackRaw = null) {
     base.keys = mergeObjectsPreserve(a.keys, b.keys);
     base.whitelist = mergeObjectsPreserve(a.whitelist, b.whitelist);
     base.panels = mergeObjectsPreserve(a.panels, b.panels);
-    base.tickets = {};
+    base.tickets = mergeObjectsPreserve(a.tickets, b.tickets);
 
     const cfgSource = (a.panelConfig && typeof a.panelConfig === 'object' && Object.keys(a.panelConfig).length > 0)
         ? a.panelConfig
@@ -169,8 +169,7 @@ let store = loadStoreFromDisk();
 function saveStoreToDisk() {
     try {
         const snapshot = {
-            ...store,
-            tickets: {}
+            ...store
         };
         const json = JSON.stringify(snapshot, null, 2);
         const tmpFile = `${STORE_FILE}.tmp`;
@@ -563,9 +562,9 @@ async function restartDiscordBot(newToken) {
 
                 if (action === 'copy') {
                     const ticket = store.tickets[param];
-                    if (!ticket || Date.now() > ticket.expiresAt) {
+                    if (!ticket) {
                         await interaction.reply({
-                            content: 'Bu biletin vaxtı bitib. Yenidən **Get Script** düyməsinə basın.',
+                            content: 'Bu loader tapılmadı. Yenidən **Get Script** düyməsinə basın.',
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -624,8 +623,9 @@ async function restartDiscordBot(newToken) {
                         scriptId,
                         userId: interaction.user.id,
                         loaderCode,
-                        expiresAt: Date.now() + 90 * 1000
+                        expiresAt: null
                     };
+                    saveStoreToDisk();
 
                     const expText = access.record.expiresAt
                         ? `<t:${Math.floor(access.record.expiresAt / 1000)}:F>`
@@ -641,7 +641,7 @@ async function restartDiscordBot(newToken) {
                     await interaction.reply({
                         content:
                             `**SADOPROTECT Qorunan Loader** (\`${scriptObj.id}\` · v${scriptObj.version || 1})\n` +
-                            `Müddət: **${expText}** · *Qeyd: Bu birdəfəlik təhlükəsizlik bileti 90 saniyə etibarlıdır.*\n` +
+                            `Müddət: **${expText}** · *Loader ömürlük etibarlıdır.*\n` +
                             `\`\`\`lua\n${loaderCode}\n\`\`\``,
                         components: [copyRow],
                         flags: MessageFlags.Ephemeral
@@ -1316,13 +1316,12 @@ const server = http.createServer(async (req, res) => {
             const hwid = (parsed.searchParams.get('hwid') || '').trim();
             const ticket = store.tickets[ticketId];
 
-            if (!ticket || Date.now() > ticket.expiresAt) {
+            if (!ticket) {
                 res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end('warn("[SADO PROTECT] Bilet vaxti bitib! Discord-da yeniden Get Script basin.")');
+                res.end('warn("[SADO PROTECT] Bilet tapilmadi! Discord-da Get Script basin.")');
                 return;
             }
 
-            delete store.tickets[ticketId];
             const access = checkUserAccess(ticket.userId, ticket.scriptId);
             const scriptObj = store.scripts[ticket.scriptId];
 
@@ -1539,7 +1538,7 @@ const server = http.createServer(async (req, res) => {
                 'Content-Type': 'application/json; charset=utf-8',
                 'Content-Disposition': 'attachment; filename="sado-protect-backup.json"'
             });
-            res.end(JSON.stringify({ ...store, tickets: {} }, null, 2));
+            res.end(JSON.stringify({ ...store }, null, 2));
             return;
         }
 
