@@ -756,30 +756,57 @@ async function restartDiscordBot(newToken) {
                     await assignRoleToUser(interaction.guild, interaction.user.id, roleToGive);
                 }
 
-                const expText = keyObj.expiresAt ? `<t:${Math.floor(keyObj.expiresAt / 1000)}:F>` : 'Lifetime';
+                const expText = keyObj.expiresAt
+                    ? `<t:${Math.floor(keyObj.expiresAt / 1000)}:F>`
+                    : 'Lifetime';
+
                 await interaction.reply({
-                    content: `✅ Key uğurla aktivləşdirildi! **${scriptObj.name}** üçün girişiniz hazırdır (**${expText}**). İndi **Get Script** düyməsinə basa bilərsiniz.`,
+                    content: `✅ Key uğurla aktivləşdirildi! İndi **Get Script** basıb skripti götürə bilərsiniz.\n• **Skript:** ${scriptObj.name}\n• **Müddət:** ${expText}`,
                     flags: MessageFlags.Ephemeral
                 });
+                return;
             }
         } catch (err) {
             console.error('Interaction xətası:', err);
             if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: `Xəta baş verdi: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                await interaction.reply({ content: 'Əməliyyat zamanı xəta baş verdi.', flags: MessageFlags.Ephemeral }).catch(() => {});
             }
         }
     });
 
     try {
         await client.login(token);
-        discordClient = client;
     } catch (err) {
         botStatus = { online: false, tag: '', error: err.message };
+        console.error('Discord bot giriş xətası:', err.message);
     }
+    discordClient = client;
     return botStatus;
 }
 
-// ================= VEB İNTERFEYS (HTML) =================
+// ================= SERVER (GUILD) İZOLYASİYASI KÖMƏKÇİLƏRİ =================
+function normalizeGuildId(raw) {
+    const clean = String(raw || '').trim();
+    return /^\d{5,25}$/.test(clean) ? clean : '';
+}
+
+function resolveGuildScope(req, body = null, parsedUrl = null) {
+    const raw =
+        (body && body.guildId) ||
+        req.headers['x-guild-id'] ||
+        (parsedUrl && parsedUrl.searchParams.get('guildId')) ||
+        store.guildId ||
+        '';
+    return normalizeGuildId(raw);
+}
+
+function belongsToGuild(record, activeGuildId) {
+    if (!record || typeof record !== 'object') return false;
+    const recGuild = normalizeGuildId(record.guildId || '');
+    if (!activeGuildId) return true;
+    return recGuild === activeGuildId;
+}
+
 function renderDashboardHtml() {
     return `<!DOCTYPE html>
 <html lang="az">
@@ -834,11 +861,24 @@ function renderDashboardHtml() {
     position: fixed; bottom: 16px; right: 16px; background: #10b981; color: #fff;
     padding: 10px 16px; border-radius: 8px; font-weight: 600; display: none; z-index: 999;
   }
+  .guild-bar {
+    background: #111827; border: 1px solid #38bdf8; border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .guild-bar input { width: auto; flex: 1; min-width: 190px; margin-top: 0; }
+  .guild-bar button { width: auto; margin-top: 0; padding: 9px 14px; }
 </style>
 </head>
 <body>
   <h1>🛡️ SADO PROTECT</h1>
-  <p class="sub">Skript qoruma, Key/Whitelist idarəetmə və Avto-Panel sinxronizasiyası</p>
+  <p class="sub">Serverə bağlı skript qoruma, Key/Whitelist idarəetmə və Avto-Panel sinxronizasiyası</p>
+
+  <div class="guild-bar">
+    <span id="guildBadge" class="badge ok">🌐 Server seçilməyib (Ümumi)</span>
+    <input type="text" id="activeGuildInput" placeholder="Öz Discord Server (Guild) ID-nizi yazın...">
+    <button class="blue" onclick="connectGuild()">Serverə Qoşul / Dəyiş</button>
+    <button class="sm" style="background:#334155;" onclick="clearGuild()">Ümumi</button>
+  </div>
 
   <div class="card">
     <h2>
@@ -967,6 +1007,18 @@ function renderDashboardHtml() {
 <script>
 let stateData = null;
 
+function getSelectedGuildId() {
+  try { return (localStorage.getItem('sado_selected_guild') || '').trim(); } catch (_) { return ''; }
+}
+
+function setSelectedGuildId(gid) {
+  try {
+    const clean = (gid || '').trim();
+    if (clean) localStorage.setItem('sado_selected_guild', clean);
+    else localStorage.removeItem('sado_selected_guild');
+  } catch (_) {}
+}
+
 function showToast(msg, isErr = false) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -976,12 +1028,38 @@ function showToast(msg, isErr = false) {
 }
 
 async function api(path, method = 'GET', body = null) {
-  const res = await fetch(path, {
+  const gid = getSelectedGuildId();
+  const headers = {};
+  if (gid) headers['X-Guild-Id'] = gid;
+  if (body) headers['Content-Type'] = 'application/json';
+
+  const sep = path.includes('?') ? '&' : '?';
+  const fullPath = gid ? `${path}${sep}guildId=${encodeURIComponent(gid)}` : path;
+
+  const res = await fetch(fullPath, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined
+    headers,
+    body: body ? JSON.stringify({ ...body, guildId: body.guildId !== undefined ? body.guildId : gid }) : undefined
   });
   return res.json();
+}
+
+function connectGuild() {
+  const val = document.getElementById('activeGuildInput').value.trim();
+  if (!/^\d{5,25}$/.test(val)) {
+    return showToast('Düzgün Discord Server (Guild) ID daxil edin!', true);
+  }
+  setSelectedGuildId(val);
+  document.getElementById('activeGuildInput').value = '';
+  showToast('Server seçildi: ' + val);
+  loadState();
+}
+
+function clearGuild() {
+  setSelectedGuildId('');
+  document.getElementById('activeGuildInput').value = '';
+  showToast('Ümumi görünüşə keçildi');
+  loadState();
 }
 
 function handleScriptFile(input) {
@@ -989,34 +1067,88 @@ function handleScriptFile(input) {
   if (!file) return;
   document.getElementById('fileNameLabel').textContent = file.name;
   if (!document.getElementById('scriptName').value.trim()) {
-    document.getElementById('scriptName').value = file.name.replace(/\\.(lua|txt)$/i, '');
+    document.getElementById('scriptName').value = file.name.replace(/\.(lua|txt)$/i, '');
   }
   const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('scriptCode').value = String(e.target.result || '');
-    showToast('Fayl oxundu: ' + file.name);
+  reader.onload = () => {
+    document.getElementById('scriptCode').value = String(reader.result || '');
+    showToast('Fayl yükləndi: ' + file.name);
   };
   reader.readAsText(file);
 }
 
+function renderButtonsConfig(buttons) {
+  const labels = {
+    redeem: '1. Redeem Key Düyməsi',
+    getScript: '2. Get Script Düyməsi',
+    resetHwid: '3. Reset HWID Düyməsi',
+    getStats: '4. Get Stats Düyməsi'
+  };
+  const area = document.getElementById('buttonsConfigArea');
+  area.innerHTML = '';
+  ['redeem', 'getScript', 'resetHwid', 'getStats'].forEach(key => {
+    const b = (buttons && buttons[key]) || {};
+    const box = document.createElement('div');
+    box.className = 'btn-box';
+    box.innerHTML = `
+      <div style="font-weight:600;font-size:0.88rem;margin-bottom:6px;color:#38bdf8;">${labels[key]}</div>
+      <div class="row-3">
+        <div>
+          <label>Mətn (Label):</label>
+          <input type="text" id="btn_label_${key}" value="${(b.label || '').replace(/"/g, '&quot;')}">
+        </div>
+        <div>
+          <label>Emoji:</label>
+          <input type="text" id="btn_emoji_${key}" value="${(b.emoji || '').replace(/"/g, '&quot;')}">
+        </div>
+        <div>
+          <label>Rəng (Style):</label>
+          <select id="btn_style_${key}">
+            ${['Primary', 'Success', 'Danger', 'Secondary'].map(st =>
+              `<option value="${st}" ${b.style === st ? 'selected' : ''}>${st}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Sıra (1-4):</label>
+          <input type="number" id="btn_order_${key}" min="1" max="4" value="${b.order || 1}">
+        </div>
+      </div>
+    `;
+    area.appendChild(box);
+  });
+}
+
 function loadSelectedScriptForEdit() {
-  const id = document.getElementById('editScriptSelect').value;
-  if (!id || !stateData || !stateData.scripts[id]) {
+  const selId = document.getElementById('editScriptSelect').value;
+  if (!selId || !stateData || !stateData.scripts[selId]) {
     document.getElementById('scriptName').value = '';
     document.getElementById('scriptRoleId').value = '';
     document.getElementById('scriptCode').value = '';
     document.getElementById('fileNameLabel').textContent = '';
     return;
   }
-  const s = stateData.scripts[id];
-  document.getElementById('scriptName').value = s.name || '';
-  document.getElementById('scriptRoleId').value = s.roleId || '';
-  document.getElementById('scriptCode').value = s.code || '';
-  document.getElementById('fileNameLabel').textContent = s.fileName || '';
+  const sc = stateData.scripts[selId];
+  document.getElementById('scriptName').value = sc.name || '';
+  document.getElementById('scriptRoleId').value = sc.roleId || '';
+  document.getElementById('scriptCode').value = sc.code || '';
+  document.getElementById('fileNameLabel').textContent = sc.fileName || '';
 }
 
 async function loadState() {
   stateData = await api('/api/state');
+  const activeGid = getSelectedGuildId();
+  const guildBadge = document.getElementById('guildBadge');
+  if (guildBadge) {
+    if (activeGid) {
+      guildBadge.textContent = '🌐 Aktiv Server ID: ' + activeGid;
+      guildBadge.className = 'badge ok';
+    } else {
+      guildBadge.textContent = '🌐 Server seçilməyib (Ümumi)';
+      guildBadge.className = 'badge';
+    }
+  }
+
   const badge = document.getElementById('botStatusBadge');
   if (stateData.botStatus && stateData.botStatus.online) {
     badge.textContent = 'Onlayn: ' + stateData.botStatus.tag;
@@ -1026,154 +1158,131 @@ async function loadState() {
     badge.className = 'badge err';
   }
 
-  if (stateData.hasToken && !document.getElementById('botToken').value) {
-    document.getElementById('botToken').placeholder = 'Token saxlanılıb (dəyişmək üçün yenisini yazın)';
-  }
   document.getElementById('roleId').value = stateData.roleId || '';
-  document.getElementById('guildId').value = stateData.guildId || '';
+  document.getElementById('guildId').value = stateData.guildId || activeGid || '';
 
   const scripts = Object.values(stateData.scripts || {});
-  const editSel = document.getElementById('editScriptSelect');
   const targetSel = document.getElementById('targetScriptId');
-  const prevEdit = editSel.value;
   const prevTarget = targetSel.value;
-
-  editSel.innerHTML = '<option value="">+ Yeni Skript Yarat</option>';
-  targetSel.innerHTML = '';
-
-  const listDiv = document.getElementById('scriptsList');
-  listDiv.innerHTML = '';
-
-  scripts.forEach(s => {
-    editSel.innerHTML += '<option value="' + s.id + '">Update: ' + s.name + ' (v' + (s.version || 1) + ')</option>';
-    targetSel.innerHTML += '<option value="' + s.id + '">' + s.name + '</option>';
-
-    listDiv.innerHTML +=
-      '<div class="list-item">' +
-        '<div><strong>' + s.name + '</strong> <span class="badge">v' + (s.version || 1) + '</span> ' +
-        '<span class="muted">ID: ' + s.id + (s.fileName ? ' · Fayl: ' + s.fileName : '') + '</span></div>' +
-        '<div style="display:flex;gap:6px;">' +
-          '<button class="blue sm" onclick="selectForUpdate(\\'' + s.id + '\\')">Update Et</button>' +
-          '<button class="danger" onclick="deleteScript(\\'' + s.id + '\\')">Sil</button>' +
-        '</div>' +
-      '</div>';
-  });
-
-  if (prevEdit && stateData.scripts[prevEdit]) editSel.value = prevEdit;
+  targetSel.innerHTML = scripts.map(s =>
+    `<option value="${s.id}">${s.name} (v${s.version || 1})</option>`
+  ).join('');
   if (prevTarget && stateData.scripts[prevTarget]) targetSel.value = prevTarget;
 
-  const cfg = stateData.panelConfig;
+  const editSel = document.getElementById('editScriptSelect');
+  const prevEdit = editSel.value;
+  editSel.innerHTML = '<option value="">+ Yeni Skript Yarat</option>' + scripts.map(s =>
+    `<option value="${s.id}">${s.name} (v${s.version || 1})</option>`
+  ).join('');
+  if (prevEdit && stateData.scripts[prevEdit]) editSel.value = prevEdit;
+
+  const scriptsList = document.getElementById('scriptsList');
+  scriptsList.innerHTML = scripts.length ? scripts.map(s => `
+    <div class="list-item">
+      <div>
+        <strong>${s.name}</strong> <span class="badge">ID: ${s.id}</span> <span class="badge ok">v${s.version || 1}</span>
+        ${s.guildId ? `<span class="badge">Server: ${s.guildId}</span>` : ''}
+        <div class="muted">${s.fileName ? 'Fayl: ' + s.fileName + ' • ' : ''}Kod uzunluğu: ${(s.code || '').length} simvol</div>
+      </div>
+      <button class="danger" onclick="deleteScript('${s.id}')">Sil</button>
+    </div>
+  `).join('') : '<div class="muted">Hələ skript əlavə edilməyib.</div>';
+
+  const holders = [];
+  Object.values(stateData.whitelist || {}).forEach(w => {
+    holders.push({
+      type: 'Whitelist',
+      userId: w.userId,
+      username: w.username || w.userId,
+      displayName: w.displayName || w.username || w.userId,
+      avatarUrl: w.avatarUrl || '',
+      profileUrl: w.profileUrl || `https://discord.com/users/${w.userId}`,
+      scriptId: w.scriptId,
+      durationLabel: w.durationLabel || 'lifetime',
+      expiresAt: w.expiresAt,
+      hwid: w.hwid,
+      removeAction: `removeWhitelist('${w.scriptId}:${w.userId}')`
+    });
+  });
+  Object.values(stateData.keys || {}).forEach(k => {
+    if (k.redeemedBy) {
+      holders.push({
+        type: 'Key (' + k.code + ')',
+        userId: k.redeemedBy,
+        username: k.username || k.redeemedBy,
+        displayName: k.displayName || k.username || k.redeemedBy,
+        avatarUrl: k.avatarUrl || '',
+        profileUrl: k.profileUrl || `https://discord.com/users/${k.redeemedBy}`,
+        scriptId: k.scriptId,
+        durationLabel: k.durationLabel || 'lifetime',
+        expiresAt: k.expiresAt,
+        hwid: k.hwid,
+        removeAction: `deleteKey('${k.code}')`
+      });
+    }
+  });
+
+  const holdersList = document.getElementById('holdersList');
+  holdersList.innerHTML = holders.length ? holders.map(h => {
+    const expText = h.expiresAt ? new Date(h.expiresAt).toLocaleString('az-AZ') : 'Lifetime';
+    return `
+      <div class="list-item">
+        <div class="user-chip">
+          <img src="${h.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="">
+          <div>
+            <a href="${h.profileUrl}" target="_blank">${h.displayName}</a> <span class="muted">(@${h.username})</span>
+            <div class="muted">ID: ${h.userId} • Skript: <b>${h.scriptId}</b> • ${h.type} • Müddət: ${expText}</div>
+            <div class="muted">HWID: ${h.hwid ? h.hwid : 'Bağlanmayıb'}</div>
+          </div>
+        </div>
+        <button class="danger" onclick="${h.removeAction}">Sil</button>
+      </div>
+    `;
+  }).join('') : '<div class="muted">Hələ aktiv key və ya whitelist istifadəçisi yoxdur.</div>';
+
+  const cfg = stateData.panelConfig || {};
   document.getElementById('panelTitle').value = cfg.title || '';
   document.getElementById('panelDesc').value = cfg.description || '';
   document.getElementById('panelColor').value = cfg.color || '#00FF00';
-
-  const btnMeta = [
-    { key: 'redeem', title: 'Redeem Key Butonu' },
-    { key: 'getScript', title: 'Get Script Butonu' },
-    { key: 'resetHwid', title: 'Reset HWID Butonu' },
-    { key: 'getStats', title: 'Get Stats Butonu' }
-  ];
-  const btnArea = document.getElementById('buttonsConfigArea');
-  btnArea.innerHTML = '';
-  btnMeta.forEach(m => {
-    const b = cfg.buttons[m.key];
-    btnArea.innerHTML +=
-      '<div class="btn-box">' +
-        '<label>' + m.title + '</label>' +
-        '<div class="row-3">' +
-          '<input type="text" id="btn_label_' + m.key + '" value="' + (b.label || '') + '" placeholder="Ad">' +
-          '<input type="text" id="btn_emoji_' + m.key + '" value="' + (b.emoji || '') + '" placeholder="Emoji (boş ola bilər)">' +
-          '<select id="btn_style_' + m.key + '">' +
-            '<option value="Primary"' + (b.style === 'Primary' ? ' selected' : '') + '>Mavi</option>' +
-            '<option value="Success"' + (b.style === 'Success' ? ' selected' : '') + '>Yaşıl</option>' +
-            '<option value="Danger"' + (b.style === 'Danger' ? ' selected' : '') + '>Qırmızı</option>' +
-            '<option value="Secondary"' + (b.style === 'Secondary' ? ' selected' : '') + '>Boz</option>' +
-          '</select>' +
-          '<select id="btn_order_' + m.key + '">' +
-            '<option value="1"' + (Number(b.order) === 1 ? ' selected' : '') + '>Yer: 1</option>' +
-            '<option value="2"' + (Number(b.order) === 2 ? ' selected' : '') + '>Yer: 2</option>' +
-            '<option value="3"' + (Number(b.order) === 3 ? ' selected' : '') + '>Yer: 3</option>' +
-            '<option value="4"' + (Number(b.order) === 4 ? ' selected' : '') + '>Yer: 4</option>' +
-          '</select>' +
-        '</div>' +
-      '</div>';
-  });
-
-  const holdersDiv = document.getElementById('holdersList');
-  holdersDiv.innerHTML = '';
-
-  Object.entries(stateData.whitelist || {}).forEach(([wlKey, w]) => {
-    const avatar = w.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png';
-    const profileUrl = w.profileUrl || ('https://discord.com/users/' + w.userId);
-    const name = w.displayName || w.username || w.userId;
-    holdersDiv.innerHTML +=
-      '<div class="list-item">' +
-        '<div class="user-chip">' +
-          '<img src="' + avatar + '" alt="">' +
-          '<div>' +
-            '<a href="' + profileUrl + '" target="_blank">' + name + '</a> ' +
-            '<span class="badge ok">Whitelist · ' + (w.durationLabel || 'lifetime') + '</span>' +
-            '<div class="muted">ID: ' + w.userId + ' · Skript: ' + w.scriptId + '</div>' +
-          '</div>' +
-        '</div>' +
-        '<button class="danger" onclick="removeWhitelist(\\'' + wlKey + '\\')">Sil</button>' +
-      '</div>';
-  });
-
-  Object.values(stateData.keys || {}).forEach(k => {
-    const avatar = k.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png';
-    const profileUrl = k.redeemedBy ? (k.profileUrl || 'https://discord.com/users/' + k.redeemedBy) : '#';
-    const holderName = k.redeemedBy ? (k.displayName || k.username || k.redeemedBy) : 'İstifadə olunmayıb';
-    holdersDiv.innerHTML +=
-      '<div class="list-item">' +
-        '<div class="user-chip">' +
-          '<img src="' + avatar + '" alt="">' +
-          '<div>' +
-            (k.redeemedBy
-              ? '<a href="' + profileUrl + '" target="_blank">' + holderName + '</a> '
-              : '<strong>' + holderName + '</strong> ') +
-            '<span class="badge">Key: ' + k.code + ' (' + (k.durationLabel || 'lifetime') + ')</span>' +
-            '<div class="muted">Skript: ' + k.scriptId + (k.redeemedBy ? ' · ID: ' + k.redeemedBy : '') + '</div>' +
-          '</div>' +
-        '</div>' +
-        '<button class="danger" onclick="deleteKey(\\'' + k.code + '\\')">Key Sil</button>' +
-      '</div>';
-  });
-}
-
-function selectForUpdate(id) {
-  document.getElementById('editScriptSelect').value = id;
-  loadSelectedScriptForEdit();
-  window.scrollTo({ top: 150, behavior: 'smooth' });
+  renderButtonsConfig(cfg.buttons || {});
 }
 
 async function saveBotSettings() {
-  const token = document.getElementById('botToken').value.trim();
+  const botToken = document.getElementById('botToken').value.trim();
   const roleId = document.getElementById('roleId').value.trim();
   const guildId = document.getElementById('guildId').value.trim();
+  if (guildId && /^\d{5,25}$/.test(guildId)) {
+    setSelectedGuildId(guildId);
+  }
   const res = await api('/api/bot-settings', 'POST', {
-    botToken: token || undefined,
+    botToken: botToken || undefined,
     roleId,
     guildId
   });
-  showToast(res.ok ? 'Bot ayarları saxlanıldı!' : (res.error || 'Xəta'), !res.ok);
+  if (res.ok) {
+    document.getElementById('botToken').value = '';
+    showToast(res.botStatus && res.botStatus.online ? 'Bot qoşuldu: ' + res.botStatus.tag : 'Ayarlar saxlanıldı');
+  } else {
+    showToast(res.error || 'Xəta', true);
+  }
   loadState();
 }
 
 async function saveOrUpdateScript() {
-  const existingId = document.getElementById('editScriptSelect').value;
+  const existingId = document.getElementById('editScriptSelect').value.trim();
   const name = document.getElementById('scriptName').value.trim();
   const roleId = document.getElementById('scriptRoleId').value.trim();
   const code = document.getElementById('scriptCode').value;
   const fileName = document.getElementById('fileNameLabel').textContent.trim();
+  const activeGid = getSelectedGuildId();
 
   if (!name || !code.trim()) {
-    showToast('Skript adı və ya kodu boş ola bilməz!', true);
-    return;
+    return showToast('Skript adı və Lua kodu mütləqdir!', true);
   }
 
   const res = await api('/api/scripts', 'POST', {
     id: existingId || undefined,
+    guildId: activeGid || undefined,
     name,
     roleId,
     code,
@@ -1363,14 +1472,35 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (req.method === 'GET' && pathname === '/api/state') {
+            const activeGuildId = resolveGuildScope(req, null, parsed);
+            const scopedScripts = {};
+            for (const [k, v] of Object.entries(store.scripts || {})) {
+                if (belongsToGuild(v, activeGuildId)) {
+                    scopedScripts[k] = v;
+                }
+            }
+            const scopedKeys = {};
+            for (const [k, v] of Object.entries(store.keys || {})) {
+                const sc = store.scripts[v.scriptId];
+                if (belongsToGuild(v, activeGuildId) || (activeGuildId && sc && normalizeGuildId(sc.guildId) === activeGuildId) || !activeGuildId) {
+                    scopedKeys[k] = v;
+                }
+            }
+            const scopedWhitelist = {};
+            for (const [k, v] of Object.entries(store.whitelist || {})) {
+                const sc = store.scripts[v.scriptId];
+                if (belongsToGuild(v, activeGuildId) || (activeGuildId && sc && normalizeGuildId(sc.guildId) === activeGuildId) || !activeGuildId) {
+                    scopedWhitelist[k] = v;
+                }
+            }
+
             sendJson(res, 200, {
-                hasToken: Boolean(store.botToken),
-                guildId: store.guildId,
+                guildId: activeGuildId || store.guildId,
                 roleId: store.roleId,
                 botStatus,
-                scripts: store.scripts,
-                keys: store.keys,
-                whitelist: store.whitelist,
+                scripts: scopedScripts,
+                keys: scopedKeys,
+                whitelist: scopedWhitelist,
                 panelConfig: store.panelConfig
             });
             return;
@@ -1393,6 +1523,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'POST' && pathname === '/api/scripts') {
             const body = await readJsonBody(req);
+            const guildId = resolveGuildScope(req, body, parsed);
             const name = String(body.name || '').trim();
             const code = String(body.code || '');
             const roleId = String(body.roleId || '').trim();
@@ -1405,13 +1536,17 @@ const server = http.createServer(async (req, res) => {
             const requestedId = body.id ? String(body.id).trim() : '';
             const existing = requestedId && store.scripts[requestedId]
                 ? store.scripts[requestedId]
-                : Object.values(store.scripts).find(s => s.name.toLowerCase() === name.toLowerCase());
+                : Object.values(store.scripts).find(s =>
+                    s.name.toLowerCase() === name.toLowerCase() &&
+                    (!guildId || normalizeGuildId(s.guildId) === guildId)
+                );
 
             let scriptId;
             if (existing) {
                 scriptId = existing.id;
                 store.scripts[scriptId] = {
                     ...existing,
+                    guildId: guildId || existing.guildId || '',
                     name,
                     code,
                     roleId,
@@ -1426,6 +1561,7 @@ const server = http.createServer(async (req, res) => {
                 }
                 store.scripts[scriptId] = {
                     id: scriptId,
+                    guildId,
                     name,
                     code,
                     roleId,
@@ -1452,6 +1588,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'POST' && pathname === '/api/keys') {
             const body = await readJsonBody(req);
+            const guildId = resolveGuildScope(req, body, parsed);
             const scriptId = String(body.scriptId || '').trim();
             if (!store.scripts[scriptId]) {
                 sendJson(res, 400, { ok: false, error: 'Əvvəlcə skript seçin' });
@@ -1466,6 +1603,7 @@ const server = http.createServer(async (req, res) => {
                 const code = generateLicenseKey();
                 store.keys[code] = {
                     code,
+                    guildId: guildId || normalizeGuildId(store.scripts[scriptId].guildId),
                     scriptId,
                     durationLabel,
                     durationMs,
@@ -1491,6 +1629,7 @@ const server = http.createServer(async (req, res) => {
 
         if (req.method === 'POST' && pathname === '/api/whitelist') {
             const body = await readJsonBody(req);
+            const guildId = resolveGuildScope(req, body, parsed);
             const scriptId = String(body.scriptId || '').trim();
             const userId = String(body.userId || '').trim();
             const durationLabel = String(body.durationLabel || 'lifetime');
@@ -1515,6 +1654,7 @@ const server = http.createServer(async (req, res) => {
 
             const wlKey = `${scriptId}:${userId}`;
             store.whitelist[wlKey] = {
+                guildId: guildId || normalizeGuildId(store.scripts[scriptId].guildId),
                 scriptId,
                 userId,
                 username,
