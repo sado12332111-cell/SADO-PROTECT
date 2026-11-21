@@ -65,6 +65,15 @@ function createDefaultState() {
 
 let state = createDefaultState();
 
+function persistState() {
+    ensureDataDir();
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf8');
+    } catch (err) {
+        console.error('[SADO PROTECT] State yazılarkən xəta:', err.message);
+    }
+}
+
 function loadState() {
     ensureDataDir();
     try {
@@ -97,6 +106,55 @@ function loadState() {
         state = createDefaultState();
     }
 }
+
+loadState();
+
+function parseDurationToMs(input) {
+    const str = String(input ?? '').trim();
+    if (!str || str === '0' || /^life(time)?$/i.test(str)) {
+        return 0;
+    }
+    const match = str.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day|w|wk|mo|y|yr)s?$/i);
+    if (!match) return undefined;
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount) || amount <= 0) return undefined;
+    const unit = match[2].toLowerCase();
+    const mult = {
+        s: 1000,
+        sec: 1000,
+        m: 60 * 1000,
+        min: 60 * 1000,
+        h: 60 * 60 * 1000,
+        hr: 60 * 60 * 1000,
+        d: 24 * 60 * 60 * 1000,
+        day: 24 * 60 * 60 * 1000,
+        w: 7 * 24 * 60 * 60 * 1000,
+        wk: 7 * 24 * 60 * 60 * 1000,
+        mo: 30 * 24 * 60 * 60 * 1000,
+        y: 365 * 24 * 60 * 60 * 1000,
+        yr: 365 * 24 * 60 * 60 * 1000
+    };
+    return amount * (mult[unit] || 0);
+}
+
+function formatDurationLabel(expiresAt) {
+    if (!expiresAt) return 'Lifetime';
+    const diff = Number(expiresAt) - Date.now();
+    if (diff <= 0) return 'Expired';
+    const sec = Math.floor(diff / 1000);
+    const days = Math.floor(sec / 86400);
+    const hours = Math.floor((sec % 86400) / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+}
+
+function generateKeyCode(prefix = 'SADO') {
+    const rand = crypto.randomBytes(12).toString('hex').toUpperCase();
+    return `${prefix}-${rand.slice(0, 6)}-${rand.slice(6, 12)}-${rand.slice(12, 18)}-${rand.slice(18, 24)}`;
+}
+
 function getButtonStyleFromName(styleName) {
     const map = {
         Primary: ButtonStyle.Primary,
@@ -148,6 +206,7 @@ function buildPanelComponents() {
     }
     return rows;
 }
+
 async function recordDiscordUserProfile(user) {
     if (!user || !user.id) return;
     const uid = String(user.id);
@@ -189,70 +248,6 @@ function enrichMemberEntry(entry) {
         userName: entry.userName || (prof && prof.displayName) || (uid ? `User ${uid}` : 'İstifadə edilməyib'),
         userAvatar: entry.userAvatar || (prof && prof.avatarUrl) || 'https://cdn.discordapp.com/embed/avatars/0.png'
     };
-}
-
-function getGuildsWithRolesSummary() {
-    if (!client || !client.isReady()) return [];
-    const list = [];
-    client.guilds.cache.forEach((guild) => {
-        const roles = guild.roles.cache
-            .filter((r) => !r.managed && r.id !== guild.id)
-            .sort((a, b) => b.position - a.position)
-            .map((r) => ({
-                id: r.id,
-                name: r.name,
-                color: r.hexColor || '#99aab5',
-                memberCount: r.members ? r.members.size : 0
-            }));
-        list.push({
-            id: guild.id,
-            name: guild.name,
-            iconUrl: typeof guild.iconURL === 'function' ? guild.iconURL({ extension: 'png', size: 128 }) : null,
-            memberCount: guild.memberCount || 0,
-            roles
-        });
-    });
-    return list;
-}
-    const match = str.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day|w|wk|mo|y|yr)s?$/i);
-    if (!match) return undefined;
-    const amount = Number(match[1]);
-    if (!Number.isFinite(amount) || amount <= 0) return undefined;
-    const unit = match[2].toLowerCase();
-    const mult = {
-        s: 1000,
-        sec: 1000,
-        m: 60 * 1000,
-        min: 60 * 1000,
-        h: 60 * 60 * 1000,
-        hr: 60 * 60 * 1000,
-        d: 24 * 60 * 60 * 1000,
-        day: 24 * 60 * 60 * 1000,
-        w: 7 * 24 * 60 * 60 * 1000,
-        wk: 7 * 24 * 60 * 60 * 1000,
-        mo: 30 * 24 * 60 * 60 * 1000,
-        y: 365 * 24 * 60 * 60 * 1000,
-        yr: 365 * 24 * 60 * 60 * 1000
-    };
-    return amount * (mult[unit] || 0);
-}
-
-function formatDurationLabel(expiresAt) {
-    if (!expiresAt) return 'Lifetime';
-    const diff = Number(expiresAt) - Date.now();
-    if (diff <= 0) return 'Expired';
-    const sec = Math.floor(diff / 1000);
-    const days = Math.floor(sec / 86400);
-    const hours = Math.floor((sec % 86400) / 3600);
-    const mins = Math.floor((sec % 3600) / 60);
-    if (days > 0) return `${days}d ${hours}h`;
-    if (hours > 0) return `${hours}h ${mins}m`;
-    return `${mins}m`;
-}
-
-function generateKeyCode(prefix = 'SADO') {
-    const rand = crypto.randomBytes(12).toString('hex').toUpperCase();
-    return `${prefix}-${rand.slice(0, 6)}-${rand.slice(6, 12)}-${rand.slice(12, 18)}-${rand.slice(18, 24)}`;
 }
 
 function findScriptById(scriptId) {
@@ -432,7 +427,7 @@ function checkUserAccessForScript(scriptObj, userId, hwid = null) {
     }
 
     if (!keyEntry) {
-        const auto = ensureAutoWhitelistKey(scriptObj, uid, wl ? wl.expiresAt : null, 'auto-access');
+        ensureAutoWhitelistKey(scriptObj, uid, wl ? wl.expiresAt : null, 'auto-access');
         return checkUserAccessForScript(scriptObj, uid, hwid);
     }
 
@@ -628,36 +623,6 @@ function buildPanelEmbed(scriptObj, customTitle = null) {
         .setTimestamp();
 }
 
-function buildPanelComponents() {
-    const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('sp_btn_redeem')
-            .setLabel('Redeem Key')
-            .setStyle(ButtonStyle.Success)
-            .setEmoji('🔑'),
-        new ButtonBuilder()
-            .setCustomId('sp_btn_get_script')
-            .setLabel('Get Script')
-            .setStyle(ButtonStyle.Primary)
-            .setEmoji('📜')
-    );
-
-    const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('sp_btn_reset_hwid')
-            .setLabel('Reset HWID')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('🔄'),
-        new ButtonBuilder()
-            .setCustomId('sp_btn_get_stats')
-            .setLabel('Get Stats')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('📊')
-    );
-
-    return [row1, row2];
-}
-
 function buildScriptSelectMenu(customId, placeholder = 'Skript seçin...') {
     const options = state.scripts.slice(0, 25).map((s) => ({
         label: String(s.name || s.id).slice(0, 100),
@@ -761,6 +726,30 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
     partials: [Partials.Channel, Partials.Message]
 });
+
+function getGuildsWithRolesSummary() {
+    if (!client || !client.isReady()) return [];
+    const list = [];
+    client.guilds.cache.forEach((guild) => {
+        const roles = guild.roles.cache
+            .filter((r) => !r.managed && r.id !== guild.id)
+            .sort((a, b) => b.position - a.position)
+            .map((r) => ({
+                id: r.id,
+                name: r.name,
+                color: r.hexColor || '#99aab5',
+                memberCount: r.members ? r.members.size : 0
+            }));
+        list.push({
+            id: guild.id,
+            name: guild.name,
+            iconUrl: typeof guild.iconURL === 'function' ? guild.iconURL({ extension: 'png', size: 128 }) : null,
+            memberCount: guild.memberCount || 0,
+            roles
+        });
+    });
+    return list;
+}
 
 async function publishPanelToChannel(channel, scriptObj, customTitle = null) {
     const embed = buildPanelEmbed(scriptObj, customTitle);
@@ -1478,6 +1467,40 @@ const server = http.createServer((req, res) => {
                     whitelists: state.whitelists.filter((w) => !w.revoked).slice(-25).reverse().map(enrichMemberEntry)
                 })
             );
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+                try {
+                    const data = JSON.parse(body || '{}');
+                    const name = String(data.name || '').trim();
+                    const code = String(data.code || '');
+                    if (!name) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: 'Skript adı mütləqdir.' }));
+                        return;
+                    }
+                    const id = `scr_${crypto.randomBytes(4).toString('hex')}`;
+                    const scriptEntry = {
+                        id,
+                        name,
+                        code,
+                        disabled: false,
+                        createdBy: 'web-panel',
+                        createdAt: Date.now()
+                    };
+                    state.scripts.push(scriptEntry);
+                    persistState();
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, script: scriptEntry }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: 'Skript yaradılarkən xəta baş verdi.' }));
+                }
+            });
             return;
         }
 
