@@ -51,6 +51,7 @@ let cloudSaveTimer = null;
 function createDefaultState() {
     return {
         savedBotToken: '',
+        workspaces: {},
         scripts: [],
         keys: [],
         whitelists: [],
@@ -196,6 +197,7 @@ function applyLoadedObject(parsed) {
     if (!runtimeBotToken && state.savedBotToken) {
         runtimeBotToken = state.savedBotToken;
     }
+    state.workspaces = state.workspaces && typeof state.workspaces === 'object' ? state.workspaces : {};
     state.scripts = Array.isArray(state.scripts) ? state.scripts : [];
     state.keys = Array.isArray(state.keys) ? state.keys : [];
     state.whitelists = Array.isArray(state.whitelists) ? state.whitelists : [];
@@ -312,6 +314,74 @@ function formatExpiry(expiresAt) {
 
 function isExpired(expiresAt) {
     return Boolean(expiresAt && Number(expiresAt) <= nowMs());
+}
+
+function getWorkspaceIdFromReq(req, reqUrl) {
+    const headerWs = String(req.headers['x-workspace-id'] || '').trim();
+    const queryWs = reqUrl ? String(reqUrl.searchParams.get('ws') || '').trim() : '';
+    const cookieHeader = String(req.headers['cookie'] || '');
+    const cookieMatch = cookieHeader.match(/(?:^|;\s*)sado_ws_id=([a-zA-Z0-9_-]+)/);
+    const cookieWs = cookieMatch ? cookieMatch[1] : '';
+    const raw = headerWs || queryWs || cookieWs;
+    if (raw && /^[a-zA-Z0-9_-]{8,64}$/.test(raw)) {
+        return raw;
+    }
+    return null;
+}
+
+function ensureWorkspaceRecord(wsId, discordUserId = null) {
+    if (!wsId) return null;
+    if (!state.workspaces[wsId]) {
+        state.workspaces[wsId] = {
+            id: wsId,
+            discordUserIds: [],
+            createdAt: nowMs()
+        };
+    }
+    if (discordUserId) {
+        const uid = String(discordUserId).trim();
+        if (uid && !state.workspaces[wsId].discordUserIds.includes(uid)) {
+            state.workspaces[wsId].discordUserIds.push(uid);
+        }
+    }
+    return state.workspaces[wsId];
+}
+
+function getWorkspaceIdForDiscordUser(discordUserId) {
+    const uid = String(discordUserId || '').trim();
+    if (!uid) return null;
+    for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
+        if (ws && Array.isArray(ws.discordUserIds) && ws.discordUserIds.includes(uid)) {
+            return wsId;
+        }
+    }
+    return null;
+}
+
+function isScriptOwnedByWorkspace(script, wsId) {
+    if (!script || !wsId) return false;
+    if (!script.ownerWorkspaceId) {
+        // Köhnə məlumatları ilk aktiv cihaza bağla ki, başqa telefonlarda görünməsin
+        script.ownerWorkspaceId = wsId;
+        persistState();
+    }
+    return script.ownerWorkspaceId === wsId;
+}
+
+function getScriptsForWorkspace(wsId) {
+    if (!wsId) return [];
+    return state.scripts.filter((s) => isScriptOwnedByWorkspace(s, wsId));
+}
+
+function getScriptsForDiscordUser(discordUserId) {
+    const uid = String(discordUserId || '').trim();
+    const linkedWsId = getWorkspaceIdForDiscordUser(uid);
+    if (linkedWsId) {
+        return state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
+    }
+    const ownedByDiscord = state.scripts.filter((s) => s.ownerDiscordId && String(s.ownerDiscordId) === uid);
+    if (ownedByDiscord.length > 0) return ownedByDiscord;
+    return state.scripts;
 }
 
 function getScriptById(scriptId) {
@@ -817,23 +887,29 @@ async function syncSlashCommands() {
 }
 
 async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
-    if (state.scripts.length === 0) {
+    const userScripts = getScriptsForDiscordUser(interaction.user.id);
+    if (userScripts.length === 0) {
         await interaction.reply({
-            content: '❌ Heç bir skript əlavə edilməyib. Əvvəlcə veb paneldən skript yükləyin.',
+            content: '❌ Sizin ID-yə bağlı heç bir skript tapılmadı. Veb paneldə skript yaradın.',
             ephemeral: true
         });
         return null;
     }
     if (explicitQuery) {
-        const found = getScriptByNameOrId(explicitQuery);
+        const q = String(explicitQuery || '').trim().toLowerCase();
+        const found =
+            userScripts.find((s) => s.id.toLowerCase() === q) ||
+            userScripts.find((s) => s.name.toLowerCase() === q) ||
+            userScripts.find((s) => s.name.toLowerCase().includes(q)) ||
+            null;
         if (!found) {
             await interaction.reply({ content: `❌ "${explicitQuery}" adlı skript tapılmadı.`, ephemeral: true });
             return null;
         }
         return found;
     }
-    if (state.scripts.length === 1) {
-        return state.scripts[0];
+    if (userScripts.length === 1) {
+        return userScripts[0];
     }
 
     const token = generateId('sel');
@@ -847,7 +923,7 @@ async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
         .setCustomId(`sp_select_script:${token}`)
         .setPlaceholder('Skript seçin...')
         .addOptions(
-            state.scripts.slice(0, 25).map((s) =>
+            userScripts.slice(0, 25).map((s) =>
                 new StringSelectMenuOptionBuilder()
                     .setLabel(s.name.slice(0, 100))
                     .setValue(s.id)
@@ -981,10 +1057,11 @@ function attachBotHandlers(botClient) {
 
             if (interaction.isAutocomplete()) {
                 const focused = String(interaction.options.getFocused() || '').toLowerCase();
-                const matches = state.scripts.filter(
+                const userScripts = getScriptsForDiscordUser(interaction.user.id);
+                const matches = userScripts.filter(
                     (s) => !focused || s.name.toLowerCase().includes(focused) || s.id.toLowerCase().includes(focused)
                 );
-                const pool = matches.length > 0 ? matches : state.scripts;
+                const pool = matches.length > 0 ? matches : userScripts;
                 const choices = pool.slice(0, 25).map((s) => ({
                     name: s.name.slice(0, 100),
                     value: s.id
@@ -1790,6 +1867,15 @@ function renderDashboardHtml() {
 
   <section class="section" id="sec-bot">
     <div class="card">
+      <h3>Gizli ID Kontrolu &amp; Discord Bağlantısı</h3>
+      <div class="muted">Hər telefonun/brauzerin öz gizli ID-si var. Başqa telefonla sayta girənlər sizin skript, key və whitelist-ləri görə bilməz. Discord ID-nizi buraya bağlasanız, Discord-da <code>/panel</code> yazanda yalnız sizin telefonun skriptləri çıxacaq.</div>
+      <label>Sizin Gizli Cihaz ID-niz</label>
+      <input id="workspaceIdDisplay" readonly />
+      <label>Discord User ID (istəyə bağlı — Discord bot ilə bağlamaq üçün)</label>
+      <input id="linkDiscordIdInput" placeholder="Məs: 123456789012345678" />
+      <button class="btn green" id="linkDiscordIdBtn" type="button">Discord ID-ni Bu Cihaza Bağla</button>
+    </div>
+    <div class="card">
       <h3>Discord Bot Token</h3>
       <div class="muted">Token buraya yazıldıqda bot avtomatik aktivləşir və saxlanılır.</div>
       <label>Discord Bot Token</label>
@@ -1929,26 +2015,26 @@ document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.classList.add('active');
     document.querySelectorAll('.section').forEach((s) => s.classList.remove('active'));
     document.getElementById(btn.dataset.sec).classList.add('active');
-    drawer.classList.remove('open');
-    backdrop.classList.remove('show');
-  };
-});
-
-document.getElementById('scriptFileInput').onchange = async (e) => {
-  const file = e.target.files && e.target.files[0];
-  if (!file) return;
-  const text = await file.text();
-  document.getElementById('scriptCodeInput').value = text;
-  if (!document.getElementById('scriptNameInput').value.trim()) {
-    document.getElementById('scriptNameInput').value = file.name.replace(/\.(lua|txt|luau)$/i, '');
+function getOrCreateLocalWsId() {
+  let id = localStorage.getItem('sado_ws_id');
+  if (!id || id.length < 8) {
+    id = 'ws_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    localStorage.setItem('sado_ws_id', id);
   }
-  showToast('Dosya oxundu: ' + file.name);
-};
+  document.cookie = 'sado_ws_id=' + encodeURIComponent(id) + '; path=/; max-age=31536000; SameSite=Lax';
+  return id;
+}
+
+const CURRENT_WS_ID = getOrCreateLocalWsId();
 
 async function api(url, opts = {}) {
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Workspace-Id': CURRENT_WS_ID,
+      ...(opts.headers || {})
+    }
   });
   return res.json();
 }
@@ -1973,6 +2059,12 @@ function fillPanelCfgForm(cfg) {
 async function refreshAll() {
   const data = await api('/api/state');
   if (!data || !data.ok) return;
+  const wsEl = document.getElementById('workspaceIdDisplay');
+  if (wsEl) wsEl.value = data.workspaceId || CURRENT_WS_ID;
+  const linkedInput = document.getElementById('linkDiscordIdInput');
+  if (linkedInput && !linkedInput.value && Array.isArray(data.linkedDiscordIds) && data.linkedDiscordIds.length > 0) {
+    linkedInput.value = data.linkedDiscordIds[0];
+  }
   const pill = document.getElementById('botStatusPill');
   pill.textContent = data.botReady ? ('Bot Aktiv: ' + (data.botTag || '')) : (data.hasBotToken ? 'Bot Qoşulur...' : 'Token Gözlənilir');
 
@@ -2049,22 +2141,12 @@ document.getElementById('saveTokenBtn').onclick = async () => {
   setTimeout(refreshAll, 1500);
 };
 
-document.getElementById('savePanelCfgBtn').onclick = async () => {
-  const payload = {
-    embedColor: document.getElementById('cfgEmbedColor').value,
-    redeemLabel: document.getElementById('cfgRedeemLabel').value,
-    redeemEmoji: document.getElementById('cfgRedeemEmoji').value,
-    redeemStyle: document.getElementById('cfgRedeemStyle').value,
-    getScriptLabel: document.getElementById('cfgGetScriptLabel').value,
-    getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value,
-    getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
-    resetHwidLabel: document.getElementById('cfgResetHwidLabel').value,
-    resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value,
-    resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
-    getStatsLabel: document.getElementById('cfgGetStatsLabel').value,
-    getStatsEmoji: document.getElementById('cfgGetStatsEmoji').value,
-    getStatsStyle: document.getElementById('cfgGetStatsStyle').value
-  };
+document.getElementById('linkDiscordIdBtn').onclick = async () => {
+  const discordUserId = document.getElementById('linkDiscordIdInput').value.trim();
+  const r = await api('/api/workspace/link-discord', { method: 'POST', body: JSON.stringify({ discordUserId }) });
+  showToast(r.message || 'Bağlandı');
+  refreshAll();
+};
   const r = await api('/api/panel-config', { method: 'POST', body: JSON.stringify(payload) });
   if (r.ok) {
     showToast('Panel dizaynı yadda saxlandı!');
@@ -2193,7 +2275,14 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (reqUrl.pathname === '/' && req.method === 'GET') {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            let wsId = getWorkspaceIdFromReq(req, reqUrl);
+            const headers = { 'Content-Type': 'text/html; charset=utf-8' };
+            if (!wsId) {
+                wsId = generateId('ws');
+                headers['Set-Cookie'] = `sado_ws_id=${encodeURIComponent(wsId)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+            }
+            ensureWorkspaceRecord(wsId);
+            res.writeHead(200, headers);
             res.end(renderDashboardHtml());
             return;
         }
@@ -2218,11 +2307,43 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        let activeWsId = getWorkspaceIdFromReq(req, reqUrl);
+        if (!activeWsId) {
+            activeWsId = generateId('ws');
+        }
+        const activeWorkspace = ensureWorkspaceRecord(activeWsId);
+
+        if (reqUrl.pathname === '/api/workspace/link-discord' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const discordUserId = String(body.discordUserId || '').trim();
+            if (!discordUserId || !/^\d{15,22}$/.test(discordUserId)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Düzgün Discord User ID daxil edin.' }));
+                return;
+            }
+            ensureWorkspaceRecord(activeWsId, discordUserId);
+            for (const s of getScriptsForWorkspace(activeWsId)) {
+                s.ownerDiscordId = discordUserId;
+            }
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, message: 'Discord ID bu cihaza bağlandı!' }));
+            return;
+        }
+
         if (reqUrl.pathname === '/api/state' && req.method === 'GET') {
+            const wsScripts = getScriptsForWorkspace(activeWsId);
+            const wsScriptIds = new Set(wsScripts.map((s) => s.id));
+            const wsKeys = state.keys.filter((k) => wsScriptIds.has(k.scriptId));
+            const wsWhitelists = state.whitelists.filter(
+                (w) => wsScriptIds.has(w.scriptId) && !w.revoked && !isExpired(w.expiresAt)
+            );
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(
                 JSON.stringify({
                     ok: true,
+                    workspaceId: activeWsId,
+                    linkedDiscordIds: activeWorkspace ? activeWorkspace.discordUserIds : [],
                     authRequired: Boolean(PANEL_TOKEN),
                     cloudConnected: Boolean((UPSTASH_URL && UPSTASH_TOKEN) || (JSONBIN_ID && JSONBIN_KEY)),
                     botReady: Boolean(client && client.user),
@@ -2230,18 +2351,17 @@ const server = http.createServer(async (req, res) => {
                     hasBotToken: Boolean(runtimeBotToken),
                     panelButtonConfig: state.panelButtonConfig,
                     guilds: getGuildsWithRolesSummary(),
-                    scripts: state.scripts.map((s) => ({
+                    scripts: wsScripts.map((s) => ({
                         id: s.id,
                         name: s.name,
                         code: s.code || '',
                         disabled: Boolean(s.disabled),
                         createdAt: s.createdAt
                     })),
-                    keysCount: state.keys.length,
-                    whitelistsCount: state.whitelists.filter((w) => !w.revoked && !isExpired(w.expiresAt)).length,
-                    recentKeys: state.keys.slice(-50).reverse().map(enrichMemberEntry),
-                    whitelists: state.whitelists
-                        .filter((w) => !w.revoked && !isExpired(w.expiresAt))
+                    keysCount: wsKeys.length,
+                    whitelistsCount: wsWhitelists.length,
+                    recentKeys: wsKeys.slice(-50).reverse().map(enrichMemberEntry),
+                    whitelists: wsWhitelists
                         .slice(-50)
                         .reverse()
                         .map(enrichMemberEntry)
@@ -2300,10 +2420,16 @@ const server = http.createServer(async (req, res) => {
                 res.end(JSON.stringify({ ok: false, message: 'Skript adı və kodu tələb olunur.' }));
                 return;
             }
+            const linkedDiscord =
+                activeWorkspace && activeWorkspace.discordUserIds.length > 0
+                    ? activeWorkspace.discordUserIds[0]
+                    : null;
             const script = {
                 id: generateId('scr'),
                 name,
                 code,
+                ownerWorkspaceId: activeWsId,
+                ownerDiscordId: linkedDiscord,
                 disabled: false,
                 createdAt: nowMs()
             };
@@ -2317,7 +2443,7 @@ const server = http.createServer(async (req, res) => {
         if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'PUT') {
             const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
             const script = getScriptById(scriptId);
-            if (!script) {
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
                 res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
                 return;
@@ -2333,81 +2459,9 @@ const server = http.createServer(async (req, res) => {
 
         if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'DELETE') {
             const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
-            state.scripts = state.scripts.filter((s) => s.id !== scriptId);
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true }));
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/keys' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            const script = getScriptById(String(body.scriptId || ''));
-            if (!script) {
-                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
-                return;
-            }
-            const durationMs = parseDurationToMs(body.time);
-            const amount = Math.max(1, Math.min(50, Number(body.amount || 1)));
-            const createdByName = String(body.createdByName || 'Veb Panel').trim() || 'Veb Panel';
-            const keys = [];
-            for (let i = 0; i < amount; i++) {
-                const code = generateKeyCode();
-                state.keys.push({
-                    id: generateId('key'),
-                    code,
-                    scriptId: script.id,
-                    durationMs: durationMs === undefined ? null : durationMs,
-                    expiresAt: null,
-                    createdBy: null,
-                    createdByName,
-                    redeemedBy: null,
-                    redeemedByName: null,
-                    redeemedAt: null,
-                    hwid: null,
-                    disabled: false,
-                    createdAt: nowMs()
-                });
-                keys.push(code);
-            }
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, keys }));
-            return;
-        }
-
-        if (reqUrl.pathname.startsWith('/api/keys/') && req.method === 'DELETE') {
-            const keyId = decodeURIComponent(reqUrl.pathname.slice('/api/keys/'.length));
-            state.keys = state.keys.filter((k) => k.id !== keyId);
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true }));
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/whitelist' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            const script = getScriptById(String(body.scriptId || ''));
-            const userId = String(body.userId || '').trim();
-            if (!script || !userId) {
-                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Skript və User ID tələb olunur.' }));
-                return;
-            }
-            const durationMs = parseDurationToMs(body.time);
-            await applyWhitelistForTargets(script, [{ id: userId }], durationMs === undefined ? null : durationMs);
-            const createdKey = getUserKeyForScript(userId, script.id);
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, key: createdKey ? createdKey.code : null }));
-            return;
-        }
-
-        if (reqUrl.pathname.startsWith('/api/whitelist/') && req.method === 'DELETE') {
-            const wlId = decodeURIComponent(reqUrl.pathname.slice('/api/whitelist/'.length));
-            const entry = state.whitelists.find((w) => w.id === wlId);
-            if (entry) {
-                entry.revoked = true;
+            const targetScript = getScriptById(scriptId);
+            if (targetScript && isScriptOwnedByWorkspace(targetScript, activeWsId)) {
+                state.scripts = state.scripts.filter((s) => s.id !== scriptId);
                 persistState();
             }
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
