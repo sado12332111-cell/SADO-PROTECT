@@ -1336,27 +1336,110 @@ function attachBotHandlers(botClient) {
                     });
                     return;
                 }
-// ... existing ...
-        if (reqUrl.pathname.startsWith('/raw/') && req.method === 'GET') {
-            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/raw/'.length));
-            const uid = String(reqUrl.searchParams.get('uid') || '').trim();
-            const tok = String(reqUrl.searchParams.get('t') || '').trim();
-            const hwid = String(
-                req.headers['x-hwid'] ||
-                    req.headers['syn-fingerprint'] ||
-                    req.headers['krnl-hwid'] ||
-                    req.headers['flux-fingerprint'] ||
-                    req.headers['evon-hwid'] ||
-                    req.headers['roblox-id'] ||
-                    reqUrl.searchParams.get('hwid') ||
-                    ''
-            ).trim();
 
-            if (!isRobloxExecutorRequest(req)) {
-                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end('-- SADO PROTECT: Brauzerdən və ya icazəsiz sorğudan skript koduna baxmaq qadağandır.');
+                if (action === 'sp_getstats') {
+                    const wl = getActiveWhitelist(interaction.user.id, script.id);
+                    const keyRec = getUserKeyForScript(interaction.user.id, script.id);
+                    if (!wl && !keyRec) {
+                        await interaction.reply({
+                            content: `❌ Sizin **${script.name}** skripti üçün aktiv key və ya whitelist məlumatınız yoxdur.`,
+                            ephemeral: true
+                        });
+                        return;
+                    }
+                    const boundHwid = (wl && wl.hwid) || (keyRec && keyRec.hwid) || 'Hələ bağlanmayıb';
+                    const exp = (wl && wl.expiresAt) || (keyRec && keyRec.expiresAt) || null;
+                    await interaction.reply({
+                        content:
+                            `📊 **${script.name}** Statistikası:\n` +
+                            `• Key: \`${keyRec ? keyRec.code : 'Whitelist'}\`\n` +
+                            `• HWID: \`${boundHwid}\`\n` +
+                            `• Bitmə vaxtı: ${formatExpiry(exp)}`,
+                        ephemeral: true
+                    });
+                    return;
+                }
+            } else if (interaction.isModalSubmit() && interaction.customId.startsWith('sp_redeem_modal:')) {
+                const scriptId = interaction.customId.split(':')[1];
+                const script = getScriptById(scriptId);
+                if (!script) {
+                    await interaction.reply({ content: '❌ Skript tapılmadı.', ephemeral: true });
+                    return;
+                }
+                const code = String(interaction.fields.getTextInputValue('key_code') || '')
+                    .trim()
+                    .toUpperCase();
+                const keyRecord = state.keys.find(
+                    (k) => k.code.toUpperCase() === code && k.scriptId === script.id && !k.disabled
+                );
+                if (!keyRecord) {
+                    await interaction.reply({ content: '❌ Bu skript üçün etibarlı key tapılmadı.', ephemeral: true });
+                    return;
+                }
+                if (keyRecord.redeemedBy && keyRecord.redeemedBy !== String(interaction.user.id)) {
+                    await interaction.reply({
+                        content: '❌ Bu 1 nəfərlik key artıq başqa istifadəçi tərəfindən aktivləşdirilib.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                if (isExpired(keyRecord.expiresAt)) {
+                    await interaction.reply({ content: '❌ Bu key-in vaxtı bitib.', ephemeral: true });
+                    return;
+                }
+
+                const expiresAt =
+                    keyRecord.expiresAt ||
+                    (keyRecord.durationMs ? nowMs() + Number(keyRecord.durationMs) : null);
+                keyRecord.expiresAt = expiresAt;
+                keyRecord.redeemedBy = String(interaction.user.id);
+                keyRecord.redeemedByName = resolveUserDisplayName(interaction.user.id);
+                keyRecord.redeemedAt = keyRecord.redeemedAt || nowMs();
+                if (typeof keyRecord.hwidLockEpoch !== 'number') {
+                    keyRecord.hwidLockEpoch = 1;
+                }
+
+                const existingWl = getActiveWhitelist(interaction.user.id, script.id);
+                if (existingWl) {
+                    existingWl.expiresAt = expiresAt;
+                    existingWl.revoked = false;
+                    if (!existingWl.loaderToken) {
+                        existingWl.loaderToken = crypto.randomBytes(16).toString('hex');
+                    }
+                    if (typeof existingWl.hwidLockEpoch !== 'number') {
+                        existingWl.hwidLockEpoch = Number(keyRecord.hwidLockEpoch || 1);
+                    }
+                } else {
+                    state.whitelists.push({
+                        id: generateId('wl'),
+                        userId: String(interaction.user.id),
+                        scriptId: script.id,
+                        expiresAt,
+                        hwid: keyRecord.hwid || null,
+                        hwidLockEpoch: Number(keyRecord.hwidLockEpoch || 1),
+                        loaderToken: crypto.randomBytes(16).toString('hex'),
+                        createdAt: nowMs(),
+                        revoked: false
+                    });
+                }
+                persistState();
+
+                await interaction.reply({
+                    content:
+                        `✅ Key uğurla aktivləşdirildi! **${script.name}** üçün icazəniz açıldı.\n` +
+                        `⏳ Bitmə vaxtı: ${formatExpiry(expiresAt)}`,
+                    ephemeral: true
+                });
                 return;
             }
+        } catch (err) {
+            console.error('[SADO PROTECT] Interaction xətası:', err);
+            if (interaction && !interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: '❌ Əməliyyat zamanı xəta baş verdi.', ephemeral: true }).catch(() => {});
+            }
+        }
+    });
+}
 
             const script = getScriptById(scriptId);
             if (!script || script.disabled) {
