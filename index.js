@@ -25,7 +25,12 @@ const {
 
 const PORT = Number(process.env.PORT || 3000);
 const PANEL_TOKEN = String(process.env.PANEL_TOKEN || '').trim();
-const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
+const PUBLIC_BASE_URL = String(
+    process.env.PUBLIC_BASE_URL ||
+        process.env.RENDER_EXTERNAL_URL ||
+        `http://localhost:${PORT}`
+).replace(/\/+$/, '');
+const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || 4 * 60 * 1000);
 
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : __dirname;
 const DATA_FILE = path.join(DATA_DIR, 'sado-protect-data.json');
@@ -533,14 +538,33 @@ const slashCommands = [
         .setName('panel')
         .setDescription('Bu kanala skript paneli yerləşdir')
         .addStringOption((opt) =>
-            opt.setName('name').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(true)
+            opt
+                .setName('script')
+                .setDescription('Panelin bağlı olacağı skript')
+                .setAutocomplete(true)
+                .setRequired(false)
         )
+        .addStringOption((opt) =>
+            opt.setName('title').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(false)
+        )
+        .addStringOption((opt) =>
+            opt.setName('name').setDescription('Alternativ panel başlığı').setRequired(false)
+        ),
+    new SlashCommandBuilder()
+        .setName('setpanel')
+        .setDescription('Bu kanala skript paneli yerləşdir')
         .addStringOption((opt) =>
             opt
                 .setName('script')
-                .setDescription('Skript seçin (yaratdığınız skriptlər)')
+                .setDescription('Panelin bağlı olacağı skript')
                 .setAutocomplete(true)
                 .setRequired(false)
+        )
+        .addStringOption((opt) =>
+            opt.setName('title').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(false)
+        )
+        .addStringOption((opt) =>
+            opt.setName('name').setDescription('Alternativ panel başlığı').setRequired(false)
         ),
     new SlashCommandBuilder()
         .setName('setpanel')
@@ -767,13 +791,14 @@ function attachBotHandlers(botClient) {
 
             if (interaction.isAutocomplete()) {
                 const focused = String(interaction.options.getFocused() || '').toLowerCase();
-                const choices = state.scripts
-                    .filter((s) => !focused || s.name.toLowerCase().includes(focused) || s.id.toLowerCase().includes(focused))
-                    .slice(0, 25)
-                    .map((s) => ({
-                        name: `${s.name} (${s.id})`.slice(0, 100),
-                        value: s.id
-                    }));
+                const matches = state.scripts.filter(
+                    (s) => !focused || s.name.toLowerCase().includes(focused) || s.id.toLowerCase().includes(focused)
+                );
+                const pool = matches.length > 0 ? matches : state.scripts;
+                const choices = pool.slice(0, 25).map((s) => ({
+                    name: s.name.slice(0, 100),
+                    value: s.id
+                }));
                 await interaction.respond(choices);
                 return;
             }
@@ -808,7 +833,10 @@ function attachBotHandlers(botClient) {
                 }
 
                 if (cmd === 'setpanel' || cmd === 'panel') {
-                    const panelName = interaction.options.getString('name', true);
+                    const panelName =
+                        interaction.options.getString('title') ||
+                        interaction.options.getString('name') ||
+                        'SADOHUB';
                     const scriptQuery = interaction.options.getString('script');
                     const script = await resolveScriptOrAsk(interaction, scriptQuery, {
                         type: 'setpanel',
@@ -1953,6 +1981,20 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        if (reqUrl.pathname === '/api/bot/config' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(
+                JSON.stringify({
+                    ok: true,
+                    botToken: runtimeBotToken || state.savedBotToken || '',
+                    discordBotToken: runtimeBotToken || state.savedBotToken || '',
+                    apiToken: runtimeBotToken || state.savedBotToken || '',
+                    panelButtonConfig: state.panelButtonConfig
+                })
+            );
+            return;
+        }
+
         if (!checkPanelAuth(req, reqUrl)) {
             res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Panel token tələb olunur.' }));
@@ -2190,9 +2232,22 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
+function startKeepAliveLoop() {
+    if (KEEP_ALIVE_INTERVAL_MS <= 0) return;
+    setInterval(async () => {
+        try {
+            const targetUrl = PUBLIC_BASE_URL.startsWith('http')
+                ? `${PUBLIC_BASE_URL}/health`
+                : `http://127.0.0.1:${PORT}/health`;
+            await fetch(targetUrl, { signal: AbortSignal.timeout(8000) }).catch(() => {});
+        } catch (_) {}
+    }, KEEP_ALIVE_INTERVAL_MS);
+}
+
 server.listen(PORT, '0.0.0.0', async () => {
     console.log(`[SADO PROTECT] HTTP server ${PORT} portunda işləyir (${PUBLIC_BASE_URL})`);
     await hydrateFromCloudIfAvailable();
+    startKeepAliveLoop();
     if (!runtimeBotToken) {
         console.error('[SADO PROTECT] Qeyd: DISCORD_BOT_TOKEN hələ təyin edilməyib. Veb paneldən və ya Render Environment Variables bölməsindən daxil edə bilərsiniz.');
     } else {
