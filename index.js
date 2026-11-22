@@ -511,33 +511,43 @@ function buildLoaderSnippet(baseUrl, scriptId, userId, token, licenseKey) {
 
 function ensureUserLoaderToken(userId, scriptId) {
     const cleanUserId = String(userId || '').trim();
-    const keyRecord = ensureAutoKeyForUser(cleanUserId, scriptId);
-    let wl = getActiveWhitelist(cleanUserId, scriptId);
-    if (!wl) {
-        if (!keyRecord) return null;
-        wl = {
-            id: generateId('wl'),
-            userId: cleanUserId,
-            scriptId,
-            expiresAt: keyRecord.expiresAt || null,
-            hwid: keyRecord.hwid || null,
-            hwidLockEpoch: Number(keyRecord.hwidLockEpoch || 1),
-            loaderToken: crypto.randomBytes(16).toString('hex'),
-            createdAt: nowMs(),
-            revoked: false
-        };
-        state.whitelists.push(wl);
-        persistState();
+    if (!cleanUserId) return null;
+
+    const wl = getActiveWhitelist(cleanUserId, scriptId);
+    const keyRecord = getUserKeyForScript(cleanUserId, scriptId);
+
+    // Yalnız aktiv whitelist-i və ya aktivləşdirilmiş key-i olan istifadəçiyə icazə ver
+    if (!wl && !keyRecord) {
+        return null;
     }
-    if (!wl.loaderToken) {
-        wl.loaderToken = crypto.randomBytes(16).toString('hex');
-        persistState();
+
+    if (wl) {
+        if (!wl.loaderToken) {
+            wl.loaderToken = crypto.randomBytes(16).toString('hex');
+            persistState();
+        }
+        if (typeof wl.hwidLockEpoch !== 'number') {
+            wl.hwidLockEpoch = Number(keyRecord?.hwidLockEpoch || 1);
+            persistState();
+        }
+        return wl;
     }
-    if (typeof wl.hwidLockEpoch !== 'number') {
-        wl.hwidLockEpoch = Number(keyRecord?.hwidLockEpoch || 1);
-        persistState();
-    }
-    return wl;
+
+    // Aktiv key var, lakin hələ whitelist qeydi yaradılmayıbsa onu key-ə uyğun yarat
+    const createdWl = {
+        id: generateId('wl'),
+        userId: cleanUserId,
+        scriptId,
+        expiresAt: keyRecord.expiresAt || null,
+        hwid: keyRecord.hwid || null,
+        hwidLockEpoch: Number(keyRecord.hwidLockEpoch || 1),
+        loaderToken: crypto.randomBytes(16).toString('hex'),
+        createdAt: nowMs(),
+        revoked: false
+    };
+    state.whitelists.push(createdWl);
+    persistState();
+    return createdWl;
 }
 
 function ensureAutoKeyForUser(userId, scriptId, durationMs = null, creatorId = null, creatorName = 'Auto Whitelist') {
