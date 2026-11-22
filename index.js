@@ -1098,6 +1098,23 @@ function attachBotHandlers(botClient) {
                     const wl = getActiveWhitelist(pending.targetUserId, script.id);
                     const keyRec = getUserKeyForScript(pending.targetUserId, script.id);
                     if (wl) wl.hwid = null;
+                    if (keyRec) keyRec.hwid = null;
+                    persistState();
+                    await interaction.update({
+                        content: `✅ <@${pending.targetUserId}> üçün **${script.name}** HWID kilidi sıfırlandı.`,
+                        components: []
+                    });
+                } else if (pending.type === 'cooldownhwid') {
+                    state.hwidCooldowns[script.id] = pending.durationMs || 0;
+                    persistState();
+                    await interaction.update({
+                        content: `✅ **${script.name}** üçün HWID sıfırlama gözləmə müddəti yeniləndi.`,
+                        components: []
+                    });
+                }
+                return;
+            }
+
             if (interaction.isButton() && interaction.customId.startsWith('sp_copyscript:')) {
                 const copyId = interaction.customId.split(':')[1];
                 const entry = pendingCopySnippets.get(copyId);
