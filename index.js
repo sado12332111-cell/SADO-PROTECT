@@ -1,6 +1,86 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const {
+    Client,
+    GatewayIntentBits,
+    Partials,
+    PermissionFlagsBits,
+    SlashCommandBuilder,
+    REST,
+    Routes,
+    EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    StringSelectMenuBuilder,
+    StringSelectMenuOptionBuilder
+} = require('discord.js');
+
+const PORT = Number(process.env.PORT || 3000);
+const PUBLIC_BASE_URL = String(
+    process.env.PUBLIC_BASE_URL ||
+        process.env.RENDER_EXTERNAL_URL ||
+        `http://127.0.0.1:${PORT}`
+).replace(/\/+$/, '');
+const PANEL_TOKEN = String(process.env.PANEL_TOKEN || '').trim();
+const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || 4 * 60 * 1000);
+
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+const DATA_FILE = path.join(DATA_DIR, 'state.json');
+const BACKUP_FILE = path.join(DATA_DIR, 'state.backup.json');
+const TMP_FILE = path.join(DATA_DIR, '.state.tmp.json');
+
+const UPSTASH_URL = String(process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/+$/, '');
+const UPSTASH_TOKEN = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+const JSONBIN_ID = String(process.env.JSONBIN_BIN_ID || '').trim();
+const JSONBIN_KEY = String(process.env.JSONBIN_MASTER_KEY || '').trim();
+const CLOUD_KEY = String(process.env.SADO_CLOUD_KEY || 'sado_protect_state_v2').trim();
+
+let runtimeBotToken = String(
+    process.env.DISCORD_BOT_TOKEN ||
+        process.env.BOT_TOKEN ||
+        process.env.SPEED_BOT_TOKEN ||
+        ''
+).trim();
+let client = null;
+let botBootPromise = null;
+let cloudSaveTimer = null;
+
+function createDefaultState() {
+    return {
+        savedBotToken: '',
+        workspaces: {},
+        scripts: [],
+        keys: [],
+        whitelists: [],
+        panels: [],
+        hwidCooldowns: {},
+        lastHwidReset: {},
+        guildSettings: {},
+        userProfiles: {},
+        panelButtonConfig: {
+            embedColor: '#5865F2',
+            redeemLabel: 'Redeem Key',
+            redeemEmoji: '🔑',
+            redeemStyle: 'Success',
+            getScriptLabel: 'Get Script',
+            getScriptEmoji: '📜',
+            getScriptStyle: 'Primary',
+            resetHwidLabel: 'Reset HWID',
+            resetHwidEmoji: '🔄',
+            resetHwidStyle: 'Secondary',
+            getStatsLabel: 'Get Stats',
+            getStatsEmoji: '📊',
+            getStatsStyle: 'Secondary'
+        }
+    };
+}
+
 function ensureWorkspaceRecord(wsId, discordUserId = null, guildId = null) {
     if (!wsId) return null;
     if (!state.workspaces[wsId]) {
