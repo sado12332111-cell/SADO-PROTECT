@@ -500,6 +500,8 @@ function buildPanelEmbed(panelTitle, script) {
         .setColor(parseHexColor(cfg.embedColor, 0x5865f2))
         .setFooter({ text: 'SADO PROTECT • Hər skriptə ayrı whitelist və 1 nəfərlik key sistemi' })
         .setTimestamp();
+}
+
 function buildLoaderSnippet(baseUrl, scriptId, userId, token, licenseKey) {
     const cleanBase = String(baseUrl || PUBLIC_BASE_URL).replace(/\/+$/, '');
     const url = `${cleanBase}/raw/${encodeURIComponent(scriptId)}?uid=${encodeURIComponent(userId)}&t=${encodeURIComponent(token)}`;
