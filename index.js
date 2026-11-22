@@ -57,12 +57,17 @@ function createDefaultState() {
         panelButtonConfig: {
             redeemLabel: 'Redeem Key',
             redeemEmoji: '🔑',
+            redeemStyle: 'Success',
             getScriptLabel: 'Get Script',
             getScriptEmoji: '📜',
+            getScriptStyle: 'Primary',
             resetHwidLabel: 'Reset HWID',
             resetHwidEmoji: '🔄',
+            resetHwidStyle: 'Secondary',
             getStatsLabel: 'Get Stats',
-            getStatsEmoji: '📊'
+            getStatsEmoji: '📊',
+            getStatsStyle: 'Secondary',
+            embedColor: '#5865F2'
         }
     };
 }
@@ -353,6 +358,21 @@ function rememberUserProfile(user) {
     };
 }
 
+function resolveUserDisplayName(userId) {
+    if (!userId) return null;
+    const uid = String(userId);
+    const prof = state.userProfiles[uid];
+    if (prof && prof.tag) return `${prof.tag} (${uid})`;
+    if (client && client.users) {
+        const cached = client.users.cache.get(uid);
+        if (cached) {
+            rememberUserProfile(cached);
+            return `${cached.tag || cached.username} (${uid})`;
+        }
+    }
+    return uid;
+}
+
 function enrichMemberEntry(entry) {
     const uid = String(entry.userId || entry.redeemedBy || '');
     const prof = uid ? state.userProfiles[uid] : null;
@@ -360,6 +380,8 @@ function enrichMemberEntry(entry) {
     return {
         ...entry,
         username: prof ? prof.tag : null,
+        redeemedByName: entry.redeemedBy ? resolveUserDisplayName(entry.redeemedBy) : null,
+        createdByName: entry.createdByName || (entry.createdBy ? resolveUserDisplayName(entry.createdBy) : 'Veb Panel'),
         scriptName: scr ? scr.name : entry.scriptId || 'Naməlum'
     };
 }
@@ -393,44 +415,84 @@ function hasCommandPermission(interaction) {
     return topTwo.some((r) => memberRoles.cache.has(r.id));
 }
 
+function parseButtonStyle(styleName, fallback) {
+    const val = String(styleName || '').trim().toLowerCase();
+    if (val === 'primary' || val === 'blue' || val === 'blurple') return ButtonStyle.Primary;
+    if (val === 'success' || val === 'green') return ButtonStyle.Success;
+    if (val === 'danger' || val === 'red') return ButtonStyle.Danger;
+    if (val === 'secondary' || val === 'gray' || val === 'grey') return ButtonStyle.Secondary;
+    return fallback;
+}
+
+function parseHexColor(hexStr, fallback = 0x5865f2) {
+    const cleaned = String(hexStr || '').trim().replace(/^#/, '');
+    if (/^[0-9a-fA-F]{6}$/.test(cleaned)) {
+        return parseInt(cleaned, 16);
+    }
+    return fallback;
+}
+
+function buildStyledButton(customId, label, emoji, style) {
+    const btn = new ButtonBuilder()
+        .setCustomId(customId)
+        .setLabel(String(label || 'Button').slice(0, 80))
+        .setStyle(style);
+    const cleanEmoji = String(emoji || '').trim();
+    if (cleanEmoji) {
+        try {
+            btn.setEmoji(cleanEmoji);
+        } catch (_) {}
+    }
+    return btn;
+}
+
 function buildPanelComponents(scriptId) {
     const cfg = state.panelButtonConfig;
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`sp_redeem:${scriptId}`)
-            .setLabel(cfg.redeemLabel || 'Redeem Key')
-            .setEmoji(cfg.redeemEmoji || '🔑')
-            .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-            .setCustomId(`sp_getscript:${scriptId}`)
-            .setLabel(cfg.getScriptLabel || 'Get Script')
-            .setEmoji(cfg.getScriptEmoji || '📜')
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId(`sp_resethwid:${scriptId}`)
-            .setLabel(cfg.resetHwidLabel || 'Reset HWID')
-            .setEmoji(cfg.resetHwidEmoji || '🔄')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId(`sp_getstats:${scriptId}`)
-            .setLabel(cfg.getStatsLabel || 'Get Stats')
-            .setEmoji(cfg.getStatsEmoji || '📊')
-            .setStyle(ButtonStyle.Secondary)
+        buildStyledButton(
+            `sp_redeem:${scriptId}`,
+            cfg.redeemLabel || 'Redeem Key',
+            cfg.redeemEmoji,
+            parseButtonStyle(cfg.redeemStyle, ButtonStyle.Success)
+        ),
+        buildStyledButton(
+            `sp_getscript:${scriptId}`,
+            cfg.getScriptLabel || 'Get Script',
+            cfg.getScriptEmoji,
+            parseButtonStyle(cfg.getScriptStyle, ButtonStyle.Primary)
+        ),
+        buildStyledButton(
+            `sp_resethwid:${scriptId}`,
+            cfg.resetHwidLabel || 'Reset HWID',
+            cfg.resetHwidEmoji,
+            parseButtonStyle(cfg.resetHwidStyle, ButtonStyle.Secondary)
+        ),
+        buildStyledButton(
+            `sp_getstats:${scriptId}`,
+            cfg.getStatsLabel || 'Get Stats',
+            cfg.getStatsEmoji,
+            parseButtonStyle(cfg.getStatsStyle, ButtonStyle.Secondary)
+        )
     );
     return [row];
 }
 
 function buildPanelEmbed(panelTitle, script) {
+    const cfg = state.panelButtonConfig;
+    const rLabel = cfg.redeemLabel || 'Redeem Key';
+    const gLabel = cfg.getScriptLabel || 'Get Script';
+    const hLabel = cfg.resetHwidLabel || 'Reset HWID';
+    const sLabel = cfg.getStatsLabel || 'Get Stats';
     return new EmbedBuilder()
         .setTitle(panelTitle || 'SADOHUB')
         .setDescription(
             `Skript: **${script.name}**\n` +
-                `• Key aktivləşdirmək üçün **Redeem Key**\n` +
-                `• Qısa skripti almaq üçün **Get Script**\n` +
-                `• Cihazı sıfırlamaq üçün **Reset HWID**\n` +
-                `• Key və HWID məlumatına baxmaq üçün **Get Stats**`
+                `• Key aktivləşdirmək üçün **${rLabel}**\n` +
+                `• Qısa skripti almaq üçün **${gLabel}**\n` +
+                `• Cihazı sıfırlamaq üçün **${hLabel}**\n` +
+                `• Key və HWID məlumatına baxmaq üçün **${sLabel}**`
         )
-        .setColor(0x5865f2)
+        .setColor(parseHexColor(cfg.embedColor, 0x5865f2))
         .setFooter({ text: 'SADO PROTECT • Hər skriptə ayrı whitelist və 1 nəfərlik key sistemi' })
         .setTimestamp();
 }
@@ -468,13 +530,30 @@ function ensureUserLoaderToken(userId, scriptId) {
 
 const slashCommands = [
     new SlashCommandBuilder()
+        .setName('panel')
+        .setDescription('Bu kanala skript paneli yerləşdir')
+        .addStringOption((opt) =>
+            opt.setName('name').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(true)
+        )
+        .addStringOption((opt) =>
+            opt
+                .setName('script')
+                .setDescription('Skript seçin (yaratdığınız skriptlər)')
+                .setAutocomplete(true)
+                .setRequired(false)
+        ),
+    new SlashCommandBuilder()
         .setName('setpanel')
         .setDescription('Bu kanala skript paneli yerləşdir')
         .addStringOption((opt) =>
             opt.setName('name').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(true)
         )
         .addStringOption((opt) =>
-            opt.setName('script').setDescription('Skript adı və ya ID (istəyə bağlı)').setRequired(false)
+            opt
+                .setName('script')
+                .setDescription('Skript seçin (yaratdığınız skriptlər)')
+                .setAutocomplete(true)
+                .setRequired(false)
         ),
     new SlashCommandBuilder()
         .setName('genkey')
@@ -486,7 +565,11 @@ const slashCommands = [
             opt.setName('amount').setDescription('Key sayı (1-50)').setMinValue(1).setMaxValue(50).setRequired(false)
         )
         .addStringOption((opt) =>
-            opt.setName('script').setDescription('Skript adı və ya ID (istəyə bağlı)').setRequired(false)
+            opt
+                .setName('script')
+                .setDescription('Skript seçin (yaratdığınız skriptlər)')
+                .setAutocomplete(true)
+                .setRequired(false)
         ),
     new SlashCommandBuilder()
         .setName('whitelist')
@@ -496,25 +579,49 @@ const slashCommands = [
         )
         .addUserOption((opt) => opt.setName('user').setDescription('İstifadəçi').setRequired(false))
         .addRoleOption((opt) => opt.setName('role').setDescription('Rol').setRequired(false))
-        .addStringOption((opt) => opt.setName('script').setDescription('Skript adı və ya ID').setRequired(false)),
+        .addStringOption((opt) =>
+            opt
+                .setName('script')
+                .setDescription('Skript seçin')
+                .setAutocomplete(true)
+                .setRequired(false)
+        ),
     new SlashCommandBuilder()
         .setName('unwhitelist')
         .setDescription('İstifadəçinin və ya rolun whitelist icazəsini sil')
         .addUserOption((opt) => opt.setName('user').setDescription('İstifadəçi').setRequired(false))
         .addRoleOption((opt) => opt.setName('role').setDescription('Rol').setRequired(false))
-        .addStringOption((opt) => opt.setName('script').setDescription('Skript adı və ya ID').setRequired(false)),
+        .addStringOption((opt) =>
+            opt
+                .setName('script')
+                .setDescription('Skript seçin')
+                .setAutocomplete(true)
+                .setRequired(false)
+        ),
     new SlashCommandBuilder()
         .setName('resethwid')
         .setDescription('Admin: istifadəçinin HWID kilidini sıfırla')
         .addUserOption((opt) => opt.setName('user').setDescription('İstifadəçi').setRequired(true))
-        .addStringOption((opt) => opt.setName('script').setDescription('Skript adı və ya ID').setRequired(false)),
+        .addStringOption((opt) =>
+            opt
+                .setName('script')
+                .setDescription('Skript seçin')
+                .setAutocomplete(true)
+                .setRequired(false)
+        ),
     new SlashCommandBuilder()
         .setName('cooldownhwid')
         .setDescription('Skript üçün istifadəçinin özünün HWID sıfırlama gözləmə müddəti')
         .addStringOption((opt) =>
             opt.setName('time').setDescription('Məs: 1h, 12h, 1d və ya 0 (gözləməsiz)').setRequired(true)
         )
-        .addStringOption((opt) => opt.setName('script').setDescription('Skript adı və ya ID').setRequired(false)),
+        .addStringOption((opt) =>
+            opt
+                .setName('script')
+                .setDescription('Skript seçin')
+                .setAutocomplete(true)
+                .setRequired(false)
+        ),
     new SlashCommandBuilder()
         .setName('setpermrole')
         .setDescription('Bot əmrlərini işlədə biləcək rolları təyin et')
@@ -658,6 +765,19 @@ function attachBotHandlers(botClient) {
         try {
             if (interaction.user) rememberUserProfile(interaction.user);
 
+            if (interaction.isAutocomplete()) {
+                const focused = String(interaction.options.getFocused() || '').toLowerCase();
+                const choices = state.scripts
+                    .filter((s) => !focused || s.name.toLowerCase().includes(focused) || s.id.toLowerCase().includes(focused))
+                    .slice(0, 25)
+                    .map((s) => ({
+                        name: `${s.name} (${s.id})`.slice(0, 100),
+                        value: s.id
+                    }));
+                await interaction.respond(choices);
+                return;
+            }
+
             if (interaction.isChatInputCommand()) {
                 if (!hasCommandPermission(interaction)) {
                     await interaction.reply({
@@ -687,7 +807,7 @@ function attachBotHandlers(botClient) {
                     return;
                 }
 
-                if (cmd === 'setpanel') {
+                if (cmd === 'setpanel' || cmd === 'panel') {
                     const panelName = interaction.options.getString('name', true);
                     const scriptQuery = interaction.options.getString('script');
                     const script = await resolveScriptOrAsk(interaction, scriptQuery, {
@@ -719,7 +839,9 @@ function attachBotHandlers(botClient) {
                     const script = await resolveScriptOrAsk(interaction, scriptQuery, {
                         type: 'genkey',
                         durationMs,
-                        amount
+                        amount,
+                        creatorId: interaction.user.id,
+                        creatorName: interaction.user.tag || interaction.user.username
                     });
                     if (!script) return;
                     const created = [];
@@ -731,7 +853,10 @@ function attachBotHandlers(botClient) {
                             scriptId: script.id,
                             durationMs,
                             expiresAt: null,
+                            createdBy: String(interaction.user.id),
+                            createdByName: interaction.user.tag || interaction.user.username,
                             redeemedBy: null,
+                            redeemedByName: null,
                             redeemedAt: null,
                             hwid: null,
                             disabled: false,
@@ -881,7 +1006,10 @@ function attachBotHandlers(botClient) {
                             scriptId: script.id,
                             durationMs: pending.durationMs,
                             expiresAt: null,
+                            createdBy: pending.creatorId || String(interaction.user.id),
+                            createdByName: pending.creatorName || interaction.user.tag || interaction.user.username,
                             redeemedBy: null,
+                            redeemedByName: null,
                             redeemedAt: null,
                             hwid: null,
                             disabled: false,
@@ -1076,6 +1204,7 @@ function attachBotHandlers(botClient) {
 
                 if (!keyRec.redeemedBy) {
                     keyRec.redeemedBy = String(interaction.user.id);
+                    keyRec.redeemedByName = interaction.user.tag || interaction.user.username;
                     keyRec.redeemedAt = nowMs();
                     keyRec.expiresAt = keyRec.durationMs ? nowMs() + keyRec.durationMs : null;
                 }
@@ -1197,146 +1326,464 @@ function renderDashboardHtml() {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>SADO PROTECT Studio</title>
 <style>
-  :root { --bg:#0b0f19; --card:#131a2a; --border:#24304a; --text:#eef2ff; --muted:#94a3b8; --accent:#6366f1; --ok:#10b981; --bad:#ef4444; }
-  * { box-sizing:border-box; font-family:Inter,system-ui,sans-serif; }
-  body { margin:0; background:var(--bg); color:var(--text); padding:20px; }
-  .wrap { max-width:1100px; margin:0 auto; display:grid; gap:18px; }
+  :root {
+    --bg:#090d16; --card:#111827; --card2:#0d1322; --border:#1f2b44;
+    --text:#f1f5f9; --muted:#94a3b8; --accent:#6366f1; --accent2:#4f46e5;
+    --ok:#10b981; --bad:#ef4444; --warn:#f59e0b;
+  }
+  * { box-sizing:border-box; font-family:Inter,system-ui,-apple-system,sans-serif; }
+  body { margin:0; background:var(--bg); color:var(--text); min-height:100vh; }
+
+  .topbar {
+    position:sticky; top:0; z-index:40;
+    background:rgba(13,19,34,0.92); backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--border);
+    padding:12px 18px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .hamburger {
+    width:42px; height:42px; border-radius:10px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:5px; cursor:pointer; padding:0;
+  }
+  .hamburger span { display:block; width:20px; height:2px; background:var(--text); border-radius:2px; }
+  .brand-title { font-weight:800; font-size:17px; letter-spacing:0.3px; }
+  .badges { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .badge { padding:5px 11px; border-radius:999px; font-size:12px; font-weight:600; background:#172036; border:1px solid var(--border); }
+
+  .drawer-backdrop {
+    position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:50; display:none;
+  }
+  .drawer-backdrop.open { display:block; }
+  .drawer {
+    position:fixed; top:0; left:0; bottom:0; width:275px; max-width:82vw;
+    background:#0c1220; border-right:1px solid var(--border); z-index:60;
+    padding:18px; display:flex; flex-direction:column; gap:8px;
+    transform:translateX(-100%); transition:transform 0.2s ease;
+  }
+  .drawer.open { transform:translateX(0); }
+  .drawer-head { display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:1px solid var(--border); margin-bottom:6px; }
+  .nav-btn {
+    width:100%; text-align:left; background:transparent; color:var(--muted);
+    border:1px solid transparent; border-radius:10px; padding:11px 14px;
+    font-size:14px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:10px;
+  }
+  .nav-btn:hover { background:#131c31; color:var(--text); }
+  .nav-btn.active { background:rgba(99,102,241,0.16); color:#fff; border-color:rgba(99,102,241,0.45); }
+
+  .wrap { max-width:1120px; margin:0 auto; padding:20px; display:grid; gap:18px; }
+  .section { display:none; gap:18px; }
+  .section.active { display:grid; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px; }
-  h1,h2,h3 { margin:0 0 10px; }
+  h2,h3 { margin:0 0 12px; }
+  .sub { color:var(--muted); font-size:13px; margin:-6px 0 12px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
   .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-  input,textarea,select { background:#0b1120; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; width:100%; }
-  textarea { min-height:140px; font-family:monospace; }
-  button { background:var(--accent); color:#fff; border:none; border-radius:10px; padding:10px 16px; font-weight:600; cursor:pointer; }
-  button.bad { background:var(--bad); }
-  button.ok { background:var(--ok); }
-  .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; background:#1e293b; }
-  .list { display:grid; gap:8px; margin-top:10px; }
-  .item { background:#0b1120; border:1px solid var(--border); border-radius:10px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
-  code { background:#090d16; padding:2px 6px; border-radius:6px; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; font-weight:600; }
+  input,textarea,select {
+    background:#080c15; color:var(--text); border:1px solid var(--border);
+    border-radius:10px; padding:10px 12px; width:100%; font-size:14px;
+  }
+  textarea { min-height:170px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  button.btn {
+    background:var(--accent); color:#fff; border:none; border-radius:10px;
+    padding:10px 16px; font-weight:600; cursor:pointer; font-size:14px;
+  }
+  button.btn:hover { background:var(--accent2); }
+  button.btn.ok { background:var(--ok); }
+  button.btn.bad { background:var(--bad); }
+  button.btn.sec { background:#1e293b; }
+  .list { display:grid; gap:10px; margin-top:12px; }
+  .item {
+    background:var(--card2); border:1px solid var(--border); border-radius:11px;
+    padding:12px 14px; display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px;
+  }
+  .meta { font-size:12px; color:var(--muted); margin-top:4px; }
+  code { background:#070a12; padding:2px 7px; border-radius:6px; border:1px solid #1b253b; }
+  .toast {
+    position:fixed; bottom:18px; right:18px; z-index:90; background:#111827;
+    border:1px solid var(--accent); color:#fff; padding:12px 16px; border-radius:12px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.45); display:none; max-width:360px; font-size:13px;
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="card">
-    <h1>🛡️ SADO PROTECT Studio</h1>
-    <div class="row">
-      <span id="botStatus" class="badge">Bot yoxlanılır...</span>
-      <span id="cloudStatus" class="badge">Yaddaş yoxlanılır...</span>
-      <span id="counts" class="badge">0 Skript • 0 Key • 0 Whitelist</span>
-    </div>
-  </div>
 
-  <div class="card">
-    <h2>1. Discord Bot Token</h2>
-    <div class="row">
-      <input id="botTokenInput" type="password" placeholder="Discord Bot Token daxil edin..." />
-      <button onclick="saveBotToken()">Tokeni Yadda Saxla və Botu Başlat</button>
-    </div>
+<div class="topbar">
+  <div class="brand">
+    <button class="hamburger" onclick="toggleDrawer(true)" aria-label="Menyu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="brand-title">🛡️ SADO PROTECT</div>
   </div>
-
-  <div class="card">
-    <h2>2. Yeni Skript Əlavə Et</h2>
-    <div class="list">
-      <input id="scriptName" placeholder="Skript adı (məs: SADO HUB)" />
-      <textarea id="scriptCode" placeholder="-- Lua skript kodunuzu bura yapışdırın..."></textarea>
-      <button class="ok" onclick="createScript()">Skripti Yadda Saxla</button>
-    </div>
-    <div id="scriptsList" class="list"></div>
-  </div>
-
-  <div class="card">
-    <h2>3. Key Yarat və Whitelist İdarəsi</h2>
-    <div class="row">
-      <select id="targetScript"></select>
-      <input id="keyDuration" placeholder="Müddət (məs: 1d, 7d, 30d, 0)" value="0" />
-      <input id="keyAmount" type="number" min="1" max="50" value="1" />
-      <button onclick="generateKeys()">Key Yarat</button>
-    </div>
-    <pre id="generatedKeysBox" style="background:#090d16;padding:10px;border-radius:10px;display:none;"></pre>
-    <div class="row" style="margin-top:10px;">
-      <input id="wlUserId" placeholder="Discord User ID (məs: 123456789012345678)" />
-      <button class="ok" onclick="addWhitelist()">Whitelist Et</button>
-    </div>
-    <div id="whitelistsBox" class="list"></div>
-  </div>
-
-  <div class="card">
-    <h2>4. Ehtiyat Nüsxə (Backup / Bərpa)</h2>
-    <div class="row">
-      <button onclick="downloadBackup()">Backup JSON Yüklə</button>
-      <input id="restoreFile" type="file" accept=".json" />
-      <button class="ok" onclick="restoreBackup()">Backup-dan Bərpa Et</button>
-    </div>
+  <div class="badges">
+    <span id="botStatus" class="badge">Bot yoxlanılır...</span>
+    <span id="cloudStatus" class="badge">Yaddaş...</span>
+    <span id="counts" class="badge">0 Skript • 0 Key • 0 Whitelist</span>
   </div>
 </div>
 
+<div id="drawerBackdrop" class="drawer-backdrop" onclick="toggleDrawer(false)"></div>
+<aside id="drawer" class="drawer">
+  <div class="drawer-head">
+    <strong>📌 SADO PROTECT Menyu</strong>
+    <button class="btn sec" style="padding:6px 10px;" onclick="toggleDrawer(false)">✕</button>
+  </div>
+  <button class="nav-btn active" data-tab="scripts" onclick="switchTab('scripts')">📜 Skriptlər & Dosya Yüklə</button>
+  <button class="nav-btn" data-tab="discord" onclick="switchTab('discord')">🤖 Discord Bot & Panel Dizaynı</button>
+  <button class="nav-btn" data-tab="keys" onclick="switchTab('keys')">🔑 Key & Whitelist İdarəsi</button>
+  <button class="nav-btn" data-tab="backup" onclick="switchTab('backup')">💾 Ehtiyat Nüsxə (Backup)</button>
+</aside>
+
+<div class="wrap">
+
+  <!-- SECTION 1: SCRIPTS & FILE UPLOAD -->
+  <div id="tab-scripts" class="section active">
+    <div class="card">
+      <h2 id="scriptFormTitle">📜 Yeni Skript Yarat / Dosya At</h2>
+      <p class="sub">Lua/txt fayl seçərək yükləyə və ya kodu birbaşa aşağıya yapışdırıb yadda saxlaya bilərsiniz.</p>
+      <input type="hidden" id="editingScriptId" value="" />
+      <div class="grid2" style="margin-bottom:10px;">
+        <div>
+          <label>Skript Adı</label>
+          <input id="scriptName" placeholder="Məs: SADO HUB" />
+        </div>
+        <div>
+          <label>Dosya Seç (.lua, .txt)</label>
+          <input id="scriptFileInput" type="file" accept=".lua,.txt,.js,text/plain" onchange="handleScriptFileUpload(event)" />
+        </div>
+      </div>
+      <label>Skript Kodu</label>
+      <textarea id="scriptCode" placeholder="-- Lua skript kodunuzu bura yazın və ya yuxarıdan dosya seçin..."></textarea>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn ok" onclick="saveScript()">💾 Skripti Yadda Saxla</button>
+        <button id="cancelEditBtn" class="btn sec" style="display:none;" onclick="resetScriptForm()">Ləğv Et</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📂 Mövcud Skriptlər</h3>
+      <div id="scriptsList" class="list"></div>
+    </div>
+  </div>
+
+  <!-- SECTION 2: DISCORD BOT & PANEL BUTTON CUSTOMIZER -->
+  <div id="tab-discord" class="section">
+    <div class="card">
+      <h2>🤖 Discord Bot Qoşulması</h2>
+      <p class="sub">Tokeni daxil edin və botu işə salın. Discord-da <code>/panel</code> və ya <code>/setpanel</code> yazdığınızda yaratdığınız skriptlər siyahıda çıxacaq.</p>
+      <div class="row">
+        <input id="botTokenInput" type="password" placeholder="Discord Bot Token daxil edin..." />
+        <button class="btn" onclick="saveBotToken()">Tokeni Saxla və Botu Başlat</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🎨 Discord Panel Butonları (Ad, Emoji, Rəng)</h2>
+      <p class="sub">Discord-da göndərilən panelin Embed rəngini və 4 butonun adını, emojisini və rəngini dəyişin.</p>
+      <div class="grid2">
+        <div>
+          <label>Embed Rəngi (Hex)</label>
+          <input id="cfgEmbedColor" type="color" value="#5865F2" style="height:42px;padding:4px;" />
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:12px;">
+        <div class="card" style="padding:12px;background:var(--card2);">
+          <strong>1. Redeem Key Butonu</strong>
+          <label style="margin-top:8px;">Buton Adı</label>
+          <input id="cfgRedeemLabel" placeholder="Redeem Key" />
+          <label style="margin-top:8px;">Emoji</label>
+          <input id="cfgRedeemEmoji" placeholder="🔑" />
+          <label style="margin-top:8px;">Rəng</label>
+          <select id="cfgRedeemStyle">
+            <option value="Success">Yaşıl (Success)</option>
+            <option value="Primary">Göy (Primary)</option>
+            <option value="Secondary">Boz (Secondary)</option>
+            <option value="Danger">Qırmızı (Danger)</option>
+          </select>
+        </div>
+
+        <div class="card" style="padding:12px;background:var(--card2);">
+          <strong>2. Get Script Butonu</strong>
+          <label style="margin-top:8px;">Buton Adı</label>
+          <input id="cfgGetScriptLabel" placeholder="Get Script" />
+          <label style="margin-top:8px;">Emoji</label>
+          <input id="cfgGetScriptEmoji" placeholder="📜" />
+          <label style="margin-top:8px;">Rəng</label>
+          <select id="cfgGetScriptStyle">
+            <option value="Primary">Göy (Primary)</option>
+            <option value="Success">Yaşıl (Success)</option>
+            <option value="Secondary">Boz (Secondary)</option>
+            <option value="Danger">Qırmızı (Danger)</option>
+          </select>
+        </div>
+
+        <div class="card" style="padding:12px;background:var(--card2);">
+          <strong>3. Reset HWID Butonu</strong>
+          <label style="margin-top:8px;">Buton Adı</label>
+          <input id="cfgResetHwidLabel" placeholder="Reset HWID" />
+          <label style="margin-top:8px;">Emoji</label>
+          <input id="cfgResetHwidEmoji" placeholder="🔄" />
+          <label style="margin-top:8px;">Rəng</label>
+          <select id="cfgResetHwidStyle">
+            <option value="Secondary">Boz (Secondary)</option>
+            <option value="Primary">Göy (Primary)</option>
+            <option value="Success">Yaşıl (Success)</option>
+            <option value="Danger">Qırmızı (Danger)</option>
+          </select>
+        </div>
+
+        <div class="card" style="padding:12px;background:var(--card2);">
+          <strong>4. Get Stats Butonu</strong>
+          <label style="margin-top:8px;">Buton Adı</label>
+          <input id="cfgGetStatsLabel" placeholder="Get Stats" />
+          <label style="margin-top:8px;">Emoji</label>
+          <input id="cfgGetStatsEmoji" placeholder="📊" />
+          <label style="margin-top:8px;">Rəng</label>
+          <select id="cfgGetStatsStyle">
+            <option value="Secondary">Boz (Secondary)</option>
+            <option value="Primary">Göy (Primary)</option>
+            <option value="Success">Yaşıl (Success)</option>
+            <option value="Danger">Qırmızı (Danger)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:14px;">
+        <button class="btn ok" onclick="savePanelConfig()">💾 Panel Dizaynını Yadda Saxla</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: KEYS & WHITELIST -->
+  <div id="tab-keys" class="section">
+    <div class="card">
+      <h2>🔑 Key Yarat və Whitelist Et</h2>
+      <div class="grid2">
+        <div>
+          <label>Skript Seçin</label>
+          <select id="targetScript"></select>
+        </div>
+        <div>
+          <label>Müddət (1h, 1d, 7d, 30d, 0 = ömürlük)</label>
+          <input id="keyDuration" value="0" placeholder="0" />
+        </div>
+        <div>
+          <label>Key Sayı (1-50)</label>
+          <input id="keyAmount" type="number" min="1" max="50" value="1" />
+        </div>
+        <div>
+          <label>Yaradanın Adı (istəyə bağlı)</label>
+          <input id="keyCreatorName" placeholder="Məs: Sado Admin" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" onclick="generateKeys()">🔑 Key Yarat</button>
+      </div>
+      <pre id="generatedKeysBox" style="background:#070a12;border:1px solid var(--border);padding:12px;border-radius:10px;display:none;margin-top:12px;overflow:auto;"></pre>
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;" />
+      <div class="grid2">
+        <div>
+          <label>Discord User ID (Birbaşa Whitelist)</label>
+          <input id="wlUserId" placeholder="123456789012345678" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn ok" onclick="addWhitelist()">✅ Whitelist Əlavə Et</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🧾 Yaradılan Key-lər (Kim Yaradıb & Kim İşlədib)</h3>
+      <div id="keysListBox" class="list"></div>
+    </div>
+
+    <div class="card">
+      <h3>✅ Aktiv Whitelist Siyahısı</h3>
+      <div id="whitelistsBox" class="list"></div>
+    </div>
+  </div>
+
+  <!-- SECTION 4: BACKUP & RESTORE -->
+  <div id="tab-backup" class="section">
+    <div class="card">
+      <h2>💾 Ehtiyat Nüsxə (Backup & Bərpa)</h2>
+      <p class="sub">Bütün skriptlərinizi, key-lərinizi, whitelist-ləri və panel ayarlarınızı JSON olaraq yükləyin və ya geri bərpa edin.</p>
+      <div class="row">
+        <button class="btn" onclick="downloadBackup()">⬇️ Backup JSON Yüklə</button>
+        <input id="restoreFile" type="file" accept=".json" style="max-width:300px;" />
+        <button class="btn ok" onclick="restoreBackup()">⬆️ Backup-dan Bərpa Et</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
 <script>
 const urlToken = new URLSearchParams(location.search).get('token') || '';
+let cachedScripts = [];
+let configLoadedOnce = false;
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+function toggleDrawer(open) {
+  document.getElementById('drawer').classList.toggle('open', open);
+  document.getElementById('drawerBackdrop').classList.toggle('open', open);
+}
+
+function switchTab(tabName) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+  const target = document.getElementById('tab-' + tabName);
+  if (target) target.classList.add('active');
+  toggleDrawer(false);
+}
+
 function apiHeaders() {
   const h = { 'Content-Type': 'application/json' };
   if (urlToken) h['x-panel-token'] = urlToken;
   return h;
 }
 
-async function refreshState() {
-  const res = await fetch('/api/state', { headers: apiHeaders() });
-  const data = await res.json();
-  if (!data.ok) return;
-  document.getElementById('botStatus').textContent = data.botReady ? ('✅ Bot Aktiv: ' + data.botTag) : '⚠️ Bot Qoşulmayıb';
-  document.getElementById('cloudStatus').textContent = data.cloudConnected ? '☁️ Bulud Yaddaş Aktiv' : '💾 Lokal Yaddaş (Backup tövsiyə olunur)';
-  document.getElementById('counts').textContent = data.scripts.length + ' Skript • ' + data.keysCount + ' Key • ' + data.whitelistsCount + ' Whitelist';
-
-  const sel = document.getElementById('targetScript');
-  const prev = sel.value;
-  sel.innerHTML = data.scripts.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('');
-  if (prev) sel.value = prev;
-
-  document.getElementById('scriptsList').innerHTML = data.scripts.map(s =>
-    '<div class="item"><div><b>' + s.name + '</b> <code>' + s.id + '</code></div>' +
-    '<button class="bad" onclick="deleteScript(\\'' + s.id + '\\')">Sil</button></div>'
-  ).join('');
-
-  document.getElementById('whitelistsBox').innerHTML = data.whitelists.map(w =>
-    '<div class="item"><div>User: <code>' + w.userId + '</code> • Skript: <b>' + w.scriptName + '</b></div>' +
-    '<button class="bad" onclick="removeWhitelist(\\'' + w.id + '\\')">Sil</button></div>'
-  ).join('');
+function escHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
-async function saveBotToken() {
-  const token = document.getElementById('botTokenInput').value.trim();
-  if (!token) return alert('Token daxil edin');
-  const res = await fetch('/api/bot-token', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ token }) });
-  const d = await res.json();
-  alert(d.message || (d.ok ? 'Bot başladıldı!' : 'Xəta'));
-  refreshState();
+async function handleScriptFileUpload(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  document.getElementById('scriptCode').value = text;
+  const nameInput = document.getElementById('scriptName');
+  if (!nameInput.value.trim()) {
+    nameInput.value = file.name.replace(/\.[^.]+$/, '');
+  }
+  showToast('Dosya oxundu: ' + file.name);
 }
 
-async function createScript() {
-  const name = document.getElementById('scriptName').value.trim();
-  const code = document.getElementById('scriptCode').value;
-  if (!name || !code.trim()) return alert('Ad və kod daxil edin');
-  await fetch('/api/scripts', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ name, code }) });
+function editScript(id) {
+  const s = cachedScripts.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('editingScriptId').value = s.id;
+  document.getElementById('scriptName').value = s.name;
+  document.getElementById('scriptCode').value = s.code || '';
+  document.getElementById('scriptFormTitle').textContent = '✏️ Skripti Redaktə Et: ' + s.name;
+  document.getElementById('cancelEditBtn').style.display = 'inline-block';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function resetScriptForm() {
+  document.getElementById('editingScriptId').value = '';
   document.getElementById('scriptName').value = '';
   document.getElementById('scriptCode').value = '';
+  document.getElementById('scriptFileInput').value = '';
+  document.getElementById('scriptFormTitle').textContent = '📜 Yeni Skript Yarat / Dosya At';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+}
+
+async function saveScript() {
+  const editId = document.getElementById('editingScriptId').value.trim();
+  const name = document.getElementById('scriptName').value.trim();
+  const code = document.getElementById('scriptCode').value;
+  if (!name || !code.trim()) return showToast('Skript adı və kodu daxil edin.');
+
+  if (editId) {
+    await fetch('/api/scripts/' + encodeURIComponent(editId), {
+      method: 'PUT',
+      headers: apiHeaders(),
+      body: JSON.stringify({ name, code })
+    });
+    showToast('Skript yeniləndi!');
+  } else {
+    await fetch('/api/scripts', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ name, code })
+    });
+    showToast('Yeni skript yadda saxlanıldı!');
+  }
+  resetScriptForm();
   refreshState();
 }
 
 async function deleteScript(id) {
   await fetch('/api/scripts/' + encodeURIComponent(id), { method: 'DELETE', headers: apiHeaders() });
+  showToast('Skript silindi.');
   refreshState();
+}
+
+async function saveBotToken() {
+  const token = document.getElementById('botTokenInput').value.trim();
+  if (!token) return showToast('Token daxil edin.');
+  const res = await fetch('/api/bot-token', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ token })
+  });
+  const d = await res.json();
+  showToast(d.message || (d.ok ? 'Bot başladıldı!' : 'Xəta'));
+  refreshState();
+}
+
+async function savePanelConfig() {
+  const payload = {
+    embedColor: document.getElementById('cfgEmbedColor').value,
+    redeemLabel: document.getElementById('cfgRedeemLabel').value.trim() || 'Redeem Key',
+    redeemEmoji: document.getElementById('cfgRedeemEmoji').value.trim(),
+    redeemStyle: document.getElementById('cfgRedeemStyle').value,
+    getScriptLabel: document.getElementById('cfgGetScriptLabel').value.trim() || 'Get Script',
+    getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value.trim(),
+    getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
+    resetHwidLabel: document.getElementById('cfgResetHwidLabel').value.trim() || 'Reset HWID',
+    resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value.trim(),
+    resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
+    getStatsLabel: document.getElementById('cfgGetStatsLabel').value.trim() || 'Get Stats',
+    getStatsEmoji: document.getElementById('cfgGetStatsEmoji').value.trim(),
+    getStatsStyle: document.getElementById('cfgGetStatsStyle').value
+  };
+  const res = await fetch('/api/panel-config', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify(payload)
+  });
+  const d = await res.json();
+  showToast(d.ok ? 'Panel buton dizaynı yadda saxlanıldı!' : 'Xəta baş verdi.');
 }
 
 async function generateKeys() {
   const scriptId = document.getElementById('targetScript').value;
+  if (!scriptId) return showToast('Əvvəlcə skript yaradın və seçin.');
   const time = document.getElementById('keyDuration').value;
   const amount = Number(document.getElementById('keyAmount').value || 1);
-  const res = await fetch('/api/keys', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ scriptId, time, amount }) });
+  const createdByName = document.getElementById('keyCreatorName').value.trim() || 'Veb Panel';
+  const res = await fetch('/api/keys', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ scriptId, time, amount, createdByName })
+  });
   const d = await res.json();
   if (d.keys) {
     const box = document.getElementById('generatedKeysBox');
     box.style.display = 'block';
     box.textContent = d.keys.join('\\n');
+    showToast(d.keys.length + ' ədəd key yaradıldı!');
   }
+  refreshState();
+}
+
+async function deleteKey(id) {
+  await fetch('/api/keys/' + encodeURIComponent(id), { method: 'DELETE', headers: apiHeaders() });
+  showToast('Key silindi.');
   refreshState();
 }
 
@@ -1344,14 +1791,20 @@ async function addWhitelist() {
   const scriptId = document.getElementById('targetScript').value;
   const userId = document.getElementById('wlUserId').value.trim();
   const time = document.getElementById('keyDuration').value;
-  if (!scriptId || !userId) return alert('Skript və User ID seçin');
-  await fetch('/api/whitelist', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ scriptId, userId, time }) });
+  if (!scriptId || !userId) return showToast('Skript və User ID daxil edin.');
+  await fetch('/api/whitelist', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ scriptId, userId, time })
+  });
   document.getElementById('wlUserId').value = '';
+  showToast('Whitelist əlavə edildi!');
   refreshState();
 }
 
 async function removeWhitelist(id) {
   await fetch('/api/whitelist/' + encodeURIComponent(id), { method: 'DELETE', headers: apiHeaders() });
+  showToast('Whitelist silindi.');
   refreshState();
 }
 
@@ -1366,16 +1819,83 @@ async function downloadBackup() {
 
 async function restoreBackup() {
   const file = document.getElementById('restoreFile').files[0];
-  if (!file) return alert('JSON faylı seçin');
+  if (!file) return showToast('JSON faylı seçin.');
   const text = await file.text();
   const res = await fetch('/api/restore', { method: 'POST', headers: apiHeaders(), body: text });
   const d = await res.json();
-  alert(d.ok ? 'Bərpa tamamlandı!' : ('Xəta: ' + d.message));
+  showToast(d.ok ? 'Backup uğurla bərpa edildi!' : ('Xəta: ' + d.message));
   refreshState();
 }
 
+async function refreshState() {
+  try {
+    const res = await fetch('/api/state', { headers: apiHeaders() });
+    const data = await res.json();
+    if (!data.ok) return;
+
+    cachedScripts = data.scripts || [];
+    document.getElementById('botStatus').textContent = data.botReady ? ('✅ Bot: ' + data.botTag) : '⚠️ Bot Qoşulmayıb';
+    document.getElementById('cloudStatus').textContent = data.cloudConnected ? '☁️ Bulud Aktiv' : '💾 Lokal Yaddaş';
+    document.getElementById('counts').textContent =
+      cachedScripts.length + ' Skript • ' + data.keysCount + ' Key • ' + data.whitelistsCount + ' Whitelist';
+
+    if (!configLoadedOnce && data.panelButtonConfig) {
+      const c = data.panelButtonConfig;
+      document.getElementById('cfgEmbedColor').value = c.embedColor || '#5865F2';
+      document.getElementById('cfgRedeemLabel').value = c.redeemLabel || 'Redeem Key';
+      document.getElementById('cfgRedeemEmoji').value = c.redeemEmoji || '🔑';
+      document.getElementById('cfgRedeemStyle').value = c.redeemStyle || 'Success';
+      document.getElementById('cfgGetScriptLabel').value = c.getScriptLabel || 'Get Script';
+      document.getElementById('cfgGetScriptEmoji').value = c.getScriptEmoji || '📜';
+      document.getElementById('cfgGetScriptStyle').value = c.getScriptStyle || 'Primary';
+      document.getElementById('cfgResetHwidLabel').value = c.resetHwidLabel || 'Reset HWID';
+      document.getElementById('cfgResetHwidEmoji').value = c.resetHwidEmoji || '🔄';
+      document.getElementById('cfgResetHwidStyle').value = c.resetHwidStyle || 'Secondary';
+      document.getElementById('cfgGetStatsLabel').value = c.getStatsLabel || 'Get Stats';
+      document.getElementById('cfgGetStatsEmoji').value = c.getStatsEmoji || '📊';
+      document.getElementById('cfgGetStatsStyle').value = c.getStatsStyle || 'Secondary';
+      configLoadedOnce = true;
+    }
+
+    const sel = document.getElementById('targetScript');
+    const prev = sel.value;
+    sel.innerHTML = cachedScripts.map(s => '<option value="' + escHtml(s.id) + '">' + escHtml(s.name) + '</option>').join('');
+    if (prev && cachedScripts.some(s => s.id === prev)) sel.value = prev;
+
+    document.getElementById('scriptsList').innerHTML = cachedScripts.length
+      ? cachedScripts.map(s =>
+          '<div class="item"><div><b>' + escHtml(s.name) + '</b> <code>' + escHtml(s.id) + '</code>' +
+          '<div class="meta">Ölçü: ' + (s.code ? s.code.length : 0) + ' simvol</div></div>' +
+          '<div class="row"><button class="btn sec" onclick="editScript(\\'' + escHtml(s.id) + '\\')">Redaktə</button>' +
+          '<button class="btn bad" onclick="deleteScript(\\'' + escHtml(s.id) + '\\')">Sil</button></div></div>'
+        ).join('')
+      : '<div class="meta">Hələ skript əlavə edilməyib.</div>';
+
+    const keys = data.recentKeys || [];
+    document.getElementById('keysListBox').innerHTML = keys.length
+      ? keys.map(k => {
+          const usedInfo = k.redeemedBy
+            ? ('✅ İstifadə edən: <b>' + escHtml(k.redeemedByName || k.redeemedBy) + '</b>')
+            : '⏳ İstifadə edilməyib';
+          const creatorInfo = 'Yaradan: <b>' + escHtml(k.createdByName || 'Veb Panel') + '</b>';
+          return '<div class="item"><div><code>' + escHtml(k.code) + '</code> • Skript: <b>' + escHtml(k.scriptName) + '</b>' +
+            '<div class="meta">' + creatorInfo + ' | ' + usedInfo + '</div></div>' +
+            '<button class="btn bad" onclick="deleteKey(\\'' + escHtml(k.id) + '\\')">Sil</button></div>';
+        }).join('')
+      : '<div class="meta">Hələ key yaradılmayıb.</div>';
+
+    const wls = data.whitelists || [];
+    document.getElementById('whitelistsBox').innerHTML = wls.length
+      ? wls.map(w =>
+          '<div class="item"><div>User: <b>' + escHtml(w.username || w.userId) + '</b> <code>' + escHtml(w.userId) + '</code> • Skript: <b>' + escHtml(w.scriptName) + '</b></div>' +
+          '<button class="btn bad" onclick="removeWhitelist(\\'' + escHtml(w.id) + '\\')">Sil</button></div>'
+        ).join('')
+      : '<div class="meta">Aktiv whitelist yoxdur.</div>';
+  } catch (e) {}
+}
+
 refreshState();
-setInterval(refreshState, 8000);
+setInterval(refreshState, 7000);
 </script>
 </body>
 </html>`;
@@ -1460,7 +1980,7 @@ const server = http.createServer(async (req, res) => {
                     })),
                     keysCount: state.keys.length,
                     whitelistsCount: state.whitelists.filter((w) => !w.revoked && !isExpired(w.expiresAt)).length,
-                    recentKeys: state.keys.slice(-20).reverse().map(enrichMemberEntry),
+                    recentKeys: state.keys.slice(-50).reverse().map(enrichMemberEntry),
                     whitelists: state.whitelists
                         .filter((w) => !w.revoked && !isExpired(w.expiresAt))
                         .slice(-50)
@@ -1488,6 +2008,30 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        if (reqUrl.pathname === '/api/panel-config' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            state.panelButtonConfig = {
+                ...state.panelButtonConfig,
+                embedColor: String(body.embedColor || state.panelButtonConfig.embedColor || '#5865F2').trim(),
+                redeemLabel: String(body.redeemLabel || 'Redeem Key').trim().slice(0, 80),
+                redeemEmoji: String(body.redeemEmoji ?? '').trim().slice(0, 32),
+                redeemStyle: String(body.redeemStyle || 'Success').trim(),
+                getScriptLabel: String(body.getScriptLabel || 'Get Script').trim().slice(0, 80),
+                getScriptEmoji: String(body.getScriptEmoji ?? '').trim().slice(0, 32),
+                getScriptStyle: String(body.getScriptStyle || 'Primary').trim(),
+                resetHwidLabel: String(body.resetHwidLabel || 'Reset HWID').trim().slice(0, 80),
+                resetHwidEmoji: String(body.resetHwidEmoji ?? '').trim().slice(0, 32),
+                resetHwidStyle: String(body.resetHwidStyle || 'Secondary').trim(),
+                getStatsLabel: String(body.getStatsLabel || 'Get Stats').trim().slice(0, 80),
+                getStatsEmoji: String(body.getStatsEmoji ?? '').trim().slice(0, 32),
+                getStatsStyle: String(body.getStatsStyle || 'Secondary').trim()
+            };
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, panelButtonConfig: state.panelButtonConfig }));
+            return;
+        }
+
         if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
             const body = await readJsonBody(req);
             const name = String(body.name || '').trim();
@@ -1505,6 +2049,23 @@ const server = http.createServer(async (req, res) => {
                 createdAt: nowMs()
             };
             state.scripts.push(script);
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, script }));
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'PUT') {
+            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
+            const script = getScriptById(scriptId);
+            if (!script) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            const body = await readJsonBody(req);
+            if (body.name && String(body.name).trim()) script.name = String(body.name).trim();
+            if (typeof body.code === 'string' && body.code.trim()) script.code = body.code;
             persistState();
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: true, script }));
@@ -1530,6 +2091,7 @@ const server = http.createServer(async (req, res) => {
             }
             const durationMs = parseDurationToMs(body.time);
             const amount = Math.max(1, Math.min(50, Number(body.amount || 1)));
+            const createdByName = String(body.createdByName || 'Veb Panel').trim() || 'Veb Panel';
             const keys = [];
             for (let i = 0; i < amount; i++) {
                 const code = generateKeyCode();
@@ -1539,7 +2101,10 @@ const server = http.createServer(async (req, res) => {
                     scriptId: script.id,
                     durationMs: durationMs === undefined ? null : durationMs,
                     expiresAt: null,
+                    createdBy: null,
+                    createdByName,
                     redeemedBy: null,
+                    redeemedByName: null,
                     redeemedAt: null,
                     hwid: null,
                     disabled: false,
@@ -1550,6 +2115,15 @@ const server = http.createServer(async (req, res) => {
             persistState();
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: true, keys }));
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/keys/') && req.method === 'DELETE') {
+            const keyId = decodeURIComponent(reqUrl.pathname.slice('/api/keys/'.length));
+            state.keys = state.keys.filter((k) => k.id !== keyId);
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true }));
             return;
         }
 
