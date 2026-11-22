@@ -35,6 +35,8 @@ const PUBLIC_BASE_URL = String(
 
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : __dirname;
 const DATA_FILE = path.join(DATA_DIR, 'sado-protect-data.json');
+const BACKUP_FILE = path.join(DATA_DIR, 'sado-protect-data.backup.json');
+const TMP_FILE = path.join(DATA_DIR, 'sado-protect-data.tmp.json');
 
 function ensureDataDir() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -64,24 +66,49 @@ function createDefaultState() {
 
 let state = createDefaultState();
 
+function writeStateToPath(targetPath, tmpPath, payloadStr) {
+    fs.writeFileSync(tmpPath, payloadStr, 'utf8');
+    fs.renameSync(tmpPath, targetPath);
+}
+
 function persistState() {
     ensureDataDir();
     try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf8');
+        const serialized = JSON.stringify(state, null, 2);
+        writeStateToPath(DATA_FILE, TMP_FILE, serialized);
+        try {
+            writeStateToPath(BACKUP_FILE, `${TMP_FILE}.bak`, serialized);
+        } catch (bakErr) {
+            console.error('[SADO PROTECT] Backup yazılarkən xəta:', bakErr.message);
+        }
     } catch (err) {
         console.error('[SADO PROTECT] State yazılarkən xəta:', err.message);
     }
 }
 
+function tryReadStateJson(filePath) {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw || !raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
 function loadState() {
     ensureDataDir();
     try {
-        if (fs.existsSync(DATA_FILE)) {
-            const raw = fs.readFileSync(DATA_FILE, 'utf8');
-            const parsed = JSON.parse(raw);
+        let parsed = tryReadStateJson(DATA_FILE);
+        if (!parsed) {
+            parsed = tryReadStateJson(BACKUP_FILE);
+            if (parsed) {
+                console.log('[SADO PROTECT] Əsas fayl boş/yoxdur, ehtiyat nüsxədən bərpa edildi.');
+            }
+        }
+
+        if (parsed) {
             state = {
                 ...createDefaultState(),
-                ...(parsed && typeof parsed === 'object' ? parsed : {})
+                ...parsed
             };
             state.savedBotToken = String(state.savedBotToken || '').trim();
             if (!runtimeBotToken && state.savedBotToken) {
@@ -97,10 +124,11 @@ function loadState() {
             state.userProfiles = state.userProfiles && typeof state.userProfiles === 'object' ? state.userProfiles : {};
             state.panelButtonConfig = {
                 ...createDefaultState().panelButtonConfig,
-                ...(parsed && parsed.panelButtonConfig && typeof parsed.panelButtonConfig === 'object'
+                ...(parsed.panelButtonConfig && typeof parsed.panelButtonConfig === 'object'
                     ? parsed.panelButtonConfig
                     : {})
             };
+            persistState();
         } else {
             persistState();
         }
