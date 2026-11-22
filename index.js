@@ -500,22 +500,22 @@ function buildPanelEmbed(panelTitle, script) {
         .setColor(parseHexColor(cfg.embedColor, 0x5865f2))
         .setFooter({ text: 'SADO PROTECT • Hər skriptə ayrı whitelist və 1 nəfərlik key sistemi' })
         .setTimestamp();
-}
-
-function buildLoaderSnippet(baseUrl, scriptId, userId, token) {
+function buildLoaderSnippet(baseUrl, scriptId, userId, token, licenseKey) {
     const cleanBase = String(baseUrl || PUBLIC_BASE_URL).replace(/\/+$/, '');
     const url = `${cleanBase}/raw/${encodeURIComponent(scriptId)}?uid=${encodeURIComponent(userId)}&t=${encodeURIComponent(token)}`;
-    return `loadstring(game:HttpGet("${url}"))()`;
+    const safeKey = String(licenseKey || 'WHITELIST').replace(/"/g, '\\"');
+    return `script_key = "${safeKey}"\nloadstring(game:HttpGet("${url}"))()`;
 }
 
 function ensureUserLoaderToken(userId, scriptId) {
-    let wl = getActiveWhitelist(userId, scriptId);
+    const cleanUserId = String(userId || '').trim();
+    const keyRecord = getUserKeyForScript(cleanUserId, scriptId);
+    let wl = getActiveWhitelist(cleanUserId, scriptId);
     if (!wl) {
-        const keyRecord = getUserKeyForScript(userId, scriptId);
         if (!keyRecord) return null;
         wl = {
             id: generateId('wl'),
-            userId: String(userId),
+            userId: cleanUserId,
             scriptId,
             expiresAt: keyRecord.expiresAt || null,
             hwid: keyRecord.hwid || null,
@@ -565,19 +565,6 @@ const slashCommands = [
         )
         .addStringOption((opt) =>
             opt.setName('name').setDescription('Alternativ panel başlığı').setRequired(false)
-        ),
-    new SlashCommandBuilder()
-        .setName('setpanel')
-        .setDescription('Bu kanala skript paneli yerləşdir')
-        .addStringOption((opt) =>
-            opt.setName('name').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(true)
-        )
-        .addStringOption((opt) =>
-            opt
-                .setName('script')
-                .setDescription('Skript seçin (yaratdığınız skriptlər)')
-                .setAutocomplete(true)
-                .setRequired(false)
         ),
     new SlashCommandBuilder()
         .setName('genkey')
@@ -736,15 +723,20 @@ async function executePanelPost(channel, panelName, script) {
 async function applyWhitelistForTargets(script, targetUsers, durationMs) {
     const expiresAt = durationMs ? nowMs() + durationMs : null;
     for (const u of targetUsers) {
+        const uid = String(u && u.id ? u.id : u || '').trim();
+        if (!uid) continue;
         rememberUserProfile(u);
-        const existing = getActiveWhitelist(u.id, script.id);
+        const existing = getActiveWhitelist(uid, script.id);
         if (existing) {
             existing.expiresAt = expiresAt;
             existing.revoked = false;
+            if (!existing.loaderToken) {
+                existing.loaderToken = crypto.randomBytes(16).toString('hex');
+            }
         } else {
             state.whitelists.push({
                 id: generateId('wl'),
-                userId: String(u.id),
+                userId: uid,
                 scriptId: script.id,
                 expiresAt,
                 hwid: null,
@@ -758,7 +750,9 @@ async function applyWhitelistForTargets(script, targetUsers, durationMs) {
 }
 
 async function removeWhitelistForTargets(script, targetUsers) {
-    const ids = new Set(targetUsers.map((u) => String(u.id)));
+    const ids = new Set(
+        targetUsers.map((u) => String(u && u.id ? u.id : u || '').trim()).filter(Boolean)
+    );
     let count = 0;
     for (const w of state.whitelists) {
         if (w.scriptId === script.id && ids.has(w.userId) && !w.revoked) {
@@ -773,6 +767,27 @@ async function removeWhitelistForTargets(script, targetUsers) {
     }
     persistState();
     return count;
+}
+
+function isRobloxExecutorRequest(req) {
+    const ua = String(req.headers['user-agent'] || '').toLowerCase();
+    const hasExecutorHeader = Boolean(
+        req.headers['roblox-id'] ||
+            req.headers['syn-fingerprint'] ||
+            req.headers['krnl-hwid'] ||
+            req.headers['flux-fingerprint'] ||
+            req.headers['evon-hwid'] ||
+            req.headers['x-executor'] ||
+            req.headers['x-hwid']
+    );
+    if (hasExecutorHeader) return true;
+    if (ua.includes('roblox')) return true;
+    const secFetchSite = req.headers['sec-fetch-site'];
+    const secFetchMode = req.headers['sec-fetch-mode'];
+    if (secFetchSite || secFetchMode) return false;
+    const accept = String(req.headers['accept'] || '').toLowerCase();
+    if (accept.includes('text/html')) return false;
+    return false;
 }
 
 function attachBotHandlers(botClient) {
@@ -924,16 +939,28 @@ function attachBotHandlers(botClient) {
                     let targets = [];
                     if (user) targets.push(user);
                     if (role) {
-                        await interaction.guild.members.fetch();
+                        try {
+                            await interaction.guild.members.fetch();
+                        } catch (_) {}
                         for (const member of role.members.values()) {
-                            if (!member.user.bot) targets.push(member.user);
+                            if (member && member.user && !member.user.bot) {
+                                targets.push(member.user);
+                            }
                         }
                     }
-                    targets = [...new Map(targets.map((u) => [u.id, u])).values()];
+                    targets = [...new Map(targets.filter((u) => u && u.id).map((u) => [String(u.id), u])).values()];
+
+                    if (targets.length === 0) {
+                        await interaction.reply({
+                            content: '❌ Seçilən istifadəçi və ya rolda whitelist ediləcək üzv tapılmadı.',
+                            ephemeral: true
+                        });
+                        return;
+                    }
 
                     const script = await resolveScriptOrAsk(interaction, scriptQuery, {
                         type: cmd,
-                        targetUserIds: targets.map((u) => u.id),
+                        targetUserIds: targets.map((u) => String(u.id)),
                         durationMs
                     });
                     if (!script) return;
@@ -1124,7 +1151,14 @@ function attachBotHandlers(botClient) {
                         });
                         return;
                     }
-                    const snippet = buildLoaderSnippet(PUBLIC_BASE_URL, script.id, interaction.user.id, wl.loaderToken);
+                    const keyRec = getUserKeyForScript(interaction.user.id, script.id);
+                    const snippet = buildLoaderSnippet(
+                        PUBLIC_BASE_URL,
+                        script.id,
+                        interaction.user.id,
+                        wl.loaderToken,
+                        keyRec ? keyRec.code : 'WHITELIST'
+                    );
                     await interaction.reply({
                         content:
                             `✅ **${script.name}** yükləyici kodu (yalnız sizin üçün):\n` +
@@ -1944,6 +1978,12 @@ const server = http.createServer(async (req, res) => {
             const uid = String(reqUrl.searchParams.get('uid') || '').trim();
             const tok = String(reqUrl.searchParams.get('t') || '').trim();
             const hwid = String(req.headers['x-hwid'] || reqUrl.searchParams.get('hwid') || '').trim();
+
+            if (!isRobloxExecutorRequest(req)) {
+                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('-- SADO PROTECT: Brauzerdən və ya icazəsiz sorğudan skript koduna baxmaq qadağandır.');
+                return;
+            }
 
             const script = getScriptById(scriptId);
             if (!script || script.disabled) {
