@@ -2015,6 +2015,21 @@ document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.classList.add('active');
     document.querySelectorAll('.section').forEach((s) => s.classList.remove('active'));
     document.getElementById(btn.dataset.sec).classList.add('active');
+    drawer.classList.remove('open');
+    backdrop.classList.remove('show');
+  };
+});
+
+document.getElementById('scriptFileInput').onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const txt = await file.text();
+  document.getElementById('scriptCodeInput').value = txt;
+  if (!document.getElementById('scriptNameInput').value.trim()) {
+    document.getElementById('scriptNameInput').value = file.name.replace(/\.[^.]+$/, '');
+  }
+};
+
 function getOrCreateLocalWsId() {
   let id = localStorage.getItem('sado_ws_id');
   if (!id || id.length < 8) {
@@ -2147,6 +2162,23 @@ document.getElementById('linkDiscordIdBtn').onclick = async () => {
   showToast(r.message || 'Bağlandı');
   refreshAll();
 };
+
+document.getElementById('savePanelCfgBtn').onclick = async () => {
+  const payload = {
+    embedColor: document.getElementById('cfgEmbedColor').value.trim(),
+    redeemLabel: document.getElementById('cfgRedeemLabel').value.trim(),
+    redeemEmoji: document.getElementById('cfgRedeemEmoji').value.trim(),
+    redeemStyle: document.getElementById('cfgRedeemStyle').value,
+    getScriptLabel: document.getElementById('cfgGetScriptLabel').value.trim(),
+    getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value.trim(),
+    getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
+    resetHwidLabel: document.getElementById('cfgResetHwidLabel').value.trim(),
+    resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value.trim(),
+    resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
+    getStatsLabel: document.getElementById('cfgGetStatsLabel').value.trim(),
+    getStatsEmoji: document.getElementById('cfgGetStatsEmoji').value.trim(),
+    getStatsStyle: document.getElementById('cfgGetStatsStyle').value
+  };
   const r = await api('/api/panel-config', { method: 'POST', body: JSON.stringify(payload) });
   if (r.ok) {
     showToast('Panel dizaynı yadda saxlandı!');
@@ -2463,6 +2495,89 @@ const server = http.createServer(async (req, res) => {
             if (targetScript && isScriptOwnedByWorkspace(targetScript, activeWsId)) {
                 state.scripts = state.scripts.filter((s) => s.id !== scriptId);
                 persistState();
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/keys' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const script = getScriptById(String(body.scriptId || '').trim());
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            const durationMs = parseDurationToMs(body.time);
+            if (durationMs === undefined) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Yanlış müddət formatı.' }));
+                return;
+            }
+            const amount = Math.min(50, Math.max(1, Number(body.amount || 1)));
+            const created = [];
+            for (let i = 0; i < amount; i++) {
+                const code = generateKeyCode();
+                state.keys.push({
+                    id: generateId('key'),
+                    code,
+                    scriptId: script.id,
+                    durationMs,
+                    expiresAt: null,
+                    createdBy: null,
+                    createdByName: 'Veb Panel',
+                    redeemedBy: null,
+                    redeemedByName: null,
+                    redeemedAt: null,
+                    hwid: null,
+                    disabled: false,
+                    createdAt: nowMs()
+                });
+                created.push(code);
+            }
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, keys: created }));
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/whitelist' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const script = getScriptById(String(body.scriptId || '').trim());
+            const userId = String(body.userId || '').trim();
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            if (!userId) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Discord User ID daxil edin.' }));
+                return;
+            }
+            const durationMs = parseDurationToMs(body.time);
+            if (durationMs === undefined) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Yanlış müddət formatı.' }));
+                return;
+            }
+            await applyWhitelistForTargets(script, [{ id: userId }], durationMs);
+            const autoKey = getUserKeyForScript(userId, script.id);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, key: autoKey ? autoKey.code : null }));
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/whitelist/') && req.method === 'DELETE') {
+            const wlId = decodeURIComponent(reqUrl.pathname.slice('/api/whitelist/'.length));
+            const targetWl = state.whitelists.find((w) => w.id === wlId);
+            if (targetWl) {
+                const scr = getScriptById(targetWl.scriptId);
+                if (scr && isScriptOwnedByWorkspace(scr, activeWsId)) {
+                    targetWl.revoked = true;
+                    persistState();
+                }
             }
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: true }));
