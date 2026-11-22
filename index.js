@@ -638,12 +638,6 @@ function buildHwidGuardedLuaPayload(scriptCode, boundHwid, lockEpoch, kickReason
 
     return `${guardHeader}\n\n${scriptCode || ''}`;
 }
-    if (!wl.loaderToken) {
-        wl.loaderToken = crypto.randomBytes(16).toString('hex');
-        persistState();
-    }
-    return wl;
-}
 
 const slashCommands = [
     new SlashCommandBuilder()
