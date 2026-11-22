@@ -1030,9 +1030,7 @@ function attachBotHandlers(botClient) {
                     });
                     return;
                 }
-            }
-
-            if (interaction.isStringSelectMenu() && interaction.customId.startsWith('sp_select_script:')) {
+            } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith('sp_select_script:')) {
                 const token = interaction.customId.split(':')[1];
                 const pending = pendingSelections.get(token);
                 if (!pending || pending.ownerId !== interaction.user.id) {
@@ -1113,9 +1111,7 @@ function attachBotHandlers(botClient) {
                     });
                 }
                 return;
-            }
-
-            if (interaction.isButton() && interaction.customId.startsWith('sp_copyscript:')) {
+            } else if (interaction.isButton() && interaction.customId.startsWith('sp_copyscript:')) {
                 const copyId = interaction.customId.split(':')[1];
                 const entry = pendingCopySnippets.get(copyId);
                 if (!entry || entry.ownerId !== interaction.user.id || nowMs() > entry.expiresAt) {
@@ -1130,9 +1126,7 @@ function attachBotHandlers(botClient) {
                     ephemeral: true
                 });
                 return;
-            }
-
-            if (interaction.isButton() && interaction.customId.startsWith('sp_')) {
+            } else if (interaction.isButton() && interaction.customId.startsWith('sp_')) {
                 const [action, scriptId] = interaction.customId.split(':');
                 const script = getScriptById(scriptId);
                 if (!script) {
@@ -1260,9 +1254,7 @@ function attachBotHandlers(botClient) {
                     await interaction.reply({ embeds: [embed], ephemeral: true });
                     return;
                 }
-            }
-
-            if (interaction.isModalSubmit() && interaction.customId.startsWith('sp_redeem_modal:')) {
+            } else if (interaction.isModalSubmit() && interaction.customId.startsWith('sp_redeem_modal:')) {
                 const scriptId = interaction.customId.split(':')[1];
                 const script = getScriptById(scriptId);
                 if (!script) {
@@ -1335,6 +1327,8 @@ function attachBotHandlers(botClient) {
             console.error('[SADO PROTECT] Interaction xətası:', err);
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({ content: '❌ Xəta baş verdi, yenidən cəhd edin.', ephemeral: true }).catch(() => {});
+            } else {
+                await interaction.followUp({ content: '❌ Xəta baş verdi, yenidən cəhd edin.', ephemeral: true }).catch(() => {});
             }
         }
     });
