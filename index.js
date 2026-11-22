@@ -1441,52 +1441,632 @@ function attachBotHandlers(botClient) {
     });
 }
 
-            const script = getScriptById(scriptId);
-            if (!script || script.disabled) {
-                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end('-- SADO PROTECT: Skript deaktivdir və ya tapılmadı.');
-                return;
+function getGuildsWithRolesSummary() {
+    if (!client || !client.guilds) return [];
+    return [...client.guilds.cache.values()].map((g) => {
+        const settings = getGuildSettings(g.id);
+        const roles = [...g.roles.cache.values()]
+            .filter((r) => r.id !== g.id)
+            .sort((a, b) => b.position - a.position)
+            .map((r) => ({ id: r.id, name: r.name }));
+        return {
+            id: g.id,
+            name: g.name,
+            allowedRoleIds: settings.allowedRoleIds || [],
+            roles
+        };
+    });
+}
+
+async function startOrRestartBot() {
+    if (!runtimeBotToken) return null;
+    if (botBootPromise) return botBootPromise;
+
+    botBootPromise = (async () => {
+        if (client) {
+            try {
+                client.destroy();
+            } catch (_) {}
+            client = null;
+        }
+        const nextClient = new Client({
+            intents: [
+                GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildMembers
+            ],
+            partials: [Partials.GuildMember, Partials.User]
+        });
+        attachBotHandlers(nextClient);
+        client = nextClient;
+        await nextClient.login(runtimeBotToken);
+        return nextClient;
+    })().finally(() => {
+        botBootPromise = null;
+    });
+
+    return botBootPromise;
+}
+
+function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk.toString('utf8');
+            if (raw.length > 25 * 1024 * 1024) {
+                reject(new Error('Sorğu həcmi çox böyükdür.'));
+                req.destroy();
             }
-            const wl = getActiveWhitelist(uid, script.id);
-            const keyRec = getUserKeyForScript(uid, script.id);
-            if (!wl || !tok || wl.loaderToken !== tok) {
-                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                res.end('-- SADO PROTECT: İcazə yoxdur (Not Whitelisted).');
-                return;
+        });
+        req.on('end', () => {
+            if (!raw.trim()) return resolve({});
+            try {
+                resolve(JSON.parse(raw));
+            } catch (err) {
+                reject(new Error('Yanlış JSON formatı.'));
             }
+        });
+        req.on('error', reject);
+    });
+}
 
-            const currentBoundHwid = wl.hwid || (keyRec && keyRec.hwid) || null;
-            const currentEpoch = Number(wl.hwidLockEpoch || (keyRec && keyRec.hwidLockEpoch) || 1);
+function checkPanelAuth(req, reqUrl) {
+    if (!PANEL_TOKEN) return true;
+    const headerTok = String(req.headers['x-panel-token'] || '').trim();
+    const authHeader = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+    const queryTok = String(reqUrl.searchParams.get('panelToken') || '').trim();
+    const cookieHeader = String(req.headers['cookie'] || '');
+    const cookieMatch = cookieHeader.match(/(?:^|;\s*)sado_panel_token=([^;]+)/);
+    const cookieTok = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+    return [headerTok, authHeader, queryTok, cookieTok].includes(PANEL_TOKEN);
+}
 
-            if (hwid) {
-                if (currentBoundHwid && currentBoundHwid !== hwid) {
-                    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-                    res.end(
-                        'game:GetService("Players").LocalPlayer:Kick("SADO PROTECT: Bu key/whitelist başqa cihaza bağlıdır! Yeni cihaz üçün Reset HWID edin.")'
-                    );
-                    return;
-                }
-                if (!currentBoundHwid) {
-                    wl.hwid = hwid;
-                    wl.hwidLockEpoch = currentEpoch;
-                    if (keyRec) {
-                        keyRec.hwid = hwid;
-                        keyRec.hwidLockEpoch = currentEpoch;
-                    }
-                    persistState();
-                }
-            }
+function renderDashboardHtml() {
+    return `<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SADO PROTECT • Control Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --panel: #121826;
+    --panel-2: #172033;
+    --text: #eef2ff;
+    --muted: #94a3b8;
+    --accent: #6366f1;
+    --accent-2: #22c55e;
+    --danger: #ef4444;
+    --border: rgba(148, 163, 184, 0.16);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .brand-wrap { display: flex; align-items: center; gap: 12px; }
+  .menu-btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 18px;
+    cursor: pointer;
+  }
+  .brand-title { font-weight: 700; font-size: 16px; letter-spacing: 0.4px; }
+  .status-pill {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.16);
+    border: 1px solid rgba(99, 102, 241, 0.35);
+  }
+  .drawer {
+    position: fixed;
+    top: 0;
+    left: -280px;
+    width: 270px;
+    height: 100%;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    z-index: 40;
+    transition: left 0.22s ease;
+    padding: 18px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .drawer.open { left: 0; }
+  .backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 30;
+  }
+  .backdrop.show { display: block; }
+  .nav-btn {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .nav-btn.active, .nav-btn:hover {
+    background: var(--panel-2);
+    border-color: var(--border);
+  }
+  .container { max-width: 1080px; margin: 22px auto; padding: 0 16px 48px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 12px; font-size: 15px; }
+  .stat-val { font-size: 24px; font-weight: 700; margin-top: 6px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 5px; }
+  input, select, textarea {
+    width: 100%;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  textarea { min-height: 150px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .row-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 15px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 12px;
+  }
+  .btn.green { background: var(--accent-2); color: #052e16; }
+  .btn.red { background: var(--danger); }
+  .btn.ghost { background: var(--panel-2); border: 1px solid var(--border); }
+  .list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    margin-top: 8px;
+    font-size: 13px;
+  }
+  .section { display: none; }
+  .section.active { display: block; }
+  .toast {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    background: var(--panel-2);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    padding: 11px 16px;
+    border-radius: 12px;
+    font-size: 13px;
+    z-index: 60;
+    display: none;
+  }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand-wrap">
+    <button class="menu-btn" id="menuBtn" type="button">☰</button>
+    <div class="brand-title">SADO PROTECT</div>
+  </div>
+  <div class="status-pill" id="botStatusPill">Bot: Yüklənir...</div>
+</div>
 
-            const effectiveBoundHwid = hwid || currentBoundHwid || '';
-            const guardedScript = buildHwidGuardedLuaPayload(
-                script.code || '',
-                effectiveBoundHwid,
-                currentEpoch,
-                'SADO PROTECT: HWID uyğun gəlmir! Yenidən Reset HWID edilməyənə kimi bu cihazla giriş qadağandır.'
-            );
+<div class="backdrop" id="backdrop"></div>
+<aside class="drawer" id="drawer">
+  <div style="font-weight:700;padding:4px 10px 10px;border-bottom:1px solid var(--border);margin-bottom:6px;">Menyu</div>
+  <button class="nav-btn active" data-sec="sec-overview">📊 İcmal</button>
+  <button class="nav-btn" data-sec="sec-scripts">📜 Skriptlər &amp; Dosya</button>
+  <button class="nav-btn" data-sec="sec-bot">🤖 Discord Bot &amp; Panel</button>
+  <button class="nav-btn" data-sec="sec-keys">🔑 Key &amp; Whitelist</button>
+  <button class="nav-btn" data-sec="sec-backup">💾 Backup &amp; Yaddaş</button>
+</aside>
 
-            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end(guardedScript);
+<main class="container">
+  <section class="section active" id="sec-overview">
+    <div class="grid">
+      <div class="card"><div class="muted">Skriptlər</div><div class="stat-val" id="statScripts">0</div></div>
+      <div class="card"><div class="muted">Yaradılmış Key-lər</div><div class="stat-val" id="statKeys">0</div></div>
+      <div class="card"><div class="muted">Aktiv Whitelist</div><div class="stat-val" id="statWl">0</div></div>
+      <div class="card"><div class="muted">Bulud / Qalıcı Yaddaş</div><div class="stat-val" id="statCloud" style="font-size:16px;margin-top:10px;">Yoxlanılır</div></div>
+    </div>
+    <div class="card">
+      <h3>Son Key-lər (Yaradan &amp; İşlədən)</h3>
+      <div id="recentKeysList"></div>
+    </div>
+  </section>
+
+  <section class="section" id="sec-scripts">
+    <div class="card">
+      <h3>Yeni Skript Yarat / Dosya Yüklə (.lua / .txt)</h3>
+      <label>Skript Adı</label>
+      <input id="scriptNameInput" placeholder="Məs: SADO HUB" />
+      <label>Lua / TXT Dosya Seç (istəyə bağlı)</label>
+      <input type="file" id="scriptFileInput" accept=".lua,.txt,.luau" />
+      <label>Skript Kodu</label>
+      <textarea id="scriptCodeInput" placeholder="-- Lua skript kodunu bura yazın və ya dosya seçin"></textarea>
+      <button class="btn green" id="saveScriptBtn" type="button">Skripti Yadda Saxla</button>
+    </div>
+    <div class="card">
+      <h3>Mövcud Skriptlər</h3>
+      <div id="scriptsList"></div>
+    </div>
+  </section>
+
+  <section class="section" id="sec-bot">
+    <div class="card">
+      <h3>Discord Bot Token</h3>
+      <div class="muted">Token buraya yazıldıqda bot avtomatik aktivləşir və saxlanılır.</div>
+      <label>Discord Bot Token</label>
+      <input type="password" id="botTokenInput" placeholder="MTQx..." />
+      <button class="btn" id="saveTokenBtn" type="button">Tokeni Saxla və Botu Başlat</button>
+    </div>
+    <div class="card">
+      <h3>Panel Buton və Embed Dizaynı</h3>
+      <div class="row-2">
+        <div>
+          <label>Embed Rəngi (HEX)</label>
+          <input id="cfgEmbedColor" placeholder="#5865F2" />
+        </div>
+        <div>
+          <label>Redeem Key Adı / Emoji / Rəng</label>
+          <div style="display:flex;gap:6px;">
+            <input id="cfgRedeemLabel" placeholder="Redeem Key" />
+            <input id="cfgRedeemEmoji" placeholder="🔑" style="max-width:70px;" />
+            <select id="cfgRedeemStyle" style="max-width:110px;">
+              <option value="Success">Yaşıl</option>
+              <option value="Primary">Göy</option>
+              <option value="Secondary">Boz</option>
+              <option value="Danger">Qırmızı</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="row-2">
+        <div>
+          <label>Get Script Adı / Emoji / Rəng</label>
+          <div style="display:flex;gap:6px;">
+            <input id="cfgGetScriptLabel" placeholder="Get Script" />
+            <input id="cfgGetScriptEmoji" placeholder="📜" style="max-width:70px;" />
+            <select id="cfgGetScriptStyle" style="max-width:110px;">
+              <option value="Primary">Göy</option>
+              <option value="Success">Yaşıl</option>
+              <option value="Secondary">Boz</option>
+              <option value="Danger">Qırmızı</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label>Reset HWID Adı / Emoji / Rəng</label>
+          <div style="display:flex;gap:6px;">
+            <input id="cfgResetHwidLabel" placeholder="Reset HWID" />
+            <input id="cfgResetHwidEmoji" placeholder="🔄" style="max-width:70px;" />
+            <select id="cfgResetHwidStyle" style="max-width:110px;">
+              <option value="Secondary">Boz</option>
+              <option value="Danger">Qırmızı</option>
+              <option value="Primary">Göy</option>
+              <option value="Success">Yaşıl</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="row-2">
+        <div>
+          <label>Get Stats Adı / Emoji / Rəng</label>
+          <div style="display:flex;gap:6px;">
+            <input id="cfgGetStatsLabel" placeholder="Get Stats" />
+            <input id="cfgGetStatsEmoji" placeholder="📊" style="max-width:70px;" />
+            <select id="cfgGetStatsStyle" style="max-width:110px;">
+              <option value="Secondary">Boz</option>
+              <option value="Primary">Göy</option>
+              <option value="Success">Yaşıl</option>
+              <option value="Danger">Qırmızı</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <button class="btn green" id="savePanelCfgBtn" type="button">Panel Dizaynını Yadda Saxla</button>
+    </div>
+  </section>
+
+  <section class="section" id="sec-keys">
+    <div class="card">
+      <h3>1 Nəfərlik Key Yarat</h3>
+      <div class="row-2">
+        <div><label>Skript</label><select id="genKeyScriptSelect"></select></div>
+        <div><label>Müddət (1h, 1d, 7d, 30d, 0)</label><input id="genKeyTime" value="7d" /></div>
+        <div><label>Say (1-50)</label><input type="number" id="genKeyAmount" value="1" min="1" max="50" /></div>
+      </div>
+      <button class="btn green" id="genKeyBtn" type="button">Key Yarat</button>
+      <div id="genKeyOutput" class="muted" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
+      <h3>Whitelist Əlavə Et (Avtomatik Key Yaradır)</h3>
+      <div class="row-2">
+        <div><label>Skript</label><select id="wlScriptSelect"></select></div>
+        <div><label>Discord User ID</label><input id="wlUserId" placeholder="123456789012345678" /></div>
+        <div><label>Müddət (1d, 7d, 30d, 0)</label><input id="wlTime" value="0" /></div>
+      </div>
+      <button class="btn" id="addWlBtn" type="button">Whitelist Et</button>
+      <div id="wlList" style="margin-top:10px;"></div>
+    </div>
+  </section>
+
+  <section class="section" id="sec-backup">
+    <div class="card">
+      <h3>Backup Yüklə və Bərpa Et</h3>
+      <div class="muted">Bütün skript, key, whitelist və ayarları JSON kimi yükləyin və ya geri bərpa edin.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+        <a class="btn ghost" href="/api/backup" download="sado-protect-backup.json" style="text-decoration:none;">⬇️ Backup Yüklə</a>
+        <label class="btn ghost" style="margin-top:12px;cursor:pointer;">
+          ⬆️ Backup Bərpa Et <input type="file" id="restoreFileInput" accept=".json" style="display:none;" />
+        </label>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const toastEl = document.getElementById('toast');
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.style.display = 'block';
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 3000);
+}
+
+const drawer = document.getElementById('drawer');
+const backdrop = document.getElementById('backdrop');
+document.getElementById('menuBtn').onclick = () => {
+  drawer.classList.add('open');
+  backdrop.classList.add('show');
+};
+backdrop.onclick = () => {
+  drawer.classList.remove('open');
+  backdrop.classList.remove('show');
+};
+
+document.querySelectorAll('.nav-btn').forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach((s) => s.classList.remove('active'));
+    document.getElementById(btn.dataset.sec).classList.add('active');
+    drawer.classList.remove('open');
+    backdrop.classList.remove('show');
+  };
+});
+
+document.getElementById('scriptFileInput').onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  document.getElementById('scriptCodeInput').value = text;
+  if (!document.getElementById('scriptNameInput').value.trim()) {
+    document.getElementById('scriptNameInput').value = file.name.replace(/\.(lua|txt|luau)$/i, '');
+  }
+  showToast('Dosya oxundu: ' + file.name);
+};
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts
+  });
+  return res.json();
+}
+
+function fillPanelCfgForm(cfg) {
+  if (!cfg) return;
+  document.getElementById('cfgEmbedColor').value = cfg.embedColor || '#5865F2';
+  document.getElementById('cfgRedeemLabel').value = cfg.redeemLabel || 'Redeem Key';
+  document.getElementById('cfgRedeemEmoji').value = cfg.redeemEmoji || '🔑';
+  document.getElementById('cfgRedeemStyle').value = cfg.redeemStyle || 'Success';
+  document.getElementById('cfgGetScriptLabel').value = cfg.getScriptLabel || 'Get Script';
+  document.getElementById('cfgGetScriptEmoji').value = cfg.getScriptEmoji || '📜';
+  document.getElementById('cfgGetScriptStyle').value = cfg.getScriptStyle || 'Primary';
+  document.getElementById('cfgResetHwidLabel').value = cfg.resetHwidLabel || 'Reset HWID';
+  document.getElementById('cfgResetHwidEmoji').value = cfg.resetHwidEmoji || '🔄';
+  document.getElementById('cfgResetHwidStyle').value = cfg.resetHwidStyle || 'Secondary';
+  document.getElementById('cfgGetStatsLabel').value = cfg.getStatsLabel || 'Get Stats';
+  document.getElementById('cfgGetStatsEmoji').value = cfg.getStatsEmoji || '📊';
+  document.getElementById('cfgGetStatsStyle').value = cfg.getStatsStyle || 'Secondary';
+}
+
+async function refreshAll() {
+  const data = await api('/api/state');
+  if (!data || !data.ok) return;
+  const pill = document.getElementById('botStatusPill');
+  pill.textContent = data.botReady ? ('Bot Aktiv: ' + (data.botTag || '')) : (data.hasBotToken ? 'Bot Qoşulur...' : 'Token Gözlənilir');
+
+  document.getElementById('statScripts').textContent = (data.scripts || []).length;
+  document.getElementById('statKeys').textContent = data.keysCount || 0;
+  document.getElementById('statWl').textContent = data.whitelistsCount || 0;
+  document.getElementById('statCloud').textContent = data.cloudConnected ? 'Bulud + Disk' : 'Disk + Backup';
+
+  fillPanelCfgForm(data.panelButtonConfig);
+
+  const selects = [document.getElementById('genKeyScriptSelect'), document.getElementById('wlScriptSelect')];
+  selects.forEach((sel) => {
+    const prev = sel.value;
+    sel.innerHTML = (data.scripts || []).map((s) => '<option value="' + s.id + '">' + s.name + '</option>').join('');
+    if (prev) sel.value = prev;
+  });
+
+  const scriptsList = document.getElementById('scriptsList');
+  scriptsList.innerHTML = (data.scripts || []).length
+    ? data.scripts.map((s) =>
+        '<div class="list-item"><div><b>' + s.name + '</b> <span class="muted">(' + s.id + ')</span></div>' +
+        '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="deleteScript(\\'' + s.id + '\\')">Sil</button></div>'
+      ).join('')
+    : '<div class="muted">Hələ skript yoxdur.</div>';
+
+  const recentKeysList = document.getElementById('recentKeysList');
+  recentKeysList.innerHTML = (data.recentKeys || []).length
+    ? data.recentKeys.slice(0, 15).map((k) =>
+        '<div class="list-item"><div><code>' + k.code + '</code> • <b>' + (k.scriptName || '') + '</b><br>' +
+        '<span class="muted">Yaradan: ' + (k.createdByName || 'Panel') + ' | İşlədən: ' + (k.redeemedByName || 'Hələ işlənməyib') + '</span></div></div>'
+      ).join('')
+    : '<div class="muted">Hələ key yaradılmayıb.</div>';
+
+  const wlList = document.getElementById('wlList');
+  wlList.innerHTML = (data.whitelists || []).length
+    ? data.whitelists.map((w) =>
+        '<div class="list-item"><div><b>' + (w.username || w.userId) + '</b> <span class="muted">(' + w.userId + ')</span> • ' + (w.scriptName || '') + '</div>' +
+        '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="removeWl(\\'' + w.id + '\\')">Sil</button></div>'
+      ).join('')
+    : '<div class="muted">Aktiv whitelist yoxdur.</div>';
+}
+
+window.deleteScript = async (id) => {
+  await api('/api/scripts/' + encodeURIComponent(id), { method: 'DELETE' });
+  showToast('Skript silindi');
+  refreshAll();
+};
+
+window.removeWl = async (id) => {
+  await api('/api/whitelist/' + encodeURIComponent(id), { method: 'DELETE' });
+  showToast('Whitelist silindi');
+  refreshAll();
+};
+
+document.getElementById('saveScriptBtn').onclick = async () => {
+  const name = document.getElementById('scriptNameInput').value.trim();
+  const code = document.getElementById('scriptCodeInput').value;
+  const r = await api('/api/scripts', { method: 'POST', body: JSON.stringify({ name, code }) });
+  if (r.ok) {
+    document.getElementById('scriptNameInput').value = '';
+    document.getElementById('scriptCodeInput').value = '';
+    document.getElementById('scriptFileInput').value = '';
+    showToast('Skript yadda saxlandı!');
+    refreshAll();
+  } else {
+    showToast(r.message || 'Xəta baş verdi');
+  }
+};
+
+document.getElementById('saveTokenBtn').onclick = async () => {
+  const token = document.getElementById('botTokenInput').value.trim();
+  const r = await api('/api/bot-token', { method: 'POST', body: JSON.stringify({ token }) });
+  showToast(r.message || 'Yeniləndi');
+  setTimeout(refreshAll, 1500);
+};
+
+document.getElementById('savePanelCfgBtn').onclick = async () => {
+  const payload = {
+    embedColor: document.getElementById('cfgEmbedColor').value,
+    redeemLabel: document.getElementById('cfgRedeemLabel').value,
+    redeemEmoji: document.getElementById('cfgRedeemEmoji').value,
+    redeemStyle: document.getElementById('cfgRedeemStyle').value,
+    getScriptLabel: document.getElementById('cfgGetScriptLabel').value,
+    getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value,
+    getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
+    resetHwidLabel: document.getElementById('cfgResetHwidLabel').value,
+    resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value,
+    resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
+    getStatsLabel: document.getElementById('cfgGetStatsLabel').value,
+    getStatsEmoji: document.getElementById('cfgGetStatsEmoji').value,
+    getStatsStyle: document.getElementById('cfgGetStatsStyle').value
+  };
+  const r = await api('/api/panel-config', { method: 'POST', body: JSON.stringify(payload) });
+  if (r.ok) {
+    showToast('Panel dizaynı yadda saxlandı!');
+    refreshAll();
+  }
+};
+
+document.getElementById('genKeyBtn').onclick = async () => {
+  const scriptId = document.getElementById('genKeyScriptSelect').value;
+  const time = document.getElementById('genKeyTime').value;
+  const amount = Number(document.getElementById('genKeyAmount').value || 1);
+  const r = await api('/api/keys', { method: 'POST', body: JSON.stringify({ scriptId, time, amount }) });
+  if (r.ok) {
+    document.getElementById('genKeyOutput').textContent = 'Key-lər: ' + (r.keys || []).join(', ');
+    showToast('Key yaradıldı!');
+    refreshAll();
+  }
+};
+
+document.getElementById('addWlBtn').onclick = async () => {
+  const scriptId = document.getElementById('wlScriptSelect').value;
+  const userId = document.getElementById('wlUserId').value.trim();
+  const time = document.getElementById('wlTime').value.trim();
+  const r = await api('/api/whitelist', { method: 'POST', body: JSON.stringify({ scriptId, userId, time }) });
+  if (r.ok) {
+    document.getElementById('wlUserId').value = '';
+    showToast('Whitelist edildi! Auto Key: ' + (r.key || '—'));
+    refreshAll();
+  } else {
+    showToast(r.message || 'Xəta');
+  }
+};
+
+document.getElementById('restoreFileInput').onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const txt = await file.text();
+  const parsed = JSON.parse(txt);
+  const r = await api('/api/restore', { method: 'POST', body: JSON.stringify(parsed) });
+  if (r.ok) {
+    showToast('Backup bərpa edildi!');
+    refreshAll();
+  }
+};
+
+refreshAll();
+setInterval(refreshAll, 15000);
+</script>
+</body>
+</html>`;
+}
+
+const server = http.createServer(async (req, res) => {
+    try {
+        const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+
+        if (reqUrl.pathname === '/health' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, botReady: Boolean(client && client.user), uptime: process.uptime() }));
             return;
         }
 
