@@ -1,80 +1,81 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { URL } = require('url');
-const {
-    Client,
-    GatewayIntentBits,
-    Partials,
-    REST,
-    Routes,
-    SlashCommandBuilder,
-    PermissionFlagsBits,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-    StringSelectMenuBuilder,
-    StringSelectMenuOptionBuilder,
-    ChannelType
-} = require('discord.js');
-
-const PORT = Number(process.env.PORT || 3000);
-const PANEL_TOKEN = String(process.env.PANEL_TOKEN || '').trim();
-const PUBLIC_BASE_URL = String(
-    process.env.PUBLIC_BASE_URL ||
-        process.env.RENDER_EXTERNAL_URL ||
-        `http://localhost:${PORT}`
-).replace(/\/+$/, '');
-const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || 4 * 60 * 1000);
-
-const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : __dirname;
-const DATA_FILE = path.join(DATA_DIR, 'sado-protect-data.json');
-const BACKUP_FILE = path.join(DATA_DIR, 'sado-protect-data.backup.json');
-const TMP_FILE = path.join(DATA_DIR, 'sado-protect-data.tmp.json');
-
-const UPSTASH_URL = String(process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, '');
-const UPSTASH_TOKEN = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
-const JSONBIN_ID = String(process.env.JSONBIN_BIN_ID || '').trim();
-const JSONBIN_KEY = String(process.env.JSONBIN_API_KEY || '').trim();
-const CLOUD_KEY = String(process.env.CLOUD_STATE_KEY || 'sado_protect_state_v1').trim();
-
-let runtimeBotToken = String(process.env.DISCORD_BOT_TOKEN || '').trim();
-let client = null;
-let botBootPromise = null;
-let cloudSaveTimer = null;
-
-function createDefaultState() {
-    return {
-        savedBotToken: '',
-        workspaces: {},
-        scripts: [],
-        keys: [],
-        whitelists: [],
-        panels: [],
-        hwidCooldowns: {},
-        lastHwidReset: {},
-        guildSettings: {},
-        userProfiles: {},
-        panelButtonConfig: {
-            redeemLabel: 'Redeem Key',
-            redeemEmoji: '🔑',
-            redeemStyle: 'Success',
-            getScriptLabel: 'Get Script',
-            getScriptEmoji: '📜',
-            getScriptStyle: 'Primary',
-            resetHwidLabel: 'Reset HWID',
-            resetHwidEmoji: '🔄',
-            resetHwidStyle: 'Secondary',
-            getStatsLabel: 'Get Stats',
-            getStatsEmoji: '📊',
-            getStatsStyle: 'Secondary',
-            embedColor: '#5865F2'
+function ensureWorkspaceRecord(wsId, discordUserId = null, guildId = null) {
+    if (!wsId) return null;
+    if (!state.workspaces[wsId]) {
+        state.workspaces[wsId] = {
+            id: wsId,
+            discordUserIds: [],
+            guildIds: [],
+            createdAt: nowMs()
+        };
+    }
+    if (!Array.isArray(state.workspaces[wsId].discordUserIds)) {
+        state.workspaces[wsId].discordUserIds = [];
+    }
+    if (!Array.isArray(state.workspaces[wsId].guildIds)) {
+        state.workspaces[wsId].guildIds = [];
+    }
+    if (discordUserId) {
+        const uid = String(discordUserId).trim();
+        if (uid && !state.workspaces[wsId].discordUserIds.includes(uid)) {
+            state.workspaces[wsId].discordUserIds.push(uid);
         }
+    }
+    if (guildId) {
+        const gid = String(guildId).trim();
+        if (gid && !state.workspaces[wsId].guildIds.includes(gid)) {
+            state.workspaces[wsId].guildIds.push(gid);
+        }
+    }
+    return state.workspaces[wsId];
+}
+
+function getWorkspaceIdForDiscordUser(discordUserId, guildId = null) {
+    const gid = String(guildId || '').trim();
+    if (gid) {
+        for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
+            if (ws && Array.isArray(ws.guildIds) && ws.guildIds.includes(gid)) {
+                return wsId;
+            }
+        }
+    }
+    const uid = String(discordUserId || '').trim();
+    if (!uid) return null;
+    for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
+        if (ws && Array.isArray(ws.discordUserIds) && ws.discordUserIds.includes(uid)) {
+            return wsId;
+        }
+    }
+    return null;
+}
+
+function isScriptOwnedByWorkspace(script, wsId) {
+    if (!script || !wsId) return false;
+    return script.ownerWorkspaceId === wsId;
+}
+
+function getScriptsForWorkspace(wsId) {
+    if (!wsId) return [];
+    return state.scripts.filter((s) => isScriptOwnedByWorkspace(s, wsId));
+}
+
+function getScriptsForDiscordUser(discordUserId, guildId = null) {
+    const gid = String(guildId || '').trim();
+    const uid = String(discordUserId || '').trim();
+    const linkedWsId = getWorkspaceIdForDiscordUser(uid, gid);
+    if (linkedWsId) {
+        return state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
+    }
+    if (gid) {
+        const byGuild = state.scripts.filter((s) => s.ownerGuildId && String(s.ownerGuildId) === gid);
+        if (byGuild.length > 0) return byGuild;
+    }
+    const ownedByDiscord = state.scripts.filter((s) => s.ownerDiscordId && String(s.ownerDiscordId) === uid);
+    if (ownedByDiscord.length > 0) return ownedByDiscord;
+    return [];
+}
     };
 }
 
@@ -558,8 +559,9 @@ function buildPanelEmbed(panelTitle, script) {
     const gLabel = cfg.getScriptLabel || 'Get Script';
     const hLabel = cfg.resetHwidLabel || 'Reset HWID';
     const sLabel = cfg.getStatsLabel || 'Get Stats';
+    const resolvedTitle = String(panelTitle || '').trim() || (script && script.name ? script.name : 'SCRIPT PANEL');
     return new EmbedBuilder()
-        .setTitle(panelTitle || 'SADOHUB')
+        .setTitle(resolvedTitle)
         .setDescription(
             `Skript: **${script.name}**\n` +
                 `• Key aktivləşdirmək üçün **${rLabel}**\n` +
@@ -887,12 +889,16 @@ async function syncSlashCommands() {
 }
 
 async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
-    const userScripts = getScriptsForDiscordUser(interaction.user.id);
+    const userScripts = getScriptsForDiscordUser(interaction.user.id, interaction.guildId);
     if (userScripts.length === 0) {
-        await interaction.reply({
-            content: '❌ Sizin ID-yə bağlı heç bir skript tapılmadı. Veb paneldə skript yaradın.',
-            ephemeral: true
-        });
+        const msg =
+            '❌ Bu sunucu və ya Discord ID üçün saytda bağlı skript tapılmadı.\n' +
+            `Saytda **Discord Bot & Panel** bölməsinə bu sunucu ID-sini (\`${interaction.guildId || ''}\`) əlavə edib skript yaradın.`;
+        if (interaction.deferred || interaction.replied) {
+            await interaction.editReply({ content: msg });
+        } else {
+            await interaction.reply({ content: msg, ephemeral: true });
+        }
         return null;
     }
     if (explicitQuery) {
@@ -903,7 +909,12 @@ async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
             userScripts.find((s) => s.name.toLowerCase().includes(q)) ||
             null;
         if (!found) {
-            await interaction.reply({ content: `❌ "${explicitQuery}" adlı skript tapılmadı.`, ephemeral: true });
+            const msg = `❌ "${explicitQuery}" adlı skript tapılmadı.`;
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({ content: msg });
+            } else {
+                await interaction.reply({ content: msg, ephemeral: true });
+            }
             return null;
         }
         return found;
@@ -931,11 +942,16 @@ async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
             )
         );
 
-    await interaction.reply({
+    const payload = {
         content: 'Hansı skript üçün icra edilsin?',
         components: [new ActionRowBuilder().addComponents(menu)],
         ephemeral: true
-    });
+    };
+    if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(payload);
+    } else {
+        await interaction.reply(payload);
+    }
     return null;
 }
 
@@ -943,7 +959,11 @@ const pendingSelections = new Map();
 const pendingCopySnippets = new Map();
 
 async function executePanelPost(channel, panelName, script) {
-    const embed = buildPanelEmbed(panelName, script);
+    const finalTitle =
+        String(panelName || '').trim() ||
+        (script && script.name ? script.name : null) ||
+        (channel && channel.guild ? channel.guild.name : 'SCRIPT PANEL');
+    const embed = buildPanelEmbed(finalTitle, script);
     const components = buildPanelComponents(script.id);
     const msg = await channel.send({ embeds: [embed], components });
     state.panels = state.panels.filter((p) => !(p.channelId === channel.id && p.scriptId === script.id));
@@ -953,7 +973,7 @@ async function executePanelPost(channel, panelName, script) {
         channelId: channel.id,
         messageId: msg.id,
         scriptId: script.id,
-        panelName: panelName || 'SADOHUB',
+        panelName: finalTitle,
         createdAt: nowMs()
     });
     persistState();
@@ -1051,13 +1071,21 @@ function attachBotHandlers(botClient) {
         }
     });
 
+    botClient.on('error', (err) => {
+        console.error('[SADO PROTECT] Discord client error:', err.message);
+    });
+
+    botClient.on('shardDisconnect', () => {
+        console.warn('[SADO PROTECT] Gateway bağlantısı kəsildi, yenidən qoşulur...');
+    });
+
     botClient.on('interactionCreate', async (interaction) => {
         try {
             if (interaction.user) rememberUserProfile(interaction.user);
 
             if (interaction.isAutocomplete()) {
                 const focused = String(interaction.options.getFocused() || '').toLowerCase();
-                const userScripts = getScriptsForDiscordUser(interaction.user.id);
+                const userScripts = getScriptsForDiscordUser(interaction.user.id, interaction.guildId);
                 const matches = userScripts.filter(
                     (s) => !focused || s.name.toLowerCase().includes(focused) || s.id.toLowerCase().includes(focused)
                 );
@@ -1066,15 +1094,16 @@ function attachBotHandlers(botClient) {
                     name: s.name.slice(0, 100),
                     value: s.id
                 }));
-                await interaction.respond(choices);
+                await interaction.respond(choices).catch(() => {});
                 return;
             }
 
             if (interaction.isChatInputCommand()) {
+                await interaction.deferReply({ ephemeral: true });
+
                 if (!hasCommandPermission(interaction)) {
-                    await interaction.reply({
-                        content: '❌ Bu əmri işlətmək üçün icazəniz yoxdur (Top 2 rol və ya təyin edilmiş rol lazımdır).',
-                        ephemeral: true
+                    await interaction.editReply({
+                        content: '❌ Bu əmri işlətmək üçün icazəniz yoxdur (Top 2 rol və ya təyin edilmiş rol lazımdır).'
                     });
                     return;
                 }
@@ -1088,13 +1117,13 @@ function attachBotHandlers(botClient) {
                     if (action === 'remove') {
                         settings.allowedRoleIds = settings.allowedRoleIds.filter((id) => id !== role.id);
                         persistState();
-                        await interaction.reply({ content: `✅ <@&${role.id}> icazəli rollardan silindi.`, ephemeral: true });
+                        await interaction.editReply({ content: `✅ <@&${role.id}> icazəli rollardan silindi.` });
                     } else {
                         if (!settings.allowedRoleIds.includes(role.id)) {
                             settings.allowedRoleIds.push(role.id);
                         }
                         persistState();
-                        await interaction.reply({ content: `✅ <@&${role.id}> bot əmrləri üçün icazəli edildi.`, ephemeral: true });
+                        await interaction.editReply({ content: `✅ <@&${role.id}> bot əmrləri üçün icazəli edildi.` });
                     }
                     return;
                 }
@@ -1103,7 +1132,7 @@ function attachBotHandlers(botClient) {
                     const panelName =
                         interaction.options.getString('title') ||
                         interaction.options.getString('name') ||
-                        'SADOHUB';
+                        '';
                     const scriptQuery = interaction.options.getString('script');
                     const script = await resolveScriptOrAsk(interaction, scriptQuery, {
                         type: 'setpanel',
@@ -1111,10 +1140,9 @@ function attachBotHandlers(botClient) {
                         channelId: interaction.channelId
                     });
                     if (!script) return;
-                    await executePanelPost(interaction.channel, panelName, script);
-                    await interaction.reply({
-                        content: `✅ **${script.name}** üçün panel bu kanala göndərildi!`,
-                        ephemeral: true
+                    await executePanelPost(interaction.channel, panelName || script.name, script);
+                    await interaction.editReply({
+                        content: `✅ **${script.name}** üçün panel bu kanala göndərildi!`
                     });
                     return;
                 }
@@ -1125,9 +1153,8 @@ function attachBotHandlers(botClient) {
                     const scriptQuery = interaction.options.getString('script');
                     const durationMs = parseDurationToMs(timeStr);
                     if (durationMs === undefined) {
-                        await interaction.reply({
-                            content: '❌ Yanlış müddət formatı. Məsələn: `1h`, `1d`, `7d`, `30d` və ya `0` (ömürlük).',
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: '❌ Yanlış müddət formatı. Məsələn: `1h`, `1d`, `7d`, `30d` və ya `0` (ömürlük).'
                         });
                         return;
                     }
@@ -1160,11 +1187,10 @@ function attachBotHandlers(botClient) {
                         created.push(code);
                     }
                     persistState();
-                    await interaction.reply({
+                    await interaction.editReply({
                         content:
                             `✅ **${script.name}** üçün **${created.length}** ədəd 1 nəfərlik key yaradıldı:\n` +
-                            `\`\`\`\n${created.join('\n')}\n\`\`\``,
-                        ephemeral: true
+                            `\`\`\`\n${created.join('\n')}\n\`\`\``
                     });
                     return;
                 }
@@ -1177,14 +1203,13 @@ function attachBotHandlers(botClient) {
                     const durationMs = cmd === 'whitelist' ? parseDurationToMs(timeStr) : null;
 
                     if (cmd === 'whitelist' && durationMs === undefined) {
-                        await interaction.reply({
-                            content: '❌ Yanlış müddət formatı. Məs: `1d`, `7d`, `30d` və ya `0` (ömürlük).',
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: '❌ Yanlış müddət formatı. Məs: `1d`, `7d`, `30d` və ya `0` (ömürlük).'
                         });
                         return;
                     }
                     if (!user && !role) {
-                        await interaction.reply({ content: '❌ `user` və ya `role` seçməlisiniz.', ephemeral: true });
+                        await interaction.editReply({ content: '❌ `user` və ya `role` seçməlisiniz.' });
                         return;
                     }
 
@@ -1203,9 +1228,8 @@ function attachBotHandlers(botClient) {
                     targets = [...new Map(targets.filter((u) => u && u.id).map((u) => [String(u.id), u])).values()];
 
                     if (targets.length === 0) {
-                        await interaction.reply({
-                            content: '❌ Seçilən istifadəçi və ya rolda whitelist ediləcək üzv tapılmadı.',
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: '❌ Seçilən istifadəçi və ya rolda whitelist ediləcək üzv tapılmadı.'
                         });
                         return;
                     }
@@ -1219,15 +1243,13 @@ function attachBotHandlers(botClient) {
 
                     if (cmd === 'whitelist') {
                         await applyWhitelistForTargets(script, targets, durationMs);
-                        await interaction.reply({
-                            content: `✅ **${targets.length}** istifadəçi **${script.name}** skriptinə whitelist edildi.`,
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: `✅ **${targets.length}** istifadəçi **${script.name}** skriptinə whitelist edildi.`
                         });
                     } else {
                         const removed = await removeWhitelistForTargets(script, targets);
-                        await interaction.reply({
-                            content: `✅ **${script.name}** skriptindən **${removed}** whitelist qeydi silindi.`,
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: `✅ **${script.name}** skriptindən **${removed}** whitelist qeydi silindi.`
                         });
                     }
                     return;
@@ -1245,9 +1267,8 @@ function attachBotHandlers(botClient) {
                     resetUserHwidBinding(user.id, script.id);
                     persistState();
 
-                    await interaction.reply({
-                        content: `✅ <@${user.id}> üçün **${script.name}** HWID kilidi sıfırlandı. İndi skripti ilk açan cihaz həmin dövr üçün kilidlənəcək.`,
-                        ephemeral: true
+                    await interaction.editReply({
+                        content: `✅ <@${user.id}> üçün **${script.name}** HWID kilidi sıfırlandı. İndi skripti ilk açan cihaz həmin dövr üçün kilidlənəcək.`
                     });
                     return;
                 }
@@ -1257,9 +1278,8 @@ function attachBotHandlers(botClient) {
                     const scriptQuery = interaction.options.getString('script');
                     const durationMs = parseDurationToMs(timeStr);
                     if (durationMs === undefined) {
-                        await interaction.reply({
-                            content: '❌ Yanlış müddət formatı. Məs: `1h`, `12h`, `1d` və ya `0`.',
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: '❌ Yanlış müddət formatı. Məs: `1h`, `12h`, `1d` və ya `0`.'
                         });
                         return;
                     }
@@ -1270,9 +1290,8 @@ function attachBotHandlers(botClient) {
                     if (!script) return;
                     state.hwidCooldowns[script.id] = durationMs || 0;
                     persistState();
-                    await interaction.reply({
-                        content: `✅ **${script.name}** üçün HWID sıfırlama gözləmə müddəti yeniləndi.`,
-                        ephemeral: true
+                    await interaction.editReply({
+                        content: `✅ **${script.name}** üçün HWID sıfırlama gözləmə müddəti yeniləndi.`
                     });
                     return;
                 }
@@ -1293,7 +1312,7 @@ function attachBotHandlers(botClient) {
 
                 if (pending.type === 'setpanel') {
                     const ch = await interaction.guild.channels.fetch(pending.channelId);
-                    await executePanelPost(ch, pending.panelName, script);
+                    await executePanelPost(ch, pending.panelName || script.name, script);
                     await interaction.update({
                         content: `✅ **${script.name}** üçün panel kanala göndərildi!`,
                         components: []
@@ -1355,18 +1374,17 @@ function attachBotHandlers(botClient) {
                 }
                 return;
             } else if (interaction.isButton() && interaction.customId.startsWith('sp_copyscript:')) {
+                await interaction.deferReply({ ephemeral: true });
                 const copyId = interaction.customId.split(':')[1];
                 const entry = pendingCopySnippets.get(copyId);
                 if (!entry || entry.ownerId !== interaction.user.id || nowMs() > entry.expiresAt) {
-                    await interaction.reply({
-                        content: '❌ Kopyalama vaxtı bitib və ya bu buton sizə aid deyil. Yenidən **Get Script** basın.',
-                        ephemeral: true
+                    await interaction.editReply({
+                        content: '❌ Kopyalama vaxtı bitib və ya bu buton sizə aid deyil. Yenidən **Get Script** basın.'
                     });
                     return;
                 }
-                await interaction.reply({
-                    content: entry.snippet,
-                    ephemeral: true
+                await interaction.editReply({
+                    content: entry.snippet
                 });
                 return;
             } else if (interaction.isButton() && interaction.customId.startsWith('sp_')) {
@@ -1392,19 +1410,19 @@ function attachBotHandlers(botClient) {
                     return;
                 }
 
+                await interaction.deferReply({ ephemeral: true });
+
                 if (action === 'sp_getscript') {
                     if (script.disabled) {
-                        await interaction.reply({
-                            content: '⛔ Bu skript hazırda sahibi tərəfindən deaktiv edilib.',
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: '⛔ Bu skript hazırda sahibi tərəfindən deaktiv edilib.'
                         });
                         return;
                     }
                     const wl = ensureUserLoaderToken(interaction.user.id, script.id);
                     if (!wl) {
-                        await interaction.reply({
-                            content: `❌ Sizin **${script.name}** skripti üçün whitelist və ya key-iniz yoxdur.`,
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: `❌ Sizin **${script.name}** skripti üçün whitelist və ya key-iniz yoxdur.`
                         });
                         return;
                     }
@@ -1429,13 +1447,12 @@ function attachBotHandlers(botClient) {
                             .setEmoji('📋')
                             .setStyle(ButtonStyle.Secondary)
                     );
-                    await interaction.reply({
+                    await interaction.editReply({
                         content:
                             `✅ **${script.name}** yükləyici kodu (yalnız sizin üçün):\n` +
                             `\`\`\`lua\n${snippet}\n\`\`\`\n` +
                             `⏳ Bitmə vaxtı: ${formatExpiry(wl.expiresAt)}`,
-                        components: [copyRow],
-                        ephemeral: true
+                        components: [copyRow]
                     });
                     return;
                 }
@@ -1444,9 +1461,8 @@ function attachBotHandlers(botClient) {
                     const wl = getActiveWhitelist(interaction.user.id, script.id);
                     const keyRec = getUserKeyForScript(interaction.user.id, script.id);
                     if (!wl && !keyRec) {
-                        await interaction.reply({
-                            content: `❌ Sizin **${script.name}** skripti üçün aktiv icazəniz yoxdur.`,
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: `❌ Sizin **${script.name}** skripti üçün aktiv icazəniz yoxdur.`
                         });
                         return;
                     }
@@ -1455,18 +1471,16 @@ function attachBotHandlers(botClient) {
                     const lastReset = Number(state.lastHwidReset[resetKey] || 0);
                     if (cooldownMs > 0 && lastReset && nowMs() - lastReset < cooldownMs) {
                         const nextTs = Math.floor((lastReset + cooldownMs) / 1000);
-                        await interaction.reply({
-                            content: `⏳ HWID sıfırlama gözləmə müddətindəsiniz. Yenidən cəhd: <t:${nextTs}:R>.`,
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: `⏳ HWID sıfırlama gözləmə müddətindəsiniz. Yenidən cəhd: <t:${nextTs}:R>.`
                         });
                         return;
                     }
                     resetUserHwidBinding(interaction.user.id, script.id);
                     state.lastHwidReset[resetKey] = nowMs();
                     persistState();
-                    await interaction.reply({
-                        content: `✅ **${script.name}** üçün HWID sıfırlandı. İndi skripti ilk işlədən cihaz bu key/whitelist-ə bağlanacaq.`,
-                        ephemeral: true
+                    await interaction.editReply({
+                        content: `✅ **${script.name}** üçün HWID sıfırlandı. İndi skripti ilk işlədən cihaz bu key/whitelist-ə bağlanacaq.`
                     });
                     return;
                 }
@@ -1475,29 +1489,28 @@ function attachBotHandlers(botClient) {
                     const wl = getActiveWhitelist(interaction.user.id, script.id);
                     const keyRec = getUserKeyForScript(interaction.user.id, script.id);
                     if (!wl && !keyRec) {
-                        await interaction.reply({
-                            content: `❌ Sizin **${script.name}** skripti üçün aktiv key və ya whitelist məlumatınız yoxdur.`,
-                            ephemeral: true
+                        await interaction.editReply({
+                            content: `❌ Sizin **${script.name}** skripti üçün aktiv key və ya whitelist məlumatınız yoxdur.`
                         });
                         return;
                     }
                     const boundHwid = (wl && wl.hwid) || (keyRec && keyRec.hwid) || 'Hələ bağlanmayıb';
                     const exp = (wl && wl.expiresAt) || (keyRec && keyRec.expiresAt) || null;
-                    await interaction.reply({
+                    await interaction.editReply({
                         content:
                             `📊 **${script.name}** Statistikası:\n` +
                             `• Key: \`${keyRec ? keyRec.code : 'Whitelist'}\`\n` +
                             `• HWID: \`${boundHwid}\`\n` +
-                            `• Bitmə vaxtı: ${formatExpiry(exp)}`,
-                        ephemeral: true
+                            `• Bitmə vaxtı: ${formatExpiry(exp)}`
                     });
                     return;
                 }
             } else if (interaction.isModalSubmit() && interaction.customId.startsWith('sp_redeem_modal:')) {
+                await interaction.deferReply({ ephemeral: true });
                 const scriptId = interaction.customId.split(':')[1];
                 const script = getScriptById(scriptId);
                 if (!script) {
-                    await interaction.reply({ content: '❌ Skript tapılmadı.', ephemeral: true });
+                    await interaction.editReply({ content: '❌ Skript tapılmadı.' });
                     return;
                 }
                 const code = String(interaction.fields.getTextInputValue('key_code') || '')
@@ -1507,18 +1520,17 @@ function attachBotHandlers(botClient) {
                     (k) => k.code.toUpperCase() === code && k.scriptId === script.id && !k.disabled
                 );
                 if (!keyRecord) {
-                    await interaction.reply({ content: '❌ Bu skript üçün etibarlı key tapılmadı.', ephemeral: true });
+                    await interaction.editReply({ content: '❌ Bu skript üçün etibarlı key tapılmadı.' });
                     return;
                 }
                 if (keyRecord.redeemedBy && keyRecord.redeemedBy !== String(interaction.user.id)) {
-                    await interaction.reply({
-                        content: '❌ Bu 1 nəfərlik key artıq başqa istifadəçi tərəfindən aktivləşdirilib.',
-                        ephemeral: true
+                    await interaction.editReply({
+                        content: '❌ Bu 1 nəfərlik key artıq başqa istifadəçi tərəfindən aktivləşdirilib.'
                     });
                     return;
                 }
                 if (isExpired(keyRecord.expiresAt)) {
-                    await interaction.reply({ content: '❌ Bu key-in vaxtı bitib.', ephemeral: true });
+                    await interaction.editReply({ content: '❌ Bu key-in vaxtı bitib.' });
                     return;
                 }
 
@@ -1558,18 +1570,21 @@ function attachBotHandlers(botClient) {
                 }
                 persistState();
 
-                await interaction.reply({
+                await interaction.editReply({
                     content:
                         `✅ Key uğurla aktivləşdirildi! **${script.name}** üçün icazəniz açıldı.\n` +
-                        `⏳ Bitmə vaxtı: ${formatExpiry(expiresAt)}`,
-                    ephemeral: true
+                        `⏳ Bitmə vaxtı: ${formatExpiry(expiresAt)}`
                 });
                 return;
             }
         } catch (err) {
             console.error('[SADO PROTECT] Interaction xətası:', err);
-            if (interaction && !interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: '❌ Əməliyyat zamanı xəta baş verdi.', ephemeral: true }).catch(() => {});
+            if (interaction) {
+                if (interaction.deferred || interaction.replied) {
+                    await interaction.editReply({ content: '❌ Əməliyyat zamanı xəta baş verdi.' }).catch(() => {});
+                } else {
+                    await interaction.reply({ content: '❌ Əməliyyat zamanı xəta baş verdi.', ephemeral: true }).catch(() => {});
+                }
             }
         }
     });
@@ -1867,17 +1882,22 @@ function renderDashboardHtml() {
 
   <section class="section" id="sec-bot">
     <div class="card">
-      <h3>Gizli ID Kontrolu &amp; Discord Bağlantısı</h3>
-      <div class="muted">Hər telefonun/brauzerin öz gizli ID-si var. Başqa telefonla sayta girənlər sizin skript, key və whitelist-ləri görə bilməz. Discord ID-nizi buraya bağlasanız, Discord-da <code>/panel</code> yazanda yalnız sizin telefonun skriptləri çıxacaq.</div>
+      <h3>Gizli ID Kontrolu &amp; Sunucu / Discord Bağlantısı</h3>
+      <div class="muted">Dostunuz botu öz sunucusuna qoşduqdan sonra ona bot tokenini verməyə ehtiyac yoxdur. Öz telefonundan bu sayta girib öz <b>Discord Sunucu ID-sini (Server ID)</b> buraya yazsın — həmin sunucuda yaratdığı skript, key və panel yalnız onun özünə aid olacaq.</div>
       <label>Sizin Gizli Cihaz ID-niz</label>
       <input id="workspaceIdDisplay" readonly />
-      <label>Discord User ID (istəyə bağlı — Discord bot ilə bağlamaq üçün)</label>
+      <label>Discord Sunucu ID (Server ID — tokensiz qoşulmaq üçün)</label>
+      <input id="linkGuildIdInput" placeholder="Məs: 123456789012345678" />
+      <label>Discord User ID (istəyə bağlı)</label>
       <input id="linkDiscordIdInput" placeholder="Məs: 123456789012345678" />
-      <button class="btn green" id="linkDiscordIdBtn" type="button">Discord ID-ni Bu Cihaza Bağla</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn green" id="linkDiscordIdBtn" type="button">Sunucu / Discord ID-ni Bağla</button>
+        <a class="btn ghost" id="botInviteLinkBtn" href="#" target="_blank" style="text-decoration:none;display:none;">➕ Botu Sunucuya Dəvət Et</a>
+      </div>
     </div>
     <div class="card">
-      <h3>Discord Bot Token</h3>
-      <div class="muted">Token buraya yazıldıqda bot avtomatik aktivləşir və saxlanılır.</div>
+      <h3>Discord Bot Token (İstəyə bağlı — Admin)</h3>
+      <div class="muted">Bot artıq aktivdirsə dostunuzun buraya token yazmasına ehtiyac yoxdur; yalnız Sunucu ID yazması kifayətdir.</div>
       <label>Discord Bot Token</label>
       <input type="password" id="botTokenInput" placeholder="MTQx..." />
       <button class="btn" id="saveTokenBtn" type="button">Tokeni Saxla və Botu Başlat</button>
@@ -2076,9 +2096,18 @@ async function refreshAll() {
   if (!data || !data.ok) return;
   const wsEl = document.getElementById('workspaceIdDisplay');
   if (wsEl) wsEl.value = data.workspaceId || CURRENT_WS_ID;
+  const linkedGuildInput = document.getElementById('linkGuildIdInput');
+  if (linkedGuildInput && !linkedGuildInput.value && Array.isArray(data.linkedGuildIds) && data.linkedGuildIds.length > 0) {
+    linkedGuildInput.value = data.linkedGuildIds[0];
+  }
   const linkedInput = document.getElementById('linkDiscordIdInput');
   if (linkedInput && !linkedInput.value && Array.isArray(data.linkedDiscordIds) && data.linkedDiscordIds.length > 0) {
     linkedInput.value = data.linkedDiscordIds[0];
+  }
+  const inviteBtn = document.getElementById('botInviteLinkBtn');
+  if (inviteBtn && data.botInviteUrl) {
+    inviteBtn.href = data.botInviteUrl;
+    inviteBtn.style.display = 'inline-block';
   }
   const pill = document.getElementById('botStatusPill');
   pill.textContent = data.botReady ? ('Bot Aktiv: ' + (data.botTag || '')) : (data.hasBotToken ? 'Bot Qoşulur...' : 'Token Gözlənilir');
@@ -2157,8 +2186,9 @@ document.getElementById('saveTokenBtn').onclick = async () => {
 };
 
 document.getElementById('linkDiscordIdBtn').onclick = async () => {
+  const guildId = document.getElementById('linkGuildIdInput').value.trim();
   const discordUserId = document.getElementById('linkDiscordIdInput').value.trim();
-  const r = await api('/api/workspace/link-discord', { method: 'POST', body: JSON.stringify({ discordUserId }) });
+  const r = await api('/api/workspace/link-discord', { method: 'POST', body: JSON.stringify({ guildId, discordUserId }) });
   showToast(r.message || 'Bağlandı');
   refreshAll();
 };
@@ -2347,19 +2377,31 @@ const server = http.createServer(async (req, res) => {
 
         if (reqUrl.pathname === '/api/workspace/link-discord' && req.method === 'POST') {
             const body = await readJsonBody(req);
+            const guildId = String(body.guildId || '').trim();
             const discordUserId = String(body.discordUserId || '').trim();
-            if (!discordUserId || !/^\d{15,22}$/.test(discordUserId)) {
+            if (!guildId && !discordUserId) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Ən azı Sunucu ID və ya Discord User ID daxil edin.' }));
+                return;
+            }
+            if (guildId && !/^\d{15,22}$/.test(guildId)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Düzgün Discord Sunucu ID (Server ID) daxil edin.' }));
+                return;
+            }
+            if (discordUserId && !/^\d{15,22}$/.test(discordUserId)) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ ok: false, message: 'Düzgün Discord User ID daxil edin.' }));
                 return;
             }
-            ensureWorkspaceRecord(activeWsId, discordUserId);
+            ensureWorkspaceRecord(activeWsId, discordUserId || null, guildId || null);
             for (const s of getScriptsForWorkspace(activeWsId)) {
-                s.ownerDiscordId = discordUserId;
+                if (guildId) s.ownerGuildId = guildId;
+                if (discordUserId) s.ownerDiscordId = discordUserId;
             }
             persistState();
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, message: 'Discord ID bu cihaza bağlandı!' }));
+            res.end(JSON.stringify({ ok: true, message: 'Sunucu / Discord ID bu cihaza bağlandı!' }));
             return;
         }
 
@@ -2370,12 +2412,18 @@ const server = http.createServer(async (req, res) => {
             const wsWhitelists = state.whitelists.filter(
                 (w) => wsScriptIds.has(w.scriptId) && !w.revoked && !isExpired(w.expiresAt)
             );
+            const botInviteUrl =
+                client && client.user
+                    ? `https://discord.com/oauth2/authorize?client_id=${client.user.id}&permissions=8&scope=bot%20applications.commands`
+                    : null;
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(
                 JSON.stringify({
                     ok: true,
                     workspaceId: activeWsId,
-                    linkedDiscordIds: activeWorkspace ? activeWorkspace.discordUserIds : [],
+                    linkedGuildIds: activeWorkspace ? activeWorkspace.guildIds || [] : [],
+                    linkedDiscordIds: activeWorkspace ? activeWorkspace.discordUserIds || [] : [],
+                    botInviteUrl,
                     authRequired: Boolean(PANEL_TOKEN),
                     cloudConnected: Boolean((UPSTASH_URL && UPSTASH_TOKEN) || (JSONBIN_ID && JSONBIN_KEY)),
                     botReady: Boolean(client && client.user),
@@ -2452,8 +2500,12 @@ const server = http.createServer(async (req, res) => {
                 res.end(JSON.stringify({ ok: false, message: 'Skript adı və kodu tələb olunur.' }));
                 return;
             }
+            const linkedGuild =
+                activeWorkspace && Array.isArray(activeWorkspace.guildIds) && activeWorkspace.guildIds.length > 0
+                    ? activeWorkspace.guildIds[0]
+                    : null;
             const linkedDiscord =
-                activeWorkspace && activeWorkspace.discordUserIds.length > 0
+                activeWorkspace && Array.isArray(activeWorkspace.discordUserIds) && activeWorkspace.discordUserIds.length > 0
                     ? activeWorkspace.discordUserIds[0]
                     : null;
             const script = {
@@ -2461,6 +2513,7 @@ const server = http.createServer(async (req, res) => {
                 name,
                 code,
                 ownerWorkspaceId: activeWsId,
+                ownerGuildId: linkedGuild,
                 ownerDiscordId: linkedDiscord,
                 disabled: false,
                 createdAt: nowMs()
@@ -2627,6 +2680,9 @@ function startKeepAliveLoop() {
                 ? `${PUBLIC_BASE_URL}/health`
                 : `http://127.0.0.1:${PORT}/health`;
             await fetch(targetUrl, { signal: AbortSignal.timeout(8000) }).catch(() => {});
+            if (runtimeBotToken && (!client || !client.user)) {
+                startOrRestartBot().catch(() => {});
+            }
         } catch (_) {}
     }, KEEP_ALIVE_INTERVAL_MS);
 }
