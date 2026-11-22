@@ -703,6 +703,7 @@ async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
 }
 
 const pendingSelections = new Map();
+const pendingCopySnippets = new Map();
 
 async function executePanelPost(channel, panelName, script) {
     const embed = buildPanelEmbed(panelName, script);
@@ -1097,20 +1098,20 @@ function attachBotHandlers(botClient) {
                     const wl = getActiveWhitelist(pending.targetUserId, script.id);
                     const keyRec = getUserKeyForScript(pending.targetUserId, script.id);
                     if (wl) wl.hwid = null;
-                    if (keyRec) keyRec.hwid = null;
-                    persistState();
-                    await interaction.update({
-                        content: `✅ <@${pending.targetUserId}> üçün **${script.name}** HWID sıfırlandı.`,
-                        components: []
+            if (interaction.isButton() && interaction.customId.startsWith('sp_copyscript:')) {
+                const copyId = interaction.customId.split(':')[1];
+                const entry = pendingCopySnippets.get(copyId);
+                if (!entry || entry.ownerId !== interaction.user.id || nowMs() > entry.expiresAt) {
+                    await interaction.reply({
+                        content: '❌ Kopyalama vaxtı bitib və ya bu buton sizə aid deyil. Yenidən **Get Script** basın.',
+                        ephemeral: true
                     });
-                } else if (pending.type === 'cooldownhwid') {
-                    state.hwidCooldowns[script.id] = pending.durationMs || 0;
-                    persistState();
-                    await interaction.update({
-                        content: `✅ **${script.name}** HWID gözləmə müddəti yeniləndi.`,
-                        components: []
-                    });
+                    return;
                 }
+                await interaction.reply({
+                    content: entry.snippet,
+                    ephemeral: true
+                });
                 return;
             }
 
@@ -1161,11 +1162,25 @@ function attachBotHandlers(botClient) {
                         wl.loaderToken,
                         keyRec ? keyRec.code : 'WHITELIST'
                     );
+                    const copyId = generateId('cpy');
+                    pendingCopySnippets.set(copyId, {
+                        ownerId: interaction.user.id,
+                        snippet,
+                        expiresAt: nowMs() + 10 * 60 * 1000
+                    });
+                    const copyRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`sp_copyscript:${copyId}`)
+                            .setLabel('Skripti Kopyala')
+                            .setEmoji('📋')
+                            .setStyle(ButtonStyle.Secondary)
+                    );
                     await interaction.reply({
                         content:
                             `✅ **${script.name}** yükləyici kodu (yalnız sizin üçün):\n` +
                             `\`\`\`lua\n${snippet}\n\`\`\`\n` +
                             `⏳ Bitmə vaxtı: ${formatExpiry(wl.expiresAt)}`,
+                        components: [copyRow],
                         ephemeral: true
                     });
                     return;
