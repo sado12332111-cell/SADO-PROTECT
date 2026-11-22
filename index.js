@@ -242,14 +242,23 @@ async function recordDiscordUserProfile(user) {
     persistState();
 }
 
+function getUserProfileFallback(userId) {
+    const uid = String(userId || '').trim();
+    const prof = (uid && state.userProfiles[uid]) || null;
+    return {
+        userName: (prof && prof.displayName) || (uid ? `Discord ID: ${uid}` : 'İstifadə edilməyib'),
+        userAvatar: (prof && prof.avatarUrl) || 'https://cdn.discordapp.com/embed/avatars/0.png'
+    };
+}
+
 function enrichMemberEntry(entry) {
     const uid = String(entry.userId || entry.redeemedBy || entry.boundUserId || '');
     const prof = (uid && state.userProfiles[uid]) || null;
     return {
         ...entry,
         userId: uid || null,
-        userName: entry.userName || (prof && prof.displayName) || (uid ? `User ${uid}` : 'İstifadə edilməyib'),
-        userAvatar: entry.userAvatar || (prof && prof.avatarUrl) || 'https://cdn.discordapp.com/embed/avatars/0.png'
+        userName: (prof && prof.displayName) || entry.userName || (uid ? `Discord ID: ${uid}` : 'İstifadə edilməyib'),
+        userAvatar: (prof && prof.avatarUrl) || entry.userAvatar || 'https://cdn.discordapp.com/embed/avatars/0.png'
     };
 }
 
@@ -368,7 +377,7 @@ function ensureAutoWhitelistKey(scriptObj, userId, durationMs = null, createdBy 
         wl = {
             scriptId: sid,
             userId: uid,
-            userName: prof ? prof.displayName : `User ${uid}`,
+            userName: prof ? prof.displayName : `Discord ID: ${uid}`,
             userAvatar: prof ? prof.avatarUrl : 'https://cdn.discordapp.com/embed/avatars/0.png',
             createdAt: now,
             createdBy: String(createdBy),
@@ -549,7 +558,7 @@ function redeemKeyForScript(scriptObj, userId, rawKey) {
         state.whitelists.push({
             scriptId: sid,
             userId: uid,
-            userName: prof ? prof.displayName : `User ${uid}`,
+            userName: prof ? prof.displayName : `Discord ID: ${uid}`,
             userAvatar: prof ? prof.avatarUrl : 'https://cdn.discordapp.com/embed/avatars/0.png',
             createdAt: now,
             createdBy: 'redeem',
@@ -598,41 +607,47 @@ function resetHwidForUserScript(scriptObj, userId) {
     return { ok: true, keyEntry };
 }
 
-function buildLocalLuaScript(scriptObj, keyEntry, userId) {
-    const titleEsc = String(scriptObj.name || 'SADO_SCRIPT').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const keyEsc = String(keyEntry.key || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const userEsc = String(userId || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const rawCode = String(scriptObj.code || '').trim();
+function buildShortLoaderScript(scriptObj, keyEntry, userId) {
+    const keySafe = String(keyEntry.key || '').replace(/"/g, '\\"');
+    const endpoint = `${PUBLIC_BASE_URL}/api/loader?s=${encodeURIComponent(scriptObj.id)}&u=${encodeURIComponent(userId)}&k=${encodeURIComponent(keyEntry.key)}`;
+    return [
+        `script_key = "${keySafe}"`,
+        `loadstring(game:HttpGet("${endpoint}&h=" .. tostring(game:GetService("RbxAnalyticsService"):GetClientId())))()`
+    ].join('\n');
+}
 
-    const lines = [
-        `-- SADO PROTECT Local Loader (${scriptObj.name})`,
-        `local SCRIPT_NAME = "${titleEsc}"`,
-        `local SCRIPT_KEY = "${keyEsc}"`,
-        `local BOUND_USER_ID = "${userEsc}"`,
-        ``,
+function buildProtectedPayloadScript(scriptObj, keyEntry, userId) {
+    const rawCode = String(scriptObj.code || '');
+    const expectedKey = String(keyEntry.key || '');
+    const expectedUser = String(userId || '');
+    const boundHwid = keyEntry.hwid ? String(keyEntry.hwid) : '';
+    const hexBytes = Buffer.from(rawCode, 'utf8')
+        .toString('hex')
+        .match(/.{1,2}/g)
+        ?.map((b) => `\\x${b}`)
+        .join('') || '';
+
+    return [
         `local Players = game:GetService("Players")`,
         `local RbxAnalyticsService = game:GetService("RbxAnalyticsService")`,
-        `local LocalPlayer = Players.LocalPlayer`,
-        ``,
-        `if not LocalPlayer then return end`,
-        ``,
-        `local currentHwid = tostring(RbxAnalyticsService:GetClientId())`,
-        `if SCRIPT_KEY == "" or currentHwid == "" then`,
-        `    LocalPlayer:Kick("[SADO PROTECT] Key ve ya HWID dogrulanmadi.")`,
+        `local lp = Players.LocalPlayer`,
+        `if not lp then return end`,
+        `if type(script_key) ~= "string" or script_key ~= "${expectedKey.replace(/"/g, '\\"')}" then`,
+        `    lp:Kick("[SADO PROTECT] Key yanlisdir ve ya 1 neferlik kilid pozulub.")`,
         `    return`,
         `end`,
-        ``,
-        `print("[SADO PROTECT] Aktivlesdi -> " .. SCRIPT_NAME .. " | User: " .. BOUND_USER_ID)`
-    ];
-
-    if (rawCode.length > 0) {
-        lines.push('');
-        lines.push('(function()');
-        lines.push(rawCode);
-        lines.push('end)()');
-    }
-
-    return lines.join('\n');
+        `if tostring(lp.UserId) == "" then return end`,
+        `local curHwid = tostring(RbxAnalyticsService:GetClientId())`,
+        `if curHwid == "" or curHwid == "00000000-0000-0000-0000-000000000000" then`,
+        `    lp:Kick("[SADO PROTECT] HWID oxuna bilmedi.")`,
+        `    return`,
+        `end`,
+        boundHwid ? `if curHwid ~= "${boundHwid.replace(/"/g, '\\"')}" then lp:Kick("[SADO PROTECT] Bu key basqa telefonda/cihazda isledilir! Reset HWID edin.") return end` : `-- HWID first bind`,
+        `local _d = "${hexBytes}"`,
+        `local fn, err = loadstring(_d)`,
+        `if not fn then lp:Kick("[SADO PROTECT] Payload xetasi.") return end`,
+        `pcall(fn)`
+    ].join('\n');
 }
 
 function buildPanelEmbed(scriptObj, customTitle = null) {
@@ -770,16 +785,19 @@ async function fetchAndCacheDiscordUser(userId) {
 }
 
 async function syncAllPanelsForScript(scriptObj) {
-    if (!client || !client.isReady() || !scriptObj) return;
-    const sid = String(scriptObj.id);
-    const matchingPanels = state.panels.filter((p) => String(p.scriptId) === sid);
-    for (const p of matchingPanels) {
+    if (!client || !client.isReady()) return;
+    const panelsToSync = scriptObj
+        ? state.panels.filter((p) => String(p.scriptId) === String(scriptObj.id))
+        : state.panels;
+
+    for (const p of panelsToSync) {
         try {
             const ch = await client.channels.fetch(p.channelId);
             if (!ch || !ch.isTextBased()) continue;
             const msg = await ch.messages.fetch(p.messageId);
             if (!msg) continue;
-            const embed = buildPanelEmbed(scriptObj, p.title || null);
+            const targetScript = scriptObj || findScriptById(p.scriptId) || state.scripts[0] || null;
+            const embed = buildPanelEmbed(targetScript, p.title || null);
             const components = buildPanelComponents();
             await msg.edit({ embeds: [embed], components });
         } catch (_) {}
@@ -1346,6 +1364,7 @@ function createDiscordClient() {
                 }
 
                 if (interaction.customId === 'sp_btn_get_script') {
+                    await fetchAndCacheDiscordUser(interaction.user.id);
                     const access = checkUserAccessForScript(scriptObj, interaction.user.id, null);
                     if (!access.ok) {
                         await interaction.reply({
@@ -1355,16 +1374,40 @@ function createDiscordClient() {
                         return;
                     }
 
-                    const localLua = buildLocalLuaScript(access.script, access.keyEntry, interaction.user.id);
-                    const luaBuffer = Buffer.from(localLua, 'utf8');
+                    const shortLoader = buildShortLoaderScript(access.script, access.keyEntry, interaction.user.id);
+                    const copyRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`sp_copy_loader:${access.script.id}`)
+                            .setLabel('Scripti Kopyala')
+                            .setEmoji('📋')
+                            .setStyle(ButtonStyle.Secondary)
+                    );
 
                     await interaction.reply({
                         content: [
-                            `✅ **${access.script.name}** üçün **Local** skript hazırlandı (1 nəfərlik key: \`${access.keyEntry.key}\`).`,
-                            `⏳ Müddət: **${formatDurationLabel(access.keyEntry.expiresAt)}**`,
-                            `\`\`\`lua\n${localLua.slice(0, 1400)}\n\`\`\``
+                            `✅ **${access.script.name}** — Qısa Loader (1 nəfərlik & HWID qorumalı):`,
+                            `\`\`\`lua\n${shortLoader}\n\`\`\``
                         ].join('\n'),
-                        files: [{ attachment: luaBuffer, name: `${access.script.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_local.lua` }],
+                        components: [copyRow],
+                        flags: MessageFlags.Ephemeral
+                    });
+                    return;
+                }
+
+                if (interaction.customId && interaction.customId.startsWith('sp_copy_loader:')) {
+                    const sidPart = interaction.customId.split(':')[1];
+                    const targetScript = findScriptById(sidPart) || scriptObj;
+                    const access = checkUserAccessForScript(targetScript, interaction.user.id, null);
+                    if (!access.ok) {
+                        await interaction.reply({
+                            content: `❌ ${access.reason}`,
+                            flags: MessageFlags.Ephemeral
+                        });
+                        return;
+                    }
+                    const shortLoader = buildShortLoaderScript(access.script, access.keyEntry, interaction.user.id);
+                    await interaction.reply({
+                        content: shortLoader,
                         flags: MessageFlags.Ephemeral
                     });
                     return;
@@ -1433,6 +1476,7 @@ function createDiscordClient() {
                     channelId: interaction.channel ? interaction.channel.id : null
                 });
 
+                await fetchAndCacheDiscordUser(interaction.user.id);
                 const rawKey = interaction.fields.getTextInputValue('sp_input_key');
                 const redeemRes = redeemKeyForScript(scriptObj, interaction.user.id, rawKey);
                 if (!redeemRes.ok) {
@@ -1442,13 +1486,14 @@ function createDiscordClient() {
                     });
                     return;
                 }
+                await fetchAndCacheDiscordUser(interaction.user.id);
 
                 await interaction.reply({
                     content: [
                         `✅ **${scriptObj.name}** üçün key uğurla aktivləşdirildi!`,
                         `🔑 Key: \`${redeemRes.keyEntry.key}\` (yalnız sizin 1 hesabınıza bağlıdır)`,
                         `⏳ Müddət: **${formatDurationLabel(redeemRes.keyEntry.expiresAt)}**`,
-                        `İndi **Get Script** düyməsinə basıb skripti ala bilərsiniz.`
+                        `İndi **Get Script** düyməsinə basıb qısa skripti ala bilərsiniz.`
                     ].join('\n'),
                     flags: MessageFlags.Ephemeral
                 });
@@ -1729,7 +1774,7 @@ const server = http.createServer((req, res) => {
         if (reqUrl.pathname === '/api/bot-config' && req.method === 'POST') {
             let body = '';
             req.on('data', (chunk) => { body += chunk; });
-            req.on('end', () => {
+            req.on('end', async () => {
                 try {
                     const data = JSON.parse(body || '{}');
                     if (!checkPanelAuth(req, reqUrl, data)) {
@@ -1755,6 +1800,7 @@ const server = http.createServer((req, res) => {
                     }
                     state.panelButtonConfig = current;
                     persistState();
+                    await syncAllPanelsForScript(null);
                     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
                     res.end(JSON.stringify({ ok: true, panelButtonConfig: state.panelButtonConfig }));
                 } catch (err) {
@@ -1907,38 +1953,38 @@ const server = http.createServer((req, res) => {
                     }
                     const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
                     const userId = String(data.userId || '').trim();
-                    const resetRes = resetHwidForUserScript(scriptObj, userId);
-                    if (!resetRes.ok) {
-                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                        res.end(JSON.stringify({ ok: false, message: resetRes.reason }));
-                        return;
-                    }
-                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-                    res.end(JSON.stringify({ ok: true, message: 'HWID sıfırlandı.' }));
-                } catch (err) {
-                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                    res.end(JSON.stringify({ ok: false, message: 'HWID sıfırlanarkən xəta baş verdi.' }));
-                }
-            });
-            return;
-        }
+        if (reqUrl.pathname === '/api/loader') {
+            const ua = String(req.headers['user-agent'] || '').toLowerCase();
+            if (!ua.includes('roblox')) {
+                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('local p = game:GetService("Players").LocalPlayer; if p then p:Kick("[SADO PROTECT] Protected Endpoint") end');
+                return;
+            }
+            const scriptId = reqUrl.searchParams.get('s');
+            const userId = reqUrl.searchParams.get('u');
+            const keyParam = String(reqUrl.searchParams.get('k') || '').trim().toUpperCase();
+            const hwidParam = String(req.headers['roblox-id'] || req.headers['syn-fingerprint'] || reqUrl.searchParams.get('h') || '').trim();
 
-        if (reqUrl.pathname === '/api/local-script') {
-            const scriptId = reqUrl.searchParams.get('scriptId');
-            const userId = reqUrl.searchParams.get('userId');
-            const hwid = reqUrl.searchParams.get('hwid');
             const scriptObj = findScriptById(scriptId) || state.scripts[0] || null;
-            const access = checkUserAccessForScript(scriptObj, userId, hwid);
+            const keyEntry = state.keys.find((k) => String(k.key || '').trim().toUpperCase() === keyParam) || null;
 
-            if (!access.ok) {
-                res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, error: access.code, message: access.reason }));
+            if (!scriptObj || !keyEntry || String(keyEntry.scriptId) !== String(scriptObj.id)) {
+                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('local p = game:GetService("Players").LocalPlayer; if p then p:Kick("[SADO PROTECT] Key ve ya skript yanlisdir.") end');
                 return;
             }
 
-            const luaCode = buildLocalLuaScript(access.script, access.keyEntry, userId);
+            const access = checkUserAccessForScript(scriptObj, userId, hwidParam || null);
+            if (!access.ok) {
+                const kickMsg = String(access.reason || 'Access denied').replace(/\*\*/g, '').replace(/"/g, '\\"');
+                res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end(`local p = game:GetService("Players").LocalPlayer; if p then p:Kick("[SADO PROTECT] ${kickMsg}") end`);
+                return;
+            }
+
+            const protectedLua = buildProtectedPayloadScript(access.script, access.keyEntry, userId);
             res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end(luaCode);
+            res.end(protectedLua);
             return;
         }
 
