@@ -242,15 +242,6 @@ async function recordDiscordUserProfile(user) {
     persistState();
 }
 
-function getUserProfileFallback(userId) {
-    const uid = String(userId || '').trim();
-    const prof = (uid && state.userProfiles[uid]) || null;
-    return {
-        userName: (prof && prof.displayName) || (uid ? `Discord ID: ${uid}` : 'İstifadə edilməyib'),
-        userAvatar: (prof && prof.avatarUrl) || 'https://cdn.discordapp.com/embed/avatars/0.png'
-    };
-}
-
 function enrichMemberEntry(entry) {
     const uid = String(entry.userId || entry.redeemedBy || entry.boundUserId || '');
     const prof = (uid && state.userProfiles[uid]) || null;
@@ -444,7 +435,7 @@ function checkUserAccessForScript(scriptObj, userId, hwid = null) {
         return {
             ok: false,
             code: 'not_whitelisted',
-            reason: `Sizin **${scriptObj.name}** skripti üçün whitelist və ya key-iniz yoxdur. Başqa skriptdəki whitelist bu skriptdə işləmir.`
+            reason: `Sizin **${scriptObj.name}** skripti üçün whitelist və ya key-iniz yoxdur.`
         };
     }
 
@@ -489,7 +480,7 @@ function checkUserAccessForScript(scriptObj, userId, hwid = null) {
             return {
                 ok: false,
                 code: 'hwid_mismatch',
-                reason: 'Bu key başqa cihazın HWID-inə bağlıdır. Zəhmət olmasa Reset HWID düyməsindən istifadə edin.'
+                reason: 'Bu key başqa cihazın HWID-inə bağlıdır. Reset HWID düyməsindən istifadə edin.'
             };
         }
         keyEntry.hwid = cleanHwid;
@@ -525,7 +516,7 @@ function redeemKeyForScript(scriptObj, userId, rawKey) {
     if (String(keyEntry.scriptId) !== sid) {
         return {
             ok: false,
-            reason: `Bu key **${scriptObj.name}** skriptinə aid deyil (başqa skriptin key-idir).`
+            reason: `Bu key **${scriptObj.name}** skriptinə aid deyil.`
         };
     }
 
@@ -616,10 +607,9 @@ function buildShortLoaderScript(scriptObj, keyEntry, userId) {
     ].join('\n');
 }
 
-function buildProtectedPayloadScript(scriptObj, keyEntry, userId) {
+function buildProtectedPayloadScript(scriptObj, keyEntry) {
     const rawCode = String(scriptObj.code || '');
     const expectedKey = String(keyEntry.key || '');
-    const expectedUser = String(userId || '');
     const boundHwid = keyEntry.hwid ? String(keyEntry.hwid) : '';
     const hexBytes = Buffer.from(rawCode, 'utf8')
         .toString('hex')
@@ -636,7 +626,6 @@ function buildProtectedPayloadScript(scriptObj, keyEntry, userId) {
         `    lp:Kick("[SADO PROTECT] Key yanlisdir ve ya 1 neferlik kilid pozulub.")`,
         `    return`,
         `end`,
-        `if tostring(lp.UserId) == "" then return end`,
         `local curHwid = tostring(RbxAnalyticsService:GetClientId())`,
         `if curHwid == "" or curHwid == "00000000-0000-0000-0000-000000000000" then`,
         `    lp:Kick("[SADO PROTECT] HWID oxuna bilmedi.")`,
@@ -659,7 +648,7 @@ function buildPanelEmbed(scriptObj, customTitle = null) {
             [
                 `Skript: **${scriptObj ? scriptObj.name : 'Təyin olunmayıb'}**`,
                 `• Key aktivləşdirmək üçün **Redeem Key**`,
-                `• Local skripti almaq üçün **Get Script**`,
+                `• Qısa skripti almaq üçün **Get Script**`,
                 `• Cihazı sıfırlamaq üçün **Reset HWID**`,
                 `• Key və HWID məlumatına baxmaq üçün **Get Stats**`
             ].join('\n')
@@ -1953,6 +1942,22 @@ const server = http.createServer((req, res) => {
                     }
                     const scriptObj = findScriptById(data.scriptId) || state.scripts[0] || null;
                     const userId = String(data.userId || '').trim();
+                    const resetRes = resetHwidForUserScript(scriptObj, userId);
+                    if (!resetRes.ok) {
+                        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ ok: false, message: resetRes.reason }));
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, message: 'HWID sıfırlandı.' }));
+                } catch (err) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: false, message: 'HWID sıfırlanarkən xəta baş verdi.' }));
+                }
+            });
+            return;
+        }
+
         if (reqUrl.pathname === '/api/loader') {
             const ua = String(req.headers['user-agent'] || '').toLowerCase();
             if (!ua.includes('roblox')) {
@@ -1982,7 +1987,7 @@ const server = http.createServer((req, res) => {
                 return;
             }
 
-            const protectedLua = buildProtectedPayloadScript(access.script, access.keyEntry, userId);
+            const protectedLua = buildProtectedPayloadScript(access.script, access.keyEntry);
             res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
             res.end(protectedLua);
             return;
@@ -2131,7 +2136,7 @@ const server = http.createServer((req, res) => {
       <button type="button" id="openDrawerBtn" class="menu-btn" aria-label="Menyu">☰</button>
       <div>
         <div class="brand-title">SADO PROTECT STUDIO</div>
-        <div style="color:var(--muted);font-size:12px;">1 nəfərlik key &amp; skript kilidi • HWID Kick &amp; Reset • Local Lua</div>
+        <div style="color:var(--muted);font-size:12px;">1 nəfərlik key &amp; skript kilidi • HWID Kick &amp; Reset • Qısa Loader</div>
       </div>
     </div>
     <div id="botStatus" class="badge offline">Yoxlanılır...</div>
