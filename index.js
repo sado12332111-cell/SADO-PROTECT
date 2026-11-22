@@ -338,6 +338,8 @@ function generateKeysForScript(scriptObj, { durationMs = null, amount = 1, creat
             createdAt: now,
             createdBy: String(createdBy),
             expiresAt,
+            maxUses: 1,
+            usedCount: assignedUserId ? 1 : 0,
             redeemed: Boolean(assignedUserId),
             redeemedBy: assignedUserId ? String(assignedUserId) : null,
             redeemedAt: assignedUserId ? now : null,
@@ -517,6 +519,7 @@ function redeemKeyForScript(scriptObj, userId, rawKey) {
     keyEntry.redeemed = true;
     keyEntry.redeemedBy = uid;
     keyEntry.boundUserId = uid;
+    keyEntry.usedCount = 1;
     if (!keyEntry.redeemedAt) keyEntry.redeemedAt = now;
 
     const existingWl = findWhitelistForUserInScript(sid, uid);
@@ -1464,6 +1467,600 @@ function checkPanelAuth(req, reqUrl, bodyData = null) {
     return candidate.length > 0 && candidate === PANEL_TOKEN;
 }
 
+const DASHBOARD_HTML = String.raw`<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SADO PROTECT — Control Studio</title>
+<style>
+  :root {
+    --bg: #070b14;
+    --surface: rgba(15, 23, 42, 0.88);
+    --surface-2: rgba(10, 16, 31, 0.94);
+    --border: rgba(148, 163, 184, 0.18);
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --primary: #6366f1;
+    --emerald: #10b981;
+  }
+  * { box-sizing: border-box; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 12% 10%, rgba(99, 102, 241, 0.22), transparent 42%),
+      radial-gradient(circle at 88% 15%, rgba(16, 185, 129, 0.14), transparent 38%),
+      var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+  .top {
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+    background: var(--surface); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); padding: 16px 20px; border-radius: 18px;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.4);
+  }
+  .left-head { display: flex; align-items: center; gap: 14px; }
+  .menu-btn {
+    width: 44px; height: 44px; border-radius: 13px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); font-size: 20px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .menu-btn:hover { border-color: var(--primary); background: rgba(99,102,241,0.18); }
+  .brand-title { font-size: 20px; font-weight: 800; letter-spacing: 0.3px; background: linear-gradient(90deg, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .badge { padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(16,185,129,.14); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
+  .badge.offline { background: rgba(245,158,11,.14); color: #fbbf24; border-color: rgba(245,158,11,.35); }
+
+  .drawer-backdrop { position: fixed; inset: 0; background: rgba(2,6,23,0.68); backdrop-filter: blur(4px); display: none; z-index: 90; }
+  .drawer-backdrop.open { display: block; }
+  .drawer {
+    position: fixed; top: 0; left: -320px; width: 300px; height: 100%;
+    background: #0d1526; border-right: 1px solid var(--border);
+    padding: 22px 18px; z-index: 100; transition: left .24s ease;
+    display: flex; flex-direction: column; gap: 10px; box-shadow: 18px 0 40px rgba(0,0,0,0.55);
+  }
+  .drawer.open { left: 0; }
+  .nav-item {
+    padding: 12px 14px; border-radius: 12px; background: var(--surface-2);
+    border: 1px solid var(--border); color: var(--text); text-align: left;
+    cursor: pointer; font-weight: 600; font-size: 14px;
+  }
+  .nav-item.active { border-color: var(--primary); background: linear-gradient(135deg, rgba(99,102,241,0.25), rgba(79,70,229,0.12)); }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border); padding: 16px 18px; border-radius: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .stat-top { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; font-weight: 600; }
+  .stat-val { font-size: 26px; font-weight: 800; }
+  .meter { height: 6px; width: 100%; border-radius: 999px; background: rgba(148,163,184,0.15); overflow: hidden; }
+  .meter > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--primary), var(--emerald)); transition: width .35s ease; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface); backdrop-filter: blur(12px);
+    border: 1px solid var(--border); padding: 20px; border-radius: 18px;
+    display: grid; gap: 13px; box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+  }
+  h1, h2, h3, h4 { margin: 0; }
+  label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 5px; }
+  input, select, textarea, button.action {
+    width: 100%; padding: 10px 13px; border-radius: 11px;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); font-size: 14px; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+  textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  button.action {
+    background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; font-weight: 700; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(79,70,229,0.3);
+  }
+  button.action.green { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 8px 20px rgba(16,185,129,0.25); }
+
+  .mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mode-btn {
+    padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  .mode-btn.active { background: rgba(99,102,241,0.2); border-color: var(--primary); color: #fff; }
+
+  .drop-pills { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .pill-btn {
+    padding: 9px 4px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); font-weight: 800; font-size: 13px; cursor: pointer;
+  }
+  .pill-btn.active { background: linear-gradient(135deg, #10b981, #059669); border-color: transparent; color: #022c22; }
+
+  .user-row {
+    display: flex; align-items: center; gap: 11px; padding: 9px 12px;
+    border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px;
+  }
+  .user-row img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); }
+  .out {
+    background: #050811; border: 1px solid var(--border); padding: 14px;
+    border-radius: 13px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #e2e8f0;
+  }
+  .hidden-tab { display: none; }
+</style>
+</head>
+<body>
+<div id="backdrop" class="drawer-backdrop"></div>
+<aside id="drawer" class="drawer">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--border);">
+    <h3>☰ SADO Menyu</h3>
+    <button type="button" id="closeDrawerBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;">✕</button>
+  </div>
+  <button type="button" id="tabBtnMain" class="nav-item active">🏠 İdarəetmə Paneli</button>
+  <button type="button" id="tabBtnBot" class="nav-item">🤖 Discord Bot</button>
+  <div style="margin-top:auto;display:grid;gap:8px;">
+    <label style="margin:0;">Panel Token (İsteğe bağlı)</label>
+    <input id="drawerToken" type="password" placeholder="PANEL_TOKEN varsa yazın" />
+    <button type="button" id="savePanelTokenBtn" class="action green">Panel Tokeni Saxla</button>
+  </div>
+</aside>
+
+<div class="wrap">
+  <div class="top">
+    <div class="left-head">
+      <button type="button" id="openDrawerBtn" class="menu-btn" aria-label="Menyu">☰</button>
+      <div>
+        <div class="brand-title">SADO PROTECT STUDIO</div>
+        <div style="color:var(--muted);font-size:12px;">1 nəfərlik key &amp; skript kilidi • HWID Kick &amp; Reset • Local Lua</div>
+      </div>
+    </div>
+    <div id="botStatus" class="badge offline">Yoxlanılır...</div>
+  </div>
+
+  <div class="card">
+    <h3>🤖 Discord Bot Token &amp; Bağlantı</h3>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
+      <div>
+        <label>Discord Bot Token</label>
+        <input id="botTokenInput" type="password" placeholder="Discord Developer Portal -> Bot Token daxil edin" />
+      </div>
+      <button type="button" id="connectBotBtn" class="action green" style="width:auto;padding:10px 18px;">Botu Qoş</button>
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-top"><span>AKTİV SKRİPTLƏR</span><span>📜</span></div>
+      <div id="cScripts" class="stat-val">0</div>
+      <div class="meter"><span id="mScripts" style="width:0%"></span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><span>YARADILAN KEY-LƏR</span><span>🔑</span></div>
+      <div id="cKeys" class="stat-val">0</div>
+      <div class="meter"><span id="mKeys" style="width:0%"></span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><span>WHITELIST ÜZVLƏR</span><span>🛡️</span></div>
+      <div id="cWl" class="stat-val">0</div>
+      <div class="meter"><span id="mWl" style="width:0%"></span></div>
+    </div>
+  </div>
+
+  <div id="sectionMain">
+    <div class="grid">
+      <div class="card">
+        <h3>Yeni Skript Əlavə Et</h3>
+        <div><label>Skript Adı</label><input id="sName" placeholder="Məs: SADO HUB, SAE, Duel" /></div>
+        <div><label>Lua Kodu</label><textarea id="sCode" placeholder="print('Salam Roblox!')"></textarea></div>
+        <div><label>Və ya .lua / .txt Fayl Seçin</label><input id="sFile" type="file" accept=".lua,.txt" /></div>
+        <button type="button" id="addScriptBtn" class="action">Skripti Saxla</button>
+      </div>
+
+      <div class="card">
+        <h3>Drop Key Yarat (1 - 10 Nəfərlik)</h3>
+        <div><label>Skript</label><select id="kScript"></select></div>
+        <div>
+          <label>Nəfər / Drop Sayı</label>
+          <div class="drop-pills" id="dropPills">
+            <button type="button" class="pill-btn active" data-count="1">1</button>
+            <button type="button" class="pill-btn" data-count="2">2</button>
+            <button type="button" class="pill-btn" data-count="3">3</button>
+            <button type="button" class="pill-btn" data-count="4">4</button>
+            <button type="button" class="pill-btn" data-count="5">5</button>
+            <button type="button" class="pill-btn" data-count="10">10</button>
+          </div>
+        </div>
+        <div>
+          <label>Müddət Rejimi</label>
+          <div class="mode-row">
+            <button type="button" id="kModeLife" class="mode-btn active">♾️ Lifetime</button>
+            <button type="button" id="kModeTime" class="mode-btn">⏳ Vaxt Seç</button>
+          </div>
+        </div>
+        <div id="kTimeBox" style="display:none;gap:8px;grid-template-columns:1fr 1fr;">
+          <div><label>Vaxt Dəyəri</label><input id="kTimeNum" type="number" min="1" value="7" /></div>
+          <div>
+            <label>Vahid</label>
+            <select id="kTimeUnit">
+              <option value="m">Dəqiqə (m)</option>
+              <option value="h">Saat (h)</option>
+              <option value="d" selected>Gün (d)</option>
+              <option value="w">Həftə (w)</option>
+            </select>
+          </div>
+        </div>
+        <button type="button" id="genKeyBtn" class="action green">Key Drop Yarat</button>
+      </div>
+
+      <div class="card">
+        <h3>Whitelist / Rol Whitelist / Reset HWID</h3>
+        <div><label>Skript</label><select id="wScript"></select></div>
+        <div><label>Discord User ID</label><input id="wUser" placeholder="123456789012345678" /></div>
+        <div>
+          <label>Whitelist Müddət Rejimi</label>
+          <div class="mode-row">
+            <button type="button" id="wModeLife" class="mode-btn active">♾️ Lifetime</button>
+            <button type="button" id="wModeTime" class="mode-btn">⏳ Vaxt Seç</button>
+          </div>
+        </div>
+        <div id="wTimeBox" style="display:none;gap:8px;grid-template-columns:1fr 1fr;">
+          <div><label>Vaxt Dəyəri</label><input id="wTimeNum" type="number" min="1" value="7" /></div>
+          <div>
+            <label>Vahid</label>
+            <select id="wTimeUnit">
+              <option value="m">Dəqiqə (m)</option>
+              <option value="h">Saat (h)</option>
+              <option value="d" selected>Gün (d)</option>
+              <option value="w">Həftə (w)</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button type="button" id="doWhitelistBtn" class="action green">Whitelist + Key</button>
+          <button type="button" id="doResetHwidBtn" class="action">Reset HWID</button>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--border);margin:2px 0;" />
+        <div><label>Discord Server</label><select id="rGuild"></select></div>
+        <div><label>Server Rolu</label><select id="rRole"></select></div>
+        <button type="button" id="doRoleWhitelistBtn" class="action green">Rola Whitelist Ver</button>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <h3>Aktiv Whitelist İstifadəçiləri</h3>
+        <div id="wlList" style="display:grid;gap:8px;">Yüklənir...</div>
+      </div>
+      <div class="card">
+        <h3>Son Key İstifadəçiləri</h3>
+        <div id="keyList" style="display:grid;gap:8px;">Yüklənir...</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sectionBot" class="hidden-tab">
+    <div class="card">
+      <h3>🤖 Discord Bot — Panel Butonlarının Tənzimlənməsi</h3>
+      <div style="color:var(--muted);font-size:13px;">Redeem Key, Get Script, Reset HWID və Get Stats butonlarının adını, emojisini, sırasını (1-4) və rəngini dəyişin.</div>
+      <div class="grid" id="botBtnForms"></div>
+      <button type="button" id="saveBotConfigBtn" class="action green">Bot Ayarlarını Saxla</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Konsol / Nəticə</h3>
+    <div id="output" class="out">Hazırdır.</div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  let selectedDropCount = 1;
+  let keyDurationMode = 'lifetime';
+  let wlDurationMode = 'lifetime';
+  let guildsCache = [];
+  let botBtnCfg = {};
+  let panelToken = localStorage.getItem('sado_panel_token') || '';
+
+  const out = (msg) => {
+    document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+  };
+
+  function escHtml(v) {
+    return String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function apiHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    if (panelToken) h['x-panel-token'] = panelToken;
+    return h;
+  }
+
+  function toggleDrawer(open) {
+    document.getElementById('drawer').classList.toggle('open', Boolean(open));
+    document.getElementById('backdrop').classList.toggle('open', Boolean(open));
+  }
+
+  function switchTab(tab) {
+    toggleDrawer(false);
+    const isMain = tab === 'main';
+    document.getElementById('sectionMain').classList.toggle('hidden-tab', !isMain);
+    document.getElementById('sectionBot').classList.toggle('hidden-tab', isMain);
+    document.getElementById('tabBtnMain').classList.toggle('active', isMain);
+    document.getElementById('tabBtnBot').classList.toggle('active', !isMain);
+  }
+
+  function setDurationMode(target, mode) {
+    if (target === 'key') {
+      keyDurationMode = mode;
+      document.getElementById('kModeLife').classList.toggle('active', mode === 'lifetime');
+      document.getElementById('kModeTime').classList.toggle('active', mode === 'timed');
+      document.getElementById('kTimeBox').style.display = mode === 'timed' ? 'grid' : 'none';
+    } else {
+      wlDurationMode = mode;
+      document.getElementById('wModeLife').classList.toggle('active', mode === 'lifetime');
+      document.getElementById('wModeTime').classList.toggle('active', mode === 'timed');
+      document.getElementById('wTimeBox').style.display = mode === 'timed' ? 'grid' : 'none';
+    }
+  }
+
+  function getDurationValue(target) {
+    if (target === 'key') {
+      if (keyDurationMode === 'lifetime') return '0';
+      const num = Math.max(1, Number(document.getElementById('kTimeNum').value || 1));
+      const unit = document.getElementById('kTimeUnit').value || 'd';
+      return String(num) + String(unit);
+    }
+    if (wlDurationMode === 'lifetime') return '0';
+    const num = Math.max(1, Number(document.getElementById('wTimeNum').value || 1));
+    const unit = document.getElementById('wTimeUnit').value || 'd';
+    return String(num) + String(unit);
+  }
+
+  function renderBotConfigForms(cfg) {
+    botBtnCfg = cfg || {};
+    const items = [
+      { key: 'redeem', title: 'Redeem Key Butonu' },
+      { key: 'getScript', title: 'Get Script Butonu' },
+      { key: 'resetHwid', title: 'Reset HWID Butonu' },
+      { key: 'getStats', title: 'Get Stats Butonu' }
+    ];
+    document.getElementById('botBtnForms').innerHTML = items.map(it => {
+      const c = botBtnCfg[it.key] || {};
+      return '<div class="card" style="background:var(--surface-2);">' +
+        '<h4>' + escHtml(it.title) + '</h4>' +
+        '<div><label>Ad</label><input id="cfg_' + it.key + '_label" value="' + escHtml(c.label || '') + '" /></div>' +
+        '<div><label>Emoji</label><input id="cfg_' + it.key + '_emoji" value="' + escHtml(c.emoji || '') + '" /></div>' +
+        '<div><label>Yer / Sıra (1-4)</label><input id="cfg_' + it.key + '_order" type="number" min="1" max="4" value="' + escHtml(c.order || 1) + '" /></div>' +
+        '<div><label>Rəng</label><select id="cfg_' + it.key + '_style">' +
+        ['Success','Primary','Secondary','Danger'].map(st => '<option value="' + st + '"' + (c.style === st ? ' selected' : '') + '>' + st + '</option>').join('') +
+        '</select></div></div>';
+    }).join('');
+  }
+
+  function populateRoles() {
+    const gid = document.getElementById('rGuild').value;
+    const g = guildsCache.find(x => String(x.id) === String(gid));
+    const roleSel = document.getElementById('rRole');
+    if (!g || !g.roles || !g.roles.length) {
+      roleSel.innerHTML = '<option value="">Rol tapılmadı</option>';
+      return;
+    }
+    roleSel.innerHTML = g.roles.map(r => '<option value="' + escHtml(r.id) + '">' + escHtml(r.name) + '</option>').join('');
+  }
+
+  async function refreshState() {
+    document.getElementById('drawerToken').value = panelToken;
+    try {
+      const query = panelToken ? ('?token=' + encodeURIComponent(panelToken)) : '';
+      const r = await fetch('/api/state' + query, { headers: apiHeaders() });
+      const d = await r.json();
+      if (!d.ok) {
+        out(d.message || 'Giriş tələb olunur. Sol menyudan Panel Token daxil edin.');
+        return;
+      }
+
+      const statusEl = document.getElementById('botStatus');
+      statusEl.textContent = d.botReady ? ('● Aktiv: ' + (d.botTag || 'Bot')) : '● Bot Token Gözləyir';
+      statusEl.classList.toggle('offline', !d.botReady);
+
+      const scCount = Number((d.scripts && d.scripts.length) || 0);
+      const kCount = Number(d.keysCount || 0);
+      const wCount = Number(d.whitelistsCount || 0);
+      document.getElementById('cScripts').textContent = scCount;
+      document.getElementById('cKeys').textContent = kCount;
+      document.getElementById('cWl').textContent = wCount;
+      document.getElementById('mScripts').style.width = Math.min(100, scCount * 10) + '%';
+      document.getElementById('mKeys').style.width = Math.min(100, kCount * 4) + '%';
+      document.getElementById('mWl').style.width = Math.min(100, wCount * 5) + '%';
+
+      const opts = (d.scripts || []).map(s => '<option value="' + escHtml(s.id) + '">' + escHtml(s.name) + '</option>').join('') || '<option value="">Skript yoxdur</option>';
+      document.getElementById('kScript').innerHTML = opts;
+      document.getElementById('wScript').innerHTML = opts;
+
+      guildsCache = d.guilds || [];
+      const gSel = document.getElementById('rGuild');
+      gSel.innerHTML = guildsCache.length
+        ? guildsCache.map(g => '<option value="' + escHtml(g.id) + '">' + escHtml(g.name) + '</option>').join('')
+        : '<option value="">Server tapılmadı</option>';
+      populateRoles();
+
+      document.getElementById('wlList').innerHTML = (d.whitelists || []).length
+        ? d.whitelists.map(w => '<div class="user-row"><img src="' + escHtml(w.userAvatar || '') + '" alt="" /><div><div><b>' + escHtml(w.userName || w.userId) + '</b></div><div style="color:var(--muted);font-size:11px;">ID: ' + escHtml(w.userId || '-') + ' • Script: ' + escHtml(w.scriptId || '-') + '</div></div></div>').join('')
+        : '<div style="color:var(--muted);font-size:13px;">Hələ whitelist yoxdur.</div>';
+
+      document.getElementById('keyList').innerHTML = (d.recentKeys || []).length
+        ? d.recentKeys.map(k => '<div class="user-row"><img src="' + escHtml(k.userAvatar || '') + '" alt="" /><div><div><b>' + escHtml(k.userName || 'İstifadə edilməyib') + '</b> • <code>' + escHtml(k.key) + '</code></div><div style="color:var(--muted);font-size:11px;">Script: ' + escHtml(k.scriptName || k.scriptId) + ' • HWID: ' + (k.hwid ? 'Bağlıdır' : 'Boş') + '</div></div></div>').join('')
+        : '<div style="color:var(--muted);font-size:13px;">Hələ key yoxdur.</div>';
+
+      renderBotConfigForms(d.panelButtonConfig);
+    } catch (e) {
+      out('State yüklənmədi: ' + e.message);
+    }
+  }
+
+  document.getElementById('openDrawerBtn').addEventListener('click', () => toggleDrawer(true));
+  document.getElementById('closeDrawerBtn').addEventListener('click', () => toggleDrawer(false));
+  document.getElementById('backdrop').addEventListener('click', () => toggleDrawer(false));
+  document.getElementById('tabBtnMain').addEventListener('click', () => switchTab('main'));
+  document.getElementById('tabBtnBot').addEventListener('click', () => switchTab('bot'));
+
+  document.getElementById('savePanelTokenBtn').addEventListener('click', () => {
+    panelToken = String(document.getElementById('drawerToken').value || '').trim();
+    localStorage.setItem('sado_panel_token', panelToken);
+    out(panelToken ? 'Panel tokeni yadda saxlanıldı.' : 'Panel tokeni təmizləndi.');
+    refreshState();
+  });
+
+  document.getElementById('connectBotBtn').addEventListener('click', async () => {
+    const botToken = String(document.getElementById('botTokenInput').value || '').trim();
+    if (!botToken) {
+      out('Zəhmət olmasa Discord Bot Token daxil edin.');
+      return;
+    }
+    out('Bot qoşulur...');
+    const r = await fetch('/api/bot-token', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ botToken, token: panelToken })
+    });
+    const d = await r.json();
+    out(d.message || 'Cavab alındı.');
+    if (d.ok) {
+      document.getElementById('botTokenInput').value = '';
+      setTimeout(refreshState, 1200);
+    }
+  });
+
+  document.getElementById('sFile').addEventListener('change', (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (!document.getElementById('sName').value.trim()) {
+      document.getElementById('sName').value = file.name.replace(/\.(lua|txt)$/i, '');
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById('sCode').value = String(reader.result || '');
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById('addScriptBtn').addEventListener('click', async () => {
+    const name = document.getElementById('sName').value;
+    const code = document.getElementById('sCode').value;
+    const r = await fetch('/api/scripts', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ name, code, token: panelToken })
+    });
+    const d = await r.json();
+    out(d.ok ? 'Skript əlavə edildi: ' + d.script.name + ' (' + d.script.id + ')' : (d.message || 'Skript əlavə edilə bilmədi'));
+    if (d.ok) {
+      document.getElementById('sName').value = '';
+      document.getElementById('sCode').value = '';
+      refreshState();
+    }
+  });
+
+  document.querySelectorAll('#dropPills .pill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedDropCount = Number(btn.getAttribute('data-count') || 1);
+      document.querySelectorAll('#dropPills .pill-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  document.getElementById('kModeLife').addEventListener('click', () => setDurationMode('key', 'lifetime'));
+  document.getElementById('kModeTime').addEventListener('click', () => setDurationMode('key', 'timed'));
+  document.getElementById('wModeLife').addEventListener('click', () => setDurationMode('wl', 'lifetime'));
+  document.getElementById('wModeTime').addEventListener('click', () => setDurationMode('wl', 'timed'));
+
+  document.getElementById('genKeyBtn').addEventListener('click', async () => {
+    const scriptId = document.getElementById('kScript').value;
+    const duration = getDurationValue('key');
+    const amount = Number(selectedDropCount || 1);
+    const r = await fetch('/api/keys', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ scriptId, duration, amount, token: panelToken })
+    });
+    const d = await r.json();
+    out(d.ok ? 'Yaradılan (' + amount + ' nəfərlik drop • ' + duration + ') Key-lər:\n' + d.keys.map(x => x.key).join('\n') : (d.message || 'Xəta'));
+    if (d.ok) refreshState();
+  });
+
+  document.getElementById('doWhitelistBtn').addEventListener('click', async () => {
+    const scriptId = document.getElementById('wScript').value;
+    const userId = document.getElementById('wUser').value;
+    const duration = getDurationValue('wl');
+    const r = await fetch('/api/whitelist', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ scriptId, userId, duration, token: panelToken })
+    });
+    const d = await r.json();
+    out(d.ok ? 'Whitelist edildi (' + duration + ')! Avto Key: ' + d.key : (d.message || 'Xəta'));
+    if (d.ok) refreshState();
+  });
+
+  document.getElementById('doResetHwidBtn').addEventListener('click', async () => {
+    const scriptId = document.getElementById('wScript').value;
+    const userId = document.getElementById('wUser').value;
+    const r = await fetch('/api/reset-hwid', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ scriptId, userId, token: panelToken })
+    });
+    const d = await r.json();
+    out(d.message || 'HWID sıfırlandı.');
+    if (d.ok) refreshState();
+  });
+
+  document.getElementById('rGuild').addEventListener('change', populateRoles);
+
+  document.getElementById('doRoleWhitelistBtn').addEventListener('click', async () => {
+    const scriptId = document.getElementById('wScript').value;
+    const guildId = document.getElementById('rGuild').value;
+    const roleId = document.getElementById('rRole').value;
+    const duration = getDurationValue('wl');
+    const r = await fetch('/api/role-whitelist', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ scriptId, guildId, roleId, duration, token: panelToken })
+    });
+    const d = await r.json();
+    out(d.ok ? 'Rol üzrə ' + d.count + ' nəfər whitelist edildi!' : (d.message || 'Xəta'));
+    if (d.ok) refreshState();
+  });
+
+  document.getElementById('saveBotConfigBtn').addEventListener('click', async () => {
+    const payload = { token: panelToken, panelButtonConfig: {} };
+    for (const k of ['redeem', 'getScript', 'resetHwid', 'getStats']) {
+      payload.panelButtonConfig[k] = {
+        label: document.getElementById('cfg_' + k + '_label').value,
+        emoji: document.getElementById('cfg_' + k + '_emoji').value,
+        order: Number(document.getElementById('cfg_' + k + '_order').value || 1),
+        style: document.getElementById('cfg_' + k + '_style').value
+      };
+    }
+    const r = await fetch('/api/bot-config', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    out(d.ok ? 'Discord bot panel buton ayarları saxlanıldı!' : (d.message || 'Xəta'));
+  });
+
+  refreshState();
+});
+</script>
+</body>
+</html>`;
+
 const server = http.createServer((req, res) => {
     try {
         const reqUrl = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
@@ -1795,593 +2392,8 @@ const server = http.createServer((req, res) => {
         }
 
         if (reqUrl.pathname === '/') {
-            const html = `<!DOCTYPE html>
-<html lang="az">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SADO PROTECT — Control Studio</title>
-<style>
-  :root {
-    --bg: #070b14;
-    --surface: rgba(15, 23, 42, 0.88);
-    --surface-2: rgba(10, 16, 31, 0.94);
-    --border: rgba(148, 163, 184, 0.18);
-    --text: #f8fafc;
-    --muted: #94a3b8;
-    --primary: #6366f1;
-    --primary-glow: rgba(99, 102, 241, 0.35);
-    --emerald: #10b981;
-  }
-  * { box-sizing: border-box; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    background:
-      radial-gradient(circle at 12% 10%, rgba(99, 102, 241, 0.22), transparent 42%),
-      radial-gradient(circle at 88% 15%, rgba(16, 185, 129, 0.14), transparent 38%),
-      var(--bg);
-    color: var(--text);
-    padding: 16px;
-  }
-  .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
-  .top {
-    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
-    background: var(--surface); backdrop-filter: blur(14px);
-    border: 1px solid var(--border); padding: 16px 20px; border-radius: 18px;
-    box-shadow: 0 18px 40px rgba(0,0,0,0.4);
-  }
-  .left-head { display: flex; align-items: center; gap: 14px; }
-  .menu-btn {
-    width: 44px; height: 44px; border-radius: 13px;
-    background: var(--surface-2); border: 1px solid var(--border);
-    color: var(--text); font-size: 20px; cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-  }
-  .menu-btn:hover { border-color: var(--primary); background: rgba(99,102,241,0.18); }
-  .brand-title { font-size: 20px; font-weight: 800; letter-spacing: 0.3px; background: linear-gradient(90deg, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  .badge { padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(16,185,129,.14); color: #34d399; border: 1px solid rgba(16,185,129,.35); }
-  .badge.offline { background: rgba(245,158,11,.14); color: #fbbf24; border-color: rgba(245,158,11,.35); }
-
-  .drawer-backdrop { position: fixed; inset: 0; background: rgba(2,6,23,0.68); backdrop-filter: blur(4px); display: none; z-index: 90; }
-  .drawer-backdrop.open { display: block; }
-  .drawer {
-    position: fixed; top: 0; left: -320px; width: 300px; height: 100%;
-    background: #0d1526; border-right: 1px solid var(--border);
-    padding: 22px 18px; z-index: 100; transition: left .24s ease;
-    display: flex; flex-direction: column; gap: 10px; box-shadow: 18px 0 40px rgba(0,0,0,0.55);
-  }
-  .drawer.open { left: 0; }
-  .nav-item {
-    padding: 12px 14px; border-radius: 12px; background: var(--surface-2);
-    border: 1px solid var(--border); color: var(--text); text-align: left;
-    cursor: pointer; font-weight: 600; font-size: 14px;
-  }
-  .nav-item.active { border-color: var(--primary); background: linear-gradient(135deg, rgba(99,102,241,0.25), rgba(79,70,229,0.12)); }
-
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-  .stat-card {
-    background: var(--surface); border: 1px solid var(--border); padding: 16px 18px; border-radius: 16px;
-    display: flex; flex-direction: column; gap: 8px;
-  }
-  .stat-top { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; font-weight: 600; }
-  .stat-val { font-size: 26px; font-weight: 800; }
-  .meter { height: 6px; width: 100%; border-radius: 999px; background: rgba(148,163,184,0.15); overflow: hidden; }
-  .meter > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--primary), var(--emerald)); transition: width .35s ease; }
-
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
-  .card {
-    background: var(--surface); backdrop-filter: blur(12px);
-    border: 1px solid var(--border); padding: 20px; border-radius: 18px;
-    display: grid; gap: 13px; box-shadow: 0 12px 28px rgba(0,0,0,0.28);
-  }
-  h1, h2, h3, h4 { margin: 0; }
-  label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 5px; }
-  input, select, textarea, button.action {
-    width: 100%; padding: 10px 13px; border-radius: 11px;
-    border: 1px solid var(--border); background: var(--surface-2);
-    color: var(--text); font-size: 14px; outline: none;
-  }
-  input:focus, select:focus, textarea:focus { border-color: var(--primary); }
-  textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-  button.action {
-    background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; font-weight: 700; cursor: pointer;
-    box-shadow: 0 8px 20px rgba(79,70,229,0.3);
-  }
-  button.action.green { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 8px 20px rgba(16,185,129,0.25); }
-
-  .mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .mode-btn {
-    padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border);
-    background: var(--surface-2); color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer;
-  }
-  .mode-btn.active { background: rgba(99,102,241,0.2); border-color: var(--primary); color: #fff; }
-
-  .drop-pills { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
-  .pill-btn {
-    padding: 9px 4px; border-radius: 10px; border: 1px solid var(--border);
-    background: var(--surface-2); color: var(--text); font-weight: 800; font-size: 13px; cursor: pointer;
-  }
-  .pill-btn.active { background: linear-gradient(135deg, #10b981, #059669); border-color: transparent; color: #022c22; }
-
-  .user-row {
-    display: flex; align-items: center; gap: 11px; padding: 9px 12px;
-    border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px;
-  }
-  .user-row img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); }
-  .out {
-    background: #050811; border: 1px solid var(--border); padding: 14px;
-    border-radius: 13px; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #e2e8f0;
-  }
-  .hidden-tab { display: none; }
-</style>
-</head>
-<body>
-<div id="backdrop" class="drawer-backdrop"></div>
-<aside id="drawer" class="drawer">
-  <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--border);">
-    <h3>☰ SADO Menyu</h3>
-    <button type="button" id="closeDrawerBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;">✕</button>
-  </div>
-  <button type="button" id="tabBtnMain" class="nav-item active">🏠 İdarəetmə Paneli</button>
-  <button type="button" id="tabBtnBot" class="nav-item">🤖 Discord Bot</button>
-  <div style="margin-top:auto;display:grid;gap:8px;">
-    <label style="margin:0;">Panel Token (İsteğe bağlı)</label>
-    <input id="drawerToken" type="password" placeholder="PANEL_TOKEN varsa yazın" />
-    <button type="button" id="savePanelTokenBtn" class="action green">Panel Tokeni Saxla</button>
-  </div>
-</aside>
-
-<div class="wrap">
-  <div class="top">
-    <div class="left-head">
-      <button type="button" id="openDrawerBtn" class="menu-btn" aria-label="Menyu">☰</button>
-      <div>
-        <div class="brand-title">SADO PROTECT STUDIO</div>
-        <div style="color:var(--muted);font-size:12px;">1 nəfərlik key &amp; skript kilidi • HWID Kick &amp; Reset • Local Lua</div>
-      </div>
-    </div>
-    <div id="botStatus" class="badge offline">Yoxlanılır...</div>
-  </div>
-
-  <div class="card">
-    <h3>🤖 Discord Bot Token &amp; Bağlantı</h3>
-    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
-      <div>
-        <label>Discord Bot Token</label>
-        <input id="botTokenInput" type="password" placeholder="Discord Developer Portal -> Bot Token daxil edin" />
-      </div>
-      <button type="button" id="connectBotBtn" class="action green" style="width:auto;padding:10px 18px;">Botu Qoş</button>
-    </div>
-  </div>
-
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-top"><span>AKTİV SKRİPTLƏR</span><span>📜</span></div>
-      <div id="cScripts" class="stat-val">0</div>
-      <div class="meter"><span id="mScripts" style="width:0%"></span></div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-top"><span>YARADILAN KEY-LƏR</span><span>🔑</span></div>
-      <div id="cKeys" class="stat-val">0</div>
-      <div class="meter"><span id="mKeys" style="width:0%"></span></div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-top"><span>WHITELIST ÜZVLƏR</span><span>🛡️</span></div>
-      <div id="cWl" class="stat-val">0</div>
-      <div class="meter"><span id="mWl" style="width:0%"></span></div>
-    </div>
-  </div>
-
-  <div id="sectionMain">
-    <div class="grid">
-      <div class="card">
-        <h3>Yeni Skript Əlavə Et</h3>
-        <div><label>Skript Adı</label><input id="sName" placeholder="Məs: SADO HUB, SAE, Duel" /></div>
-        <div><label>Lua Kodu</label><textarea id="sCode" placeholder="print('Salam Roblox!')"></textarea></div>
-        <div><label>Və ya .lua / .txt Fayl Seçin</label><input id="sFile" type="file" accept=".lua,.txt" /></div>
-        <button type="button" id="addScriptBtn" class="action">Skripti Saxla</button>
-      </div>
-
-      <div class="card">
-        <h3>Drop Key Yarat (1 - 10 Nəfərlik)</h3>
-        <div><label>Skript</label><select id="kScript"></select></div>
-        <div>
-          <label>Nəfər / Drop Sayı</label>
-          <div class="drop-pills" id="dropPills">
-            <button type="button" class="pill-btn active" data-count="1">1</button>
-            <button type="button" class="pill-btn" data-count="2">2</button>
-            <button type="button" class="pill-btn" data-count="3">3</button>
-            <button type="button" class="pill-btn" data-count="4">4</button>
-            <button type="button" class="pill-btn" data-count="5">5</button>
-            <button type="button" class="pill-btn" data-count="10">10</button>
-          </div>
-        </div>
-        <div>
-          <label>Müddət Rejimi</label>
-          <div class="mode-row">
-            <button type="button" id="kModeLife" class="mode-btn active">♾️ Lifetime</button>
-            <button type="button" id="kModeTime" class="mode-btn">⏳ Vaxt Seç</button>
-          </div>
-        </div>
-        <div id="kTimeBox" style="display:none;gap:8px;grid-template-columns:1fr 1fr;">
-          <div><label>Vaxt Dəyəri</label><input id="kTimeNum" type="number" min="1" value="7" /></div>
-          <div>
-            <label>Vahid</label>
-            <select id="kTimeUnit">
-              <option value="m">Dəqiqə (m)</option>
-              <option value="h">Saat (h)</option>
-              <option value="d" selected>Gün (d)</option>
-              <option value="w">Həftə (w)</option>
-            </select>
-          </div>
-        </div>
-        <button type="button" id="genKeyBtn" class="action green">Key Drop Yarat</button>
-      </div>
-
-      <div class="card">
-        <h3>Whitelist / Rol Whitelist / Reset HWID</h3>
-        <div><label>Skript</label><select id="wScript"></select></div>
-        <div><label>Discord User ID</label><input id="wUser" placeholder="123456789012345678" /></div>
-        <div>
-          <label>Whitelist Müddət Rejimi</label>
-          <div class="mode-row">
-            <button type="button" id="wModeLife" class="mode-btn active">♾️ Lifetime</button>
-            <button type="button" id="wModeTime" class="mode-btn">⏳ Vaxt Seç</button>
-          </div>
-        </div>
-        <div id="wTimeBox" style="display:none;gap:8px;grid-template-columns:1fr 1fr;">
-          <div><label>Vaxt Dəyəri</label><input id="wTimeNum" type="number" min="1" value="7" /></div>
-          <div>
-            <label>Vahid</label>
-            <select id="wTimeUnit">
-              <option value="m">Dəqiqə (m)</option>
-              <option value="h">Saat (h)</option>
-              <option value="d" selected>Gün (d)</option>
-              <option value="w">Həftə (w)</option>
-            </select>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <button type="button" id="doWhitelistBtn" class="action green">Whitelist + Key</button>
-          <button type="button" id="doResetHwidBtn" class="action">Reset HWID</button>
-        </div>
-        <hr style="border:0;border-top:1px solid var(--border);margin:2px 0;" />
-        <div><label>Discord Server</label><select id="rGuild"></select></div>
-        <div><label>Server Rolu</label><select id="rRole"></select></div>
-        <button type="button" id="doRoleWhitelistBtn" class="action green">Rola Whitelist Ver</button>
-      </div>
-    </div>
-
-    <div class="grid" style="margin-top:16px;">
-      <div class="card">
-        <h3>Aktiv Whitelist İstifadəçiləri</h3>
-        <div id="wlList" style="display:grid;gap:8px;">Yüklənir...</div>
-      </div>
-      <div class="card">
-        <h3>Son Key İstifadəçiləri</h3>
-        <div id="keyList" style="display:grid;gap:8px;">Yüklənir...</div>
-      </div>
-    </div>
-  </div>
-
-  <div id="sectionBot" class="hidden-tab">
-    <div class="card">
-      <h3>🤖 Discord Bot — Panel Butonlarının Tənzimlənməsi</h3>
-      <div style="color:var(--muted);font-size:13px;">Redeem Key, Get Script, Reset HWID və Get Stats butonlarının adını, emojisini, sırasını (1-4) və rəngini dəyişin.</div>
-      <div class="grid" id="botBtnForms"></div>
-      <button type="button" id="saveBotConfigBtn" class="action green">Bot Ayarlarını Saxla</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>Konsol / Nəticə</h3>
-    <div id="output" class="out">Hazırdır.</div>
-  </div>
-</div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-  let selectedDropCount = 1;
-  let keyDurationMode = 'lifetime';
-  let wlDurationMode = 'lifetime';
-  let guildsCache = [];
-  let botBtnCfg = {};
-  let panelToken = localStorage.getItem('sado_panel_token') || '';
-
-  const out = (msg) => {
-    document.getElementById('output').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
-  };
-
-  function apiHeaders() {
-    const h = { 'Content-Type': 'application/json' };
-    if (panelToken) h['x-panel-token'] = panelToken;
-    return h;
-  }
-
-  function toggleDrawer(open) {
-    document.getElementById('drawer').classList.toggle('open', Boolean(open));
-    document.getElementById('backdrop').classList.toggle('open', Boolean(open));
-  }
-
-  function switchTab(tab) {
-    toggleDrawer(false);
-    const isMain = tab === 'main';
-    document.getElementById('sectionMain').classList.toggle('hidden-tab', !isMain);
-    document.getElementById('sectionBot').classList.toggle('hidden-tab', isMain);
-    document.getElementById('tabBtnMain').classList.toggle('active', isMain);
-    document.getElementById('tabBtnBot').classList.toggle('active', !isMain);
-  }
-
-  function setDurationMode(target, mode) {
-    if (target === 'key') {
-      keyDurationMode = mode;
-      document.getElementById('kModeLife').classList.toggle('active', mode === 'lifetime');
-      document.getElementById('kModeTime').classList.toggle('active', mode === 'timed');
-      document.getElementById('kTimeBox').style.display = mode === 'timed' ? 'grid' : 'none';
-    } else {
-      wlDurationMode = mode;
-      document.getElementById('wModeLife').classList.toggle('active', mode === 'lifetime');
-      document.getElementById('wModeTime').classList.toggle('active', mode === 'timed');
-      document.getElementById('wTimeBox').style.display = mode === 'timed' ? 'grid' : 'none';
-    }
-  }
-
-  function getDurationValue(target) {
-    if (target === 'key') {
-      if (keyDurationMode === 'lifetime') return '0';
-      const num = Math.max(1, Number(document.getElementById('kTimeNum').value || 1));
-      const unit = document.getElementById('kTimeUnit').value || 'd';
-      return String(num) + String(unit);
-    }
-    if (wlDurationMode === 'lifetime') return '0';
-    const num = Math.max(1, Number(document.getElementById('wTimeNum').value || 1));
-    const unit = document.getElementById('wTimeUnit').value || 'd';
-    return String(num) + String(unit);
-  }
-
-  function renderBotConfigForms(cfg) {
-    botBtnCfg = cfg || {};
-    const items = [
-      { key: 'redeem', title: 'Redeem Key Butonu' },
-      { key: 'getScript', title: 'Get Script Butonu' },
-      { key: 'resetHwid', title: 'Reset HWID Butonu' },
-      { key: 'getStats', title: 'Get Stats Butonu' }
-    ];
-    document.getElementById('botBtnForms').innerHTML = items.map(it => {
-      const c = botBtnCfg[it.key] || {};
-      return '<div class="card" style="background:var(--surface-2);">' +
-        '<h4>' + it.title + '</h4>' +
-        '<div><label>Ad</label><input id="cfg_' + it.key + '_label" value="' + (c.label || '') + '" /></div>' +
-        '<div><label>Emoji</label><input id="cfg_' + it.key + '_emoji" value="' + (c.emoji || '') + '" /></div>' +
-        '<div><label>Yer / Sıra (1-4)</label><input id="cfg_' + it.key + '_order" type="number" min="1" max="4" value="' + (c.order || 1) + '" /></div>' +
-        '<div><label>Rəng</label><select id="cfg_' + it.key + '_style">' +
-        ['Success','Primary','Secondary','Danger'].map(st => '<option value="' + st + '"' + (c.style === st ? ' selected' : '') + '>' + st + '</option>').join('') +
-        '</select></div></div>';
-    }).join('');
-  }
-
-  function populateRoles() {
-    const gid = document.getElementById('rGuild').value;
-    const g = guildsCache.find(x => String(x.id) === String(gid));
-    const roleSel = document.getElementById('rRole');
-    if (!g || !g.roles || !g.roles.length) {
-      roleSel.innerHTML = '<option value="">Rol tapılmadı</option>';
-      return;
-    }
-    roleSel.innerHTML = g.roles.map(r => '<option value="' + r.id + '">' + r.name + '</option>').join('');
-  }
-
-  async function refreshState() {
-    document.getElementById('drawerToken').value = panelToken;
-    try {
-      const query = panelToken ? ('?token=' + encodeURIComponent(panelToken)) : '';
-      const r = await fetch('/api/state' + query, { headers: apiHeaders() });
-      const d = await r.json();
-      if (!d.ok) {
-        out(d.message || 'Giriş tələb olunur. Sol menyudan Panel Token daxil edin.');
-        return;
-      }
-
-      const statusEl = document.getElementById('botStatus');
-      statusEl.textContent = d.botReady ? ('● Aktiv: ' + (d.botTag || 'Bot')) : '● Bot Token Gözləyir';
-      statusEl.classList.toggle('offline', !d.botReady);
-
-      const scCount = Number((d.scripts && d.scripts.length) || 0);
-      const kCount = Number(d.keysCount || 0);
-      const wCount = Number(d.whitelistsCount || 0);
-      document.getElementById('cScripts').textContent = scCount;
-      document.getElementById('cKeys').textContent = kCount;
-      document.getElementById('cWl').textContent = wCount;
-      document.getElementById('mScripts').style.width = Math.min(100, scCount * 10) + '%';
-      document.getElementById('mKeys').style.width = Math.min(100, kCount * 4) + '%';
-      document.getElementById('mWl').style.width = Math.min(100, wCount * 5) + '%';
-
-      const opts = (d.scripts || []).map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('') || '<option value="">Skript yoxdur</option>';
-      document.getElementById('kScript').innerHTML = opts;
-      document.getElementById('wScript').innerHTML = opts;
-
-      guildsCache = d.guilds || [];
-      const gSel = document.getElementById('rGuild');
-      gSel.innerHTML = guildsCache.length
-        ? guildsCache.map(g => '<option value="' + g.id + '">' + g.name + '</option>').join('')
-        : '<option value="">Server tapılmadı</option>';
-      populateRoles();
-
-      document.getElementById('wlList').innerHTML = (d.whitelists || []).length
-        ? d.whitelists.map(w => '<div class="user-row"><img src="' + (w.userAvatar || '') + '" alt="" /><div><div><b>' + (w.userName || w.userId) + '</b></div><div style="color:var(--muted);font-size:11px;">ID: ' + (w.userId || '-') + ' • Script: ' + (w.scriptId || '-') + '</div></div></div>').join('')
-        : '<div style="color:var(--muted);font-size:13px;">Hələ whitelist yoxdur.</div>';
-
-      document.getElementById('keyList').innerHTML = (d.recentKeys || []).length
-        ? d.recentKeys.map(k => '<div class="user-row"><img src="' + (k.userAvatar || '') + '" alt="" /><div><div><b>' + (k.userName || 'İstifadə edilməyib') + '</b> • <code>' + k.key + '</code></div><div style="color:var(--muted);font-size:11px;">Script: ' + (k.scriptName || k.scriptId) + ' • HWID: ' + (k.hwid ? 'Bağlıdır' : 'Boş') + '</div></div></div>').join('')
-        : '<div style="color:var(--muted);font-size:13px;">Hələ key yoxdur.</div>';
-
-      renderBotConfigForms(d.panelButtonConfig);
-    } catch (e) {
-      out('State yüklənmədi: ' + e.message);
-    }
-  }
-
-  document.getElementById('openDrawerBtn').addEventListener('click', () => toggleDrawer(true));
-  document.getElementById('closeDrawerBtn').addEventListener('click', () => toggleDrawer(false));
-  document.getElementById('backdrop').addEventListener('click', () => toggleDrawer(false));
-  document.getElementById('tabBtnMain').addEventListener('click', () => switchTab('main'));
-  document.getElementById('tabBtnBot').addEventListener('click', () => switchTab('bot'));
-
-  document.getElementById('savePanelTokenBtn').addEventListener('click', () => {
-    panelToken = String(document.getElementById('drawerToken').value || '').trim();
-    localStorage.setItem('sado_panel_token', panelToken);
-    out(panelToken ? 'Panel tokeni yadda saxlanıldı.' : 'Panel tokeni təmizləndi.');
-    refreshState();
-  });
-
-  document.getElementById('connectBotBtn').addEventListener('click', async () => {
-    const botToken = String(document.getElementById('botTokenInput').value || '').trim();
-    if (!botToken) {
-      out('Zəhmət olmasa Discord Bot Token daxil edin.');
-      return;
-    }
-    out('Bot qoşulur...');
-    const r = await fetch('/api/bot-token', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ botToken, token: panelToken })
-    });
-    const d = await r.json();
-    out(d.message || 'Cavab alındı.');
-    if (d.ok) {
-      document.getElementById('botTokenInput').value = '';
-      setTimeout(refreshState, 1200);
-    }
-  });
-
-  document.getElementById('sFile').addEventListener('change', (event) => {
-    const file = event.target.files && event.target.files[0];
-    if (!file) return;
-    if (!document.getElementById('sName').value.trim()) {
-      document.getElementById('sName').value = file.name.replace(/\.(lua|txt)$/i, '');
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      document.getElementById('sCode').value = String(reader.result || '');
-    };
-    reader.readAsText(file);
-  });
-
-  document.getElementById('addScriptBtn').addEventListener('click', async () => {
-    const name = document.getElementById('sName').value;
-    const code = document.getElementById('sCode').value;
-    const r = await fetch('/api/scripts', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ name, code, token: panelToken })
-    });
-    const d = await r.json();
-    out(d.ok ? 'Skript əlavə edildi: ' + d.script.name + ' (' + d.script.id + ')' : (d.message || 'Skript əlavə edilə bilmədi'));
-    if (d.ok) {
-      document.getElementById('sName').value = '';
-      document.getElementById('sCode').value = '';
-      refreshState();
-    }
-  });
-
-  document.querySelectorAll('#dropPills .pill-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      selectedDropCount = Number(btn.getAttribute('data-count') || 1);
-      document.querySelectorAll('#dropPills .pill-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-    });
-  });
-
-  document.getElementById('kModeLife').addEventListener('click', () => setDurationMode('key', 'lifetime'));
-  document.getElementById('kModeTime').addEventListener('click', () => setDurationMode('key', 'timed'));
-  document.getElementById('wModeLife').addEventListener('click', () => setDurationMode('wl', 'lifetime'));
-  document.getElementById('wModeTime').addEventListener('click', () => setDurationMode('wl', 'timed'));
-
-  document.getElementById('genKeyBtn').addEventListener('click', async () => {
-    const scriptId = document.getElementById('kScript').value;
-    const duration = getDurationValue('key');
-    const amount = Number(selectedDropCount || 1);
-    const r = await fetch('/api/keys', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ scriptId, duration, amount, token: panelToken })
-    });
-    const d = await r.json();
-    out(d.ok ? 'Yaradılan (' + amount + ' nəfərlik drop • ' + duration + ') Key-lər:\n' + d.keys.map(x => x.key).join('\n') : (d.message || 'Xəta'));
-    if (d.ok) refreshState();
-  });
-
-  document.getElementById('doWhitelistBtn').addEventListener('click', async () => {
-    const scriptId = document.getElementById('wScript').value;
-    const userId = document.getElementById('wUser').value;
-    const duration = getDurationValue('wl');
-    const r = await fetch('/api/whitelist', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ scriptId, userId, duration, token: panelToken })
-    });
-    const d = await r.json();
-    out(d.ok ? 'Whitelist edildi (' + duration + ')! Avto Key: ' + d.key : (d.message || 'Xəta'));
-    if (d.ok) refreshState();
-  });
-
-  document.getElementById('doResetHwidBtn').addEventListener('click', async () => {
-    const scriptId = document.getElementById('wScript').value;
-    const userId = document.getElementById('wUser').value;
-    const r = await fetch('/api/reset-hwid', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ scriptId, userId, token: panelToken })
-    });
-    const d = await r.json();
-    out(d.message || 'HWID sıfırlandı.');
-    if (d.ok) refreshState();
-  });
-
-  document.getElementById('rGuild').addEventListener('change', populateRoles);
-
-  document.getElementById('doRoleWhitelistBtn').addEventListener('click', async () => {
-    const scriptId = document.getElementById('wScript').value;
-    const guildId = document.getElementById('rGuild').value;
-    const roleId = document.getElementById('rRole').value;
-    const duration = getDurationValue('wl');
-    const r = await fetch('/api/role-whitelist', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify({ scriptId, guildId, roleId, duration, token: panelToken })
-    });
-    const d = await r.json();
-    out(d.ok ? 'Rol üzrə ' + d.count + ' nəfər whitelist edildi!' : (d.message || 'Xəta'));
-    if (d.ok) refreshState();
-  });
-
-  document.getElementById('saveBotConfigBtn').addEventListener('click', async () => {
-    const payload = { token: panelToken, panelButtonConfig: {} };
-    for (const k of ['redeem', 'getScript', 'resetHwid', 'getStats']) {
-      payload.panelButtonConfig[k] = {
-        label: document.getElementById('cfg_' + k + '_label').value,
-        emoji: document.getElementById('cfg_' + k + '_emoji').value,
-        order: Number(document.getElementById('cfg_' + k + '_order').value || 1),
-        style: document.getElementById('cfg_' + k + '_style').value
-      };
-    }
-    const r = await fetch('/api/bot-config', {
-      method: 'POST',
-      headers: apiHeaders(),
-      body: JSON.stringify(payload)
-    });
-    const d = await r.json();
-    out(d.ok ? 'Discord bot panel buton ayarları saxlanıldı!' : (d.message || 'Xəta'));
-  });
-
-  refreshState();
-});
-</script>
-</body>
-</html>`;
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(html);
+            res.end(DASHBOARD_HTML);
             return;
         }
 
