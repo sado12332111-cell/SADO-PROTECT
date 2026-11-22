@@ -600,13 +600,13 @@ function resetUserHwidBinding(userId, scriptId) {
 
 function buildHwidGuardedLuaPayload(scriptCode, boundHwid, lockEpoch, kickReason) {
     const safeHwid = String(boundHwid || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const safeReason = String(kickReason || 'HWID uyğun deyil! Cihaz başqa cihazla dəyişdirilib.')
+    const safeReason = String(kickReason || 'HWID uyğun deyil! Bu key/whitelist başqa cihaza bağlıdır. Yenidən Reset HWID edin.')
         .replace(/\\/g, '\\\\')
         .replace(/"/g, '\\"');
     const safeEpoch = Number(lockEpoch || 1);
 
     const guardHeader = [
-        '-- SADO PROTECT HWID GUARD',
+        '-- SADO PROTECT STRICT HWID GUARD',
         `local __SADO_EXPECTED_HWID = "${safeHwid}"`,
         `local __SADO_LOCK_EPOCH = ${safeEpoch}`,
         `local __SADO_KICK_MSG = "${safeReason}"`,
@@ -631,7 +631,7 @@ function buildHwidGuardedLuaPayload(scriptCode, boundHwid, lockEpoch, kickReason
         '        if lp then lp:Kick(reason) end',
         '    end)',
         '    task.spawn(function()',
-        '        while task.wait(0.25) do',
+        '        while task.wait(0.2) do',
         '            pcall(function()',
         '                local lp = game:GetService("Players").LocalPlayer',
         '                if lp then lp:Kick(reason) end',
@@ -647,6 +647,53 @@ function buildHwidGuardedLuaPayload(scriptCode, boundHwid, lockEpoch, kickReason
     ].join('\n');
 
     return `${guardHeader}\n\n${scriptCode || ''}`;
+}
+
+function extractExecutorHwid(req, reqUrl) {
+    const candidates = [
+        req.headers['x-hwid'],
+        req.headers['syn-fingerprint'],
+        req.headers['krnl-hwid'],
+        req.headers['flux-fingerprint'],
+        req.headers['evon-hwid'],
+        req.headers['roblox-id'],
+        reqUrl.searchParams.get('hwid')
+    ];
+    for (const c of candidates) {
+        const val = String(c || '').trim();
+        if (val) return val;
+    }
+    return '';
+}
+
+function buildFirstRunHandshakePayload(baseUrl, scriptId, userId, token, lockEpoch) {
+    const cleanBase = String(baseUrl || PUBLIC_BASE_URL).replace(/\/+$/, '');
+    const bindBaseUrl = `${cleanBase}/raw/${encodeURIComponent(scriptId)}?uid=${encodeURIComponent(userId)}&t=${encodeURIComponent(token)}&ep=${encodeURIComponent(lockEpoch)}`;
+    return [
+        '-- SADO PROTECT HWID FIRST-DEVICE BIND HANDSHAKE',
+        'local function __sado_collect_hwid()',
+        '    local ok, val = pcall(function()',
+        '        if typeof(gethwid) == "function" then return gethwid() end',
+        '        if getgenv and type(getgenv().gethwid) == "function" then return getgenv().gethwid() end',
+        '        if syn and syn.crypto and type(syn.crypto.customhash) == "function" then',
+        '            local lp = game:GetService("Players").LocalPlayer',
+        '            return syn.crypto.customhash(tostring(lp and lp.UserId or ""))',
+        '        end',
+        '        local rbxsid = game:GetService("RbxAnalyticsService"):GetClientId()',
+        '        return tostring(rbxsid or "")',
+        '    end)',
+        '    if ok and val and tostring(val) ~= "" then return tostring(val) end',
+        '    local lp = game:GetService("Players").LocalPlayer',
+        '    return "UID_" .. tostring(lp and lp.UserId or "UNKNOWN")',
+        'end',
+        'local __sado_hw = __sado_collect_hwid()',
+        'local __sado_hs = game:GetService("HttpService")',
+        `local __sado_url = "${bindBaseUrl}&hwid=" .. __sado_hs:UrlEncode(__sado_hw)`,
+        'local __sado_src = game:HttpGet(__sado_url)',
+        'local __sado_fn, __sado_err = loadstring(__sado_src)',
+        'if not __sado_fn then error(__sado_err or "Load error") end',
+        'return __sado_fn()'
+    ].join('\n');
 }
 
 const slashCommands = [
@@ -2084,7 +2131,7 @@ const server = http.createServer(async (req, res) => {
             const scriptId = decodeURIComponent(reqUrl.pathname.slice('/raw/'.length));
             const uid = String(reqUrl.searchParams.get('uid') || '').trim();
             const tok = String(reqUrl.searchParams.get('t') || '').trim();
-            const hwid = String(req.headers['x-hwid'] || reqUrl.searchParams.get('hwid') || '').trim();
+            const hwid = extractExecutorHwid(req, reqUrl);
 
             if (!isRobloxExecutorRequest(req)) {
                 res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -2104,21 +2151,44 @@ const server = http.createServer(async (req, res) => {
                 res.end('-- SADO PROTECT: İcazə yoxdur (Not Whitelisted).');
                 return;
             }
-            if (hwid) {
-                if (wl.hwid && wl.hwid !== hwid) {
-                    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-                    res.end('-- SADO PROTECT: HWID uyğun gəlmir. Discord paneldən Reset HWID edin.');
+
+            const keyRec = getUserKeyForScript(uid, script.id);
+            const currentEpoch = Math.max(Number(wl.hwidLockEpoch || 1), Number(keyRec?.hwidLockEpoch || 1));
+            const boundHwid = String(wl.hwid || keyRec?.hwid || '').trim();
+
+            if (!boundHwid) {
+                if (!hwid) {
+                    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+                    res.end(buildFirstRunHandshakePayload(PUBLIC_BASE_URL, script.id, uid, tok, currentEpoch));
                     return;
                 }
-                if (!wl.hwid) {
-                    wl.hwid = hwid;
-                    const keyRec = getUserKeyForScript(uid, script.id);
-                    if (keyRec) keyRec.hwid = hwid;
-                    persistState();
+                wl.hwid = hwid;
+                wl.hwidLockEpoch = currentEpoch;
+                if (keyRec) {
+                    keyRec.hwid = hwid;
+                    keyRec.hwidLockEpoch = currentEpoch;
                 }
+                persistState();
+                res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end(buildHwidGuardedLuaPayload(script.code || '', hwid, currentEpoch));
+                return;
             }
+
+            if (hwid && hwid !== boundHwid) {
+                res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end(
+                    buildHwidGuardedLuaPayload(
+                        '',
+                        boundHwid,
+                        currentEpoch,
+                        'HWID uyğun deyil! Bu key başqa cihaza bağlıdır. Yenidən Reset HWID edin.'
+                    )
+                );
+                return;
+            }
+
             res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end(script.code || '');
+            res.end(buildHwidGuardedLuaPayload(script.code || '', boundHwid, currentEpoch));
             return;
         }
 
