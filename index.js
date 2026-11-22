@@ -76,8 +76,6 @@ function getScriptsForDiscordUser(discordUserId, guildId = null) {
     if (ownedByDiscord.length > 0) return ownedByDiscord;
     return [];
 }
-    };
-}
 
 let state = createDefaultState();
 
