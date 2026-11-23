@@ -211,6 +211,59 @@ function mapStyleToButtonStyle(styleName, fallback = ButtonStyle.Secondary) {
   }
 }
 
+function ultraObfuscateLuaCode(sourceCode, level = 3) {
+  const code = String(sourceCode || '');
+  const seedA = (crypto.randomBytes(1)[0] % 97) + 31;
+  const seedB = (crypto.randomBytes(1)[0] % 89) + 19;
+  const saltStr = crypto.randomBytes(12).toString('hex');
+  const encoded = [];
+
+  for (let i = 0; i < code.length; i++) {
+    const b = code.charCodeAt(i) & 0xff;
+    const sChar = saltStr.charCodeAt(i % saltStr.length) & 0xff;
+    const step1 = (b ^ ((seedA + (i * 7)) & 0xff)) & 0xff;
+    const step2 = (step1 + ((seedB + (i % 29)) & 0xff)) & 0xff;
+    const step3 = (step2 ^ sChar) & 0xff;
+    encoded.push(step3);
+  }
+
+  const decoy1 = Array.from({ length: 16 }, () => crypto.randomBytes(1)[0]).join(',');
+  const decoy2 = crypto.randomBytes(8).toString('hex');
+  const payload = encoded.join(',');
+
+  return [
+    `-- [[ SADO PROTECT ULTRA GUARD v${Math.max(3, Number(level || 3))}.0 | ANTI-DUMP & ANTI-HOOK ]] --`,
+    'local _ENV_OK = (type(string) == "table" and type(table) == "table" and type(math) == "table")',
+    'if not _ENV_OK then return end',
+    `local _BAIT_A = {${decoy1}}`,
+    `local _BAIT_B = "${decoy2}"`,
+    `local _SA, _SB = ${seedA}, ${seedB}`,
+    `local _SLT = "${saltStr}"`,
+    `local _DAT = {${payload}}`,
+    'local function _SADO_VM(d, sa, sb, slt)',
+    '  if #_BAIT_A < 12 or #_BAIT_B ~= 16 then return "" end',
+    '  local buf = table.create and table.create(#d) or {}',
+    '  local sl = #slt',
+    '  for idx = 1, #d do',
+    '    local sc = string.byte(slt, ((idx - 1) % sl) + 1)',
+    '    local v1 = (d[idx] ~ sc) & 255',
+    '    local v2 = (v1 - ((sb + ((idx - 1) % 29)) & 255)) % 256',
+    '    if v2 < 0 then v2 = v2 + 256 end',
+    '    local v3 = (v2 ~ ((sa + ((idx - 1) * 7)) & 255)) & 255',
+    '    buf[idx] = string.char(v3)',
+    '  end',
+    '  return table.concat(buf)',
+    'end',
+    'local _LD = loadstring or load',
+    'if type(_LD) ~= "function" then return end',
+    'local _SRC = _SADO_VM(_DAT, _SA, _SB, _SLT)',
+    'if type(_SRC) == "string" and #_SRC > 0 then',
+    '  local _RUN, _ERR = _LD(_SRC)',
+    '  if _RUN then return _RUN() end',
+    'end',
+  ].join('\n');
+}
+
 function obfuscateLuaCode(sourceCode, level = 2) {
   const code = String(sourceCode || '');
   const xorKey = (crypto.randomBytes(1)[0] % 120) + 17;
@@ -219,27 +272,9 @@ function obfuscateLuaCode(sourceCode, level = 2) {
     bytes.push((code.charCodeAt(i) ^ xorKey) & 0xff);
   }
 
-  let payload = bytes.join(',');
+  const payload = bytes.join(',');
   if (level >= 3) {
-    const rotated = bytes.map((b, idx) => (((b + (idx % 13)) ^ (xorKey & 0x3f)) & 0xff));
-    payload = rotated.join(',');
-    return [
-      '-- [[ SADO PROTECT LUA SHIELD v3.0 ]] --',
-      `local _K = ${xorKey}`,
-      `local _T = {${payload}}`,
-      'local function _D(arr, k)',
-      '  local out = {}',
-      '  for i = 1, #arr do',
-      '    local v = (arr[i] ~ (k & 63)) - ((i - 1) % 13)',
-      '    if v < 0 then v = v + 256 end',
-      '    out[i] = string.char((v ~ k) % 256)',
-      '  end',
-      '  return table.concat(out)',
-      'end',
-      'local _F = loadstring or load',
-      'local _C = _F(_D(_T, _K))',
-      'if _C then return _C() end',
-    ].join('\n');
+    return ultraObfuscateLuaCode(code, level);
   }
 
   return [
@@ -385,12 +420,34 @@ async function registerSlashCommands() {
             .setDescription('Panel başlığı (istəyə bağlı)')
             .setRequired(false)
         ),
+      new SlashCommandBuilder()
+        .setName('whitelist')
+        .setDescription('İstifadəçini seçilən skript üçün whitelist-ə əlavə et')
+        .addUserOption((opt) =>
+          opt
+            .setName('user')
+            .setDescription('Whitelist ediləcək Discord istifadəçisi')
+            .setRequired(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('script')
+            .setDescription('Bağlanacaq skript')
+            .setRequired(true)
+            .setAutocomplete(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('duration')
+            .setDescription('Müddət (0 = Lifetime, məs: 1d, 7d, 30d)')
+            .setRequired(false)
+        ),
     ].map((cmd) => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     await rest.put(Routes.applicationCommands(appId), { body: commands });
   } catch (err) {
-    console.warn('[SLASH] /panel qeydiyyat xətası:', err.message);
+    console.warn('[SLASH] Qeydiyyat xətası:', err.message);
   }
 }
 
@@ -487,17 +544,22 @@ async function refreshExistingDiscordPanels() {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isAutocomplete()) {
-      if (interaction.commandName === 'panel') {
+      if (interaction.commandName === 'panel' || interaction.commandName === 'whitelist') {
         const focused = String(interaction.options.getFocused() || '').toLowerCase();
         const choices = (state.scripts || [])
-          .filter((sc) => !focused || sc.name.toLowerCase().includes(focused) || sc.id.toLowerCase().includes(focused))
+          .filter(
+            (sc) =>
+              !focused ||
+              String(sc.name || '').toLowerCase().includes(focused) ||
+              String(sc.id || '').toLowerCase().includes(focused)
+          )
           .slice(0, 25)
           .map((sc) => ({
             name: String(sc.name || 'Script').slice(0, 100),
             value: String(sc.id),
           }));
         if (!choices.length) {
-          choices.push({ name: 'Aktiv Skript (Avtomatik)', value: 'default' });
+          choices.push({ name: 'SADO HUB (Aktiv Skript)', value: 'default' });
         }
         await interaction.respond(choices);
       }
@@ -505,6 +567,84 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'whitelist') {
+        try {
+          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+            await interaction.reply({
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+          const targetUser = interaction.options.getUser('user', true);
+          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
+          const durationRaw = String(interaction.options.getString('duration') || '0').trim();
+
+          const sc =
+            state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
+            state.scripts[0];
+
+          if (!sc) {
+            await interaction.editReply({
+              content: '❌ Əvvəlcə Dashboard-dan ən azı 1 skript yaradın.',
+            });
+            return;
+          }
+
+          const durationSeconds = parseDurationToSeconds(durationRaw);
+          const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
+          const generatedKey = generateKeyString();
+
+          state.keys.push({
+            id: generateId('key'),
+            key: generatedKey,
+            scriptId: sc.id,
+            durationSeconds,
+            expiresAt,
+            used: true,
+            usedByDiscordId: targetUser.id,
+            createdBy: interaction.user.tag || interaction.user.id,
+            createdAt: new Date().toISOString(),
+          });
+
+          const existingWl = state.whitelists.find(
+            (w) => w.discordUserId === targetUser.id && w.scriptId === sc.id
+          );
+          if (existingWl) {
+            existingWl.key = generatedKey;
+            existingWl.expiresAt = expiresAt;
+          } else {
+            state.whitelists.push({
+              id: generateId('wl'),
+              discordUserId: targetUser.id,
+              scriptId: sc.id,
+              key: generatedKey,
+              hwid: '',
+              expiresAt,
+              createdAt: new Date().toISOString(),
+            });
+          }
+
+          saveStore().catch(() => {});
+          await interaction.editReply({
+            content: `✅ <@${targetUser.id}> istifadəçisi **${sc.name}** skripti üçün whitelist edildi!\n🔑 **Key:** \`${generatedKey}\`\n⏳ **Müddət:** ${formatExpiry(expiresAt)}`,
+          });
+        } catch (wlErr) {
+          console.error('[SLASH /whitelist ERROR]', wlErr && wlErr.message ? wlErr.message : wlErr);
+          try {
+            if (interaction.deferred || interaction.replied) {
+              await interaction.editReply({ content: `❌ Whitelist xətası: ${wlErr.message}` });
+            } else {
+              await interaction.reply({ content: `❌ Whitelist xətası: ${wlErr.message}`, flags: MessageFlags.Ephemeral });
+            }
+          } catch (_e) {}
+        }
+        return;
+      }
+
       if (interaction.commandName === 'panel') {
         try {
           if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
@@ -589,7 +729,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const scriptId = cid.replace('sado_copyscript_', '');
         const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
         const wl = state.whitelists.find(
-          (w) => w.discordUserId === userId && (!sc || w.scriptId === sc.id) && !isExpired(w.expiresAt)
+          (w) => w.discordUserId === userId && (!sc || !w.scriptId || w.scriptId === sc.id) && !isExpired(w.expiresAt)
         );
         const keyVal = wl ? wl.key : 'WHITELIST_KEY';
         const snippet = sc ? buildLoaderSnippet(sc, keyVal) : `script_key = "${keyVal}";`;
@@ -630,17 +770,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
 
-        const hwidInput = new TextInputBuilder()
-          .setCustomId('redeem_hwid_value')
-          .setLabel('HWID (istəyə bağlı)')
-          .setPlaceholder('Məs: HWID-12345')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false);
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(keyInput),
-          new ActionRowBuilder().addComponents(hwidInput)
-        );
+        modal.addComponents(new ActionRowBuilder().addComponents(keyInput));
         await interaction.showModal(modal);
         return;
       }
@@ -723,7 +853,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           item.hwid = '';
           item.hwidResetAt = new Date().toISOString();
         }
-        await saveStore();
+        saveStore().catch(() => {});
 
         await interaction.reply({
           content: `🔄 HWID uğurla sıfırlandı (${matchingWl.length} qeyd yeniləndi). Yeni girişdə yeni HWID bağlanacaq.`,
@@ -760,7 +890,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (cid.startsWith('sado_modal_redeem_')) {
         const scriptId = cid.replace('sado_modal_redeem_', '');
         const keyInput = interaction.fields.getTextInputValue('redeem_key_value').trim();
-        const hwidInput = (interaction.fields.getTextInputValue('redeem_hwid_value') || '').trim();
         const userId = interaction.user.id;
 
         const targetScript = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
@@ -803,20 +932,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (existingWl) {
           existingWl.key = keyObj.key;
           existingWl.expiresAt = keyObj.expiresAt || expiresAt;
-          if (hwidInput) existingWl.hwid = hwidInput;
         } else {
           state.whitelists.push({
             id: generateId('wl'),
             discordUserId: userId,
             scriptId: effectiveScriptId,
             key: keyObj.key,
-            hwid: hwidInput || '',
+            hwid: '',
             expiresAt: keyObj.expiresAt || expiresAt,
             createdAt: new Date().toISOString(),
           });
         }
 
-        await saveStore();
+        saveStore().catch(() => {});
         await interaction.reply({
           content: `✅ Key uğurla aktivləşdirildi! **${keyObj.key}** — Müddət: **${formatExpiry(keyObj.expiresAt || expiresAt)}**.`,
           flags: MessageFlags.Ephemeral,
@@ -981,7 +1109,7 @@ app.post('/api/scripts', async (req, res) => {
     const fileName = String(body.fileName || body.filename || `${name || 'script'}.lua`).trim();
     let code = String(body.code || '');
     const obfuscate = Boolean(body.obfuscate);
-    const obfuscateLevel = Number(body.obfuscateLevel || 2);
+    const obfuscateLevel = Number(body.obfuscateLevel || 3);
 
     if (!name) {
       return res.status(400).json({ ok: false, message: 'Skript adı mütləqdir.' });
@@ -1067,9 +1195,83 @@ app.delete('/api/scripts/:id', async (req, res) => {
 app.post('/api/obfuscate', (req, res) => {
   try {
     const code = String(req.body?.code || '');
-    const level = Number(req.body?.level || 2);
+    const level = Number(req.body?.level || 3);
     if (!code.trim()) {
       return res.status(400).json({ ok: false, message: 'Şifrələmək üçün Lua kodu daxil edin.' });
+    }
+    const obfuscated = obfuscateLuaCode(code, level);
+    res.json({ ok: true, obfuscated });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+app.get('/api/loader/:token', (req, res) => {
+  const token = String(req.params.token || '').trim();
+  const providedKey = String(req.query.key || '').trim();
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  const acceptHeader = String(req.headers['accept'] || '').toLowerCase();
+  const secFetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+
+  const sc = state.scripts.find((s) => s.loaderToken === token || s.id === token);
+  if (!sc) {
+    res.status(403).type('text/plain').send('-- [SADO PROTECT] Access Denied');
+    return;
+  }
+
+  const isBrowser =
+    secFetchDest === 'document' ||
+    acceptHeader.includes('text/html') ||
+    ua.includes('mozilla/') ||
+    ua.includes('chrome/') ||
+    ua.includes('safari/') ||
+    ua.includes('firefox/') ||
+    ua.includes('edg/');
+
+  if (isBrowser || !providedKey || providedKey === 'YOUR_KEY_HERE' || providedKey === 'YOUR_KEY') {
+    res
+      .status(403)
+      .type('text/plain; charset=utf-8')
+      .send('-- [SADO PROTECT] Anti-Dump Shield: Direct browser/unauthorized access is blocked.');
+    return;
+  }
+
+  const validWl = state.whitelists.find(
+    (w) =>
+      String(w.key || '').toUpperCase() === providedKey.toUpperCase() &&
+      (!w.scriptId || w.scriptId === sc.id) &&
+      !isExpired(w.expiresAt)
+  );
+  const validKey = state.keys.find(
+    (k) =>
+      String(k.key || '').toUpperCase() === providedKey.toUpperCase() &&
+      (!k.scriptId || k.scriptId === sc.id) &&
+      (!k.expiresAt || !isExpired(k.expiresAt))
+  );
+
+  if (!validWl && !validKey) {
+    res
+      .status(403)
+      .type('text/plain; charset=utf-8')
+      .send('-- [SADO PROTECT] Invalid or Expired Key.');
+    return;
+  }
+
+  const ownerId = validWl ? validWl.discordUserId : validKey.usedByDiscordId;
+  if (ownerId) {
+    const isBlacklisted = state.blacklists.some(
+      (b) => b.discordUserId === ownerId && (!b.scriptId || b.scriptId === sc.id)
+    );
+    if (isBlacklisted) {
+      res.status(403).type('text/plain; charset=utf-8').send('-- [SADO PROTECT] User Blacklisted.');
+      return;
+    }
+  }
+
+  const protectedPayload = ultraObfuscateLuaCode(sc.code, 3);
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.type('text/plain; charset=utf-8').send(protectedPayload);
+});
     }
     const obfuscated = obfuscateLuaCode(code, level);
     res.json({ ok: true, obfuscated });
@@ -1502,8 +1704,8 @@ const DASHBOARD_HTML = [
   '        <label>Şifrələmə Səviyyəsi</label>',
   '        <select id="obfLevelSelect">',
   '          <option value="1">Səviyyə 1 — Standard XOR + Byte Loader</option>',
-  '          <option value="2" selected>Səviyyə 2 — Gücləndirilmiş XOR + Loader</option>',
-  '          <option value="3">Səviyyə 3 — Multi-Layer Shield + Loader</option>',
+  '          <option value="2">Səviyyə 2 — Gücləndirilmiş XOR + Loader</option>',
+  '          <option value="3" selected>Səviyyə 3 — Ultra Guard VM + Anti-Dump Shield</option>',
   '        </select>',
   '        <label>Orijinal Lua Kodu</label><textarea id="obfInputCode" placeholder="print(\'Hello SADO PROTECT\')"></textarea>',
   '        <button class="btn btn-primary" id="runObfBtn" type="button">⚡ Kodu Şifrələ (Obfuscate)</button>',
