@@ -909,19 +909,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           const overrideCfg = customTitle ? { title: customTitle } : null;
           const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
-          const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-          const sentMsg = await panelRest.post(Routes.channelMessages(targetChannelId), {
-            body: {
-              embeds: [embed.toJSON()],
-              components: [row.toJSON()],
-            },
-          });
+
+          let sentMsgId = '';
+          let sentOk = false;
+
+          if (interaction.channel && typeof interaction.channel.send === 'function') {
+            try {
+              const directMsg = await interaction.channel.send({
+                embeds: [embed],
+                components: [row],
+              });
+              sentMsgId = directMsg && directMsg.id ? directMsg.id : '';
+              sentOk = true;
+            } catch (_chErr) {
+              sentOk = false;
+            }
+          }
+
+          if (!sentOk) {
+            const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+            const sentMsg = await panelRest.post(Routes.channelMessages(targetChannelId), {
+              body: {
+                embeds: [embed.toJSON()],
+                components: [row.toJSON()],
+              },
+            });
+            sentMsgId = sentMsg && sentMsg.id ? sentMsg.id : '';
+          }
 
           state.panels.push({
             id: generateId('pnl'),
             guildId: interaction.guildId || state.activeGuildId || '',
             channelId: targetChannelId,
-            messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
+            messageId: sentMsgId,
             scriptId: sc.id,
             createdAt: new Date().toISOString(),
           });
