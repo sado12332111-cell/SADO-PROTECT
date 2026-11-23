@@ -515,7 +515,8 @@ function getScriptsForDiscordUser(discordUserId, guildId = null) {
     const uid = String(discordUserId || '').trim();
     const linkedWsId = getWorkspaceIdForDiscordUser(uid, gid);
     if (linkedWsId) {
-        return state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
+        const wsScripts = state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
+        if (wsScripts.length > 0) return wsScripts;
     }
     if (gid) {
         const byGuild = state.scripts.filter((s) => s.ownerGuildId && String(s.ownerGuildId) === gid);
@@ -523,7 +524,7 @@ function getScriptsForDiscordUser(discordUserId, guildId = null) {
     }
     const ownedByDiscord = state.scripts.filter((s) => s.ownerDiscordId && String(s.ownerDiscordId) === uid);
     if (ownedByDiscord.length > 0) return ownedByDiscord;
-    return [];
+    return state.scripts;
 }
 
 function getScriptById(scriptId) {
@@ -2045,6 +2046,27 @@ function renderDashboardHtml() {
     </div>
   </section>
 
+  <div class="modal-backdrop" id="updateScriptModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:80;align-items:center;justify-content:center;padding:16px;">
+    <div class="card" style="width:100%;max-width:620px;margin:0;max-height:90vh;overflow:auto;">
+      <h3>✏️ Skripti Yenilə (Update)</h3>
+      <input type="hidden" id="editScriptIdInput" />
+      <label>Skript Adı</label>
+      <input id="editScriptNameInput" placeholder="Skript adı" />
+      <label>Yeni Lua / TXT Dosya Seç (istəyə bağlı)</label>
+      <input type="file" id="editScriptFileInput" accept=".lua,.txt,.luau" />
+      <label>Skript Kodu</label>
+      <textarea id="editScriptCodeInput" placeholder="-- Yeni Lua kodunu bura yazın"></textarea>
+      <label class="check-row">
+        <input type="checkbox" id="editScriptObfuscateCheck" />
+        <span>Yenilənəndə kodu <b>Lua Obfuscate</b> et</span>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn green" id="confirmUpdateScriptBtn" type="button">💾 Yadda Saxla (Update)</button>
+        <button class="btn ghost" id="cancelUpdateScriptBtn" type="button">Bağla</button>
+      </div>
+    </div>
+  </div>
+
   <section class="section" id="sec-obf">
     <div class="card">
       <h3>🛡️ Lua Obfuscator (Kodu Şifrələ &amp; Gizlət)</h3>
@@ -2340,34 +2362,62 @@ async function refreshAll() {
   });
 
   const scriptsList = document.getElementById('scriptsList');
+  window.__loadedScriptsCache = data.scripts || [];
   scriptsList.innerHTML = (data.scripts || []).length
     ? data.scripts.map((s) =>
         '<div class="list-item"><div><b>' + s.name + '</b>' +
         (s.obfuscated ? '<span class="badge-obf">OBFUSCATED</span>' : '') +
         ' <span class="muted">(' + s.id + ')</span></div>' +
-        '<div style="display:flex;gap:6px;">' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+        '<button class="btn ghost" style="margin-top:0;padding:6px 10px;" onclick="openUpdateScriptModal(\\'' + s.id + '\\')">✏️ Update</button>' +
         '<button class="btn ghost" style="margin-top:0;padding:6px 10px;" onclick="obfuscateExistingScript(\\'' + s.id + '\\')">🛡️ Şifrələ</button>' +
         '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="deleteScript(\\'' + s.id + '\\')">Sil</button>' +
         '</div></div>'
       ).join('')
     : '<div class="muted">Hələ skript yoxdur.</div>';
+window.openUpdateScriptModal = async (id) => {
+  const cached = (window.__loadedScriptsCache || []).find((x) => x.id === id);
+  document.getElementById('editScriptIdInput').value = id;
+  document.getElementById('editScriptNameInput').value = cached ? cached.name : '';
+  document.getElementById('editScriptCodeInput').value = '';
+  document.getElementById('editScriptObfuscateCheck').checked = false;
+  document.getElementById('editScriptFileInput').value = '';
+  document.getElementById('updateScriptModal').style.display = 'flex';
+  const r = await api('/api/scripts/' + encodeURIComponent(id));
+  if (r && r.ok && r.script) {
+    document.getElementById('editScriptNameInput').value = r.script.name || '';
+    document.getElementById('editScriptCodeInput').value = r.script.code || '';
+  }
+};
 
-  const recentKeysList = document.getElementById('recentKeysList');
-  recentKeysList.innerHTML = (data.recentKeys || []).length
-    ? data.recentKeys.slice(0, 15).map((k) =>
-        '<div class="list-item"><div><code>' + k.code + '</code> • <b>' + (k.scriptName || '') + '</b><br>' +
-        '<span class="muted">Yaradan: ' + (k.createdByName || 'Panel') + ' | İşlədən: ' + (k.redeemedByName || 'Hələ işlənməyib') + '</span></div></div>'
-      ).join('')
-    : '<div class="muted">Hələ key yaradılmayıb.</div>';
+document.getElementById('cancelUpdateScriptBtn').onclick = () => {
+  document.getElementById('updateScriptModal').style.display = 'none';
+};
 
-  const wlList = document.getElementById('wlList');
-  wlList.innerHTML = (data.whitelists || []).length
-    ? data.whitelists.map((w) =>
-        '<div class="list-item"><div><b>' + (w.username || w.userId) + '</b> <span class="muted">(' + w.userId + ')</span> • ' + (w.scriptName || '') + '</div>' +
-        '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="removeWl(\\'' + w.id + '\\')">Sil</button></div>'
-      ).join('')
-    : '<div class="muted">Aktiv whitelist yoxdur.</div>';
-}
+document.getElementById('editScriptFileInput').onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const txt = await file.text();
+  document.getElementById('editScriptCodeInput').value = txt;
+};
+
+document.getElementById('confirmUpdateScriptBtn').onclick = async () => {
+  const id = document.getElementById('editScriptIdInput').value;
+  const name = document.getElementById('editScriptNameInput').value.trim();
+  const code = document.getElementById('editScriptCodeInput').value;
+  const obfuscate = document.getElementById('editScriptObfuscateCheck').checked;
+  const r = await api('/api/scripts/' + encodeURIComponent(id), {
+    method: 'PUT',
+    body: JSON.stringify({ name, code, obfuscate })
+  });
+  if (r.ok) {
+    document.getElementById('updateScriptModal').style.display = 'none';
+    showToast('Skript yeniləndi (Update)!');
+    refreshAll();
+  } else {
+    showToast(r.message || 'Yeniləmə zamanı xəta');
+  }
+};
 
 window.obfuscateExistingScript = async (id) => {
   const r = await api('/api/scripts/' + encodeURIComponent(id) + '/obfuscate', { method: 'POST' });
@@ -2814,6 +2864,61 @@ const server = http.createServer(async (req, res) => {
             persistState();
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: true, message: `"${script.name}" obfuscate edildi!` }));
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'GET') {
+            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
+            const script = getScriptById(scriptId);
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(
+                JSON.stringify({
+                    ok: true,
+                    script: {
+                        id: script.id,
+                        name: script.name,
+                        code: script.code,
+                        obfuscated: Boolean(script.obfuscated)
+                    }
+                })
+            );
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'PUT') {
+            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
+            const script = getScriptById(scriptId);
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            const body = await readJsonBody(req);
+            const nextName = String(body.name || '').trim();
+            if (!nextName) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript adını boş qoymayın.' }));
+                return;
+            }
+            script.name = nextName;
+            if (typeof body.code === 'string' && body.code.trim()) {
+                script.code = body.obfuscate ? obfuscateLuaSource(body.code, 'standard') : body.code;
+                if (body.obfuscate) {
+                    script.obfuscated = true;
+                }
+            } else if (body.obfuscate) {
+                script.code = obfuscateLuaSource(script.code || '', 'standard');
+                script.obfuscated = true;
+            }
+            script.updatedAt = nowMs();
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, message: `"${script.name}" yeniləndi!` }));
             return;
         }
 
