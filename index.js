@@ -81,82 +81,6 @@ function createDefaultState() {
     };
 }
 
-function ensureWorkspaceRecord(wsId, discordUserId = null, guildId = null) {
-    if (!wsId) return null;
-    if (!state.workspaces[wsId]) {
-        state.workspaces[wsId] = {
-            id: wsId,
-            discordUserIds: [],
-            guildIds: [],
-            createdAt: nowMs()
-        };
-    }
-    if (!Array.isArray(state.workspaces[wsId].discordUserIds)) {
-        state.workspaces[wsId].discordUserIds = [];
-    }
-    if (!Array.isArray(state.workspaces[wsId].guildIds)) {
-        state.workspaces[wsId].guildIds = [];
-    }
-    if (discordUserId) {
-        const uid = String(discordUserId).trim();
-        if (uid && !state.workspaces[wsId].discordUserIds.includes(uid)) {
-            state.workspaces[wsId].discordUserIds.push(uid);
-        }
-    }
-    if (guildId) {
-        const gid = String(guildId).trim();
-        if (gid && !state.workspaces[wsId].guildIds.includes(gid)) {
-            state.workspaces[wsId].guildIds.push(gid);
-        }
-    }
-    return state.workspaces[wsId];
-}
-
-function getWorkspaceIdForDiscordUser(discordUserId, guildId = null) {
-    const gid = String(guildId || '').trim();
-    if (gid) {
-        for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
-            if (ws && Array.isArray(ws.guildIds) && ws.guildIds.includes(gid)) {
-                return wsId;
-            }
-        }
-    }
-    const uid = String(discordUserId || '').trim();
-    if (!uid) return null;
-    for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
-        if (ws && Array.isArray(ws.discordUserIds) && ws.discordUserIds.includes(uid)) {
-            return wsId;
-        }
-    }
-    return null;
-}
-
-function isScriptOwnedByWorkspace(script, wsId) {
-    if (!script || !wsId) return false;
-    return script.ownerWorkspaceId === wsId;
-}
-
-function getScriptsForWorkspace(wsId) {
-    if (!wsId) return [];
-    return state.scripts.filter((s) => isScriptOwnedByWorkspace(s, wsId));
-}
-
-function getScriptsForDiscordUser(discordUserId, guildId = null) {
-    const gid = String(guildId || '').trim();
-    const uid = String(discordUserId || '').trim();
-    const linkedWsId = getWorkspaceIdForDiscordUser(uid, gid);
-    if (linkedWsId) {
-        return state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
-    }
-    if (gid) {
-        const byGuild = state.scripts.filter((s) => s.ownerGuildId && String(s.ownerGuildId) === gid);
-        if (byGuild.length > 0) return byGuild;
-    }
-    const ownedByDiscord = state.scripts.filter((s) => s.ownerDiscordId && String(s.ownerDiscordId) === uid);
-    if (ownedByDiscord.length > 0) return ownedByDiscord;
-    return [];
-}
-
 let state = createDefaultState();
 
 function ensureDataDir() {
@@ -350,6 +274,65 @@ function generateKeyCode() {
     return `SADO-${a}-${b}-${c}`;
 }
 
+function obfuscateLuaSource(source, level = 'standard') {
+    const raw = String(source || '');
+    if (!raw.trim()) return raw;
+
+    const keyBytes = Array.from(crypto.randomBytes(16));
+    const inputBuf = Buffer.from(raw, 'utf8');
+    const encodedNums = new Array(inputBuf.length);
+    for (let i = 0; i < inputBuf.length; i++) {
+        const k = keyBytes[i % keyBytes.length];
+        const mixed = ((inputBuf[i] ^ k) + (i % 251)) & 0xff;
+        encodedNums[i] = mixed;
+    }
+
+    const rName = () => `_0x${crypto.randomBytes(4).toString('hex')}`;
+    const vKey = rName();
+    const vData = rName();
+    const vOut = rName();
+    const vIdx = rName();
+    const vByte = rName();
+    const vChar = rName();
+    const vConcat = rName();
+    const vLoader = rName();
+    const vFn = rName();
+    const vErr = rName();
+    const vEnv = rName();
+
+    const keyLiteral = `{${keyBytes.join(',')}}`;
+    const dataLiteral = `{${encodedNums.join(',')}}`;
+
+    const antiTamper =
+        level === 'high'
+            ? `local ${vEnv}=(getfenv and getfenv())or _ENV;if type(loadstring)~="function" and type(load)~="function" then return end;`
+            : '';
+
+    return [
+        '-- Protected by SADO PROTECT Lua Obfuscator',
+        '(function(...)',
+        antiTamper,
+        `local ${vKey}=${keyLiteral}`,
+        `local ${vData}=${dataLiteral}`,
+        `local ${vChar}=string.char`,
+        `local ${vConcat}=table.concat`,
+        `local ${vOut}={}`,
+        `for ${vIdx}=1,#${vData} do`,
+        `local ${vByte}=(${vData}[${vIdx}]-((${vIdx}-1)%251))%256`,
+        `local _k=${vKey}[((${vIdx}-1)%#${vKey})+1]`,
+        `local _r=0;local _b=1;for _j=0,7 do local _x=${vByte}%2;local _y=_k%2;if _x~=_y then _r=_r+_b end;${vByte}=math.floor(${vByte}/2);_k=math.floor(_k/2);_b=_b*2 end`,
+        `${vOut}[${vIdx}]=${vChar}(_r)`,
+        'end',
+        `local ${vLoader}=loadstring or load`,
+        `local ${vFn},${vErr}=${vLoader}(${vConcat}(${vOut}))`,
+        `if not ${vFn} then error(${vErr} or "SADO Obfuscator runtime error") end`,
+        `return ${vFn}(...)`,
+        'end)(...)'
+    ]
+        .filter(Boolean)
+        .join('\n');
+}
+
 function parseDurationToMs(input) {
     const raw = String(input || '').trim().toLowerCase();
     if (!raw || raw === '0' || raw === 'lifetime' || raw === 'perm' || raw === 'permanent') {
@@ -408,14 +391,22 @@ function getWorkspaceIdFromReq(req, reqUrl) {
     return null;
 }
 
-function ensureWorkspaceRecord(wsId, discordUserId = null) {
+function ensureWorkspaceRecord(wsId, discordUserId = null, guildId = null, guildName = null) {
     if (!wsId) return null;
     if (!state.workspaces[wsId]) {
         state.workspaces[wsId] = {
             id: wsId,
             discordUserIds: [],
+            guildIds: [],
+            guildName: '',
             createdAt: nowMs()
         };
+    }
+    if (!Array.isArray(state.workspaces[wsId].discordUserIds)) {
+        state.workspaces[wsId].discordUserIds = [];
+    }
+    if (!Array.isArray(state.workspaces[wsId].guildIds)) {
+        state.workspaces[wsId].guildIds = [];
     }
     if (discordUserId) {
         const uid = String(discordUserId).trim();
@@ -423,10 +414,49 @@ function ensureWorkspaceRecord(wsId, discordUserId = null) {
             state.workspaces[wsId].discordUserIds.push(uid);
         }
     }
+    if (guildId) {
+        const gid = String(guildId).trim();
+        if (gid) {
+            state.workspaces[wsId].guildIds = [gid];
+            const liveGuild = client && client.guilds ? client.guilds.cache.get(gid) : null;
+            if (guildName) {
+                state.workspaces[wsId].guildName = String(guildName).trim();
+            } else if (liveGuild && liveGuild.name) {
+                state.workspaces[wsId].guildName = liveGuild.name;
+            }
+        }
+    }
     return state.workspaces[wsId];
 }
 
-function getWorkspaceIdForDiscordUser(discordUserId) {
+function resolveWorkspaceGuildDisplay(ws) {
+    if (!ws) return null;
+    const gid = Array.isArray(ws.guildIds) && ws.guildIds.length > 0 ? String(ws.guildIds[0]) : '';
+    if (!gid) return null;
+    const liveGuild = client && client.guilds ? client.guilds.cache.get(gid) : null;
+    if (liveGuild && liveGuild.name) {
+        if (ws.guildName !== liveGuild.name) {
+            ws.guildName = liveGuild.name;
+            persistState();
+        }
+        return { guildId: gid, guildName: liveGuild.name, botInGuild: true };
+    }
+    return {
+        guildId: gid,
+        guildName: ws.guildName || `Sunucu (${gid})`,
+        botInGuild: false
+    };
+}
+
+function getWorkspaceIdForDiscordUser(discordUserId, guildId = null) {
+    const gid = String(guildId || '').trim();
+    if (gid) {
+        for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
+            if (ws && Array.isArray(ws.guildIds) && ws.guildIds.includes(gid)) {
+                return wsId;
+            }
+        }
+    }
     const uid = String(discordUserId || '').trim();
     if (!uid) return null;
     for (const [wsId, ws] of Object.entries(state.workspaces || {})) {
@@ -439,11 +469,6 @@ function getWorkspaceIdForDiscordUser(discordUserId) {
 
 function isScriptOwnedByWorkspace(script, wsId) {
     if (!script || !wsId) return false;
-    if (!script.ownerWorkspaceId) {
-        // Köhnə məlumatları ilk aktiv cihaza bağla ki, başqa telefonlarda görünməsin
-        script.ownerWorkspaceId = wsId;
-        persistState();
-    }
     return script.ownerWorkspaceId === wsId;
 }
 
@@ -452,30 +477,24 @@ function getScriptsForWorkspace(wsId) {
     return state.scripts.filter((s) => isScriptOwnedByWorkspace(s, wsId));
 }
 
-function getScriptsForDiscordUser(discordUserId) {
+function getScriptsForDiscordUser(discordUserId, guildId = null) {
+    const gid = String(guildId || '').trim();
     const uid = String(discordUserId || '').trim();
-    const linkedWsId = getWorkspaceIdForDiscordUser(uid);
+    const linkedWsId = getWorkspaceIdForDiscordUser(uid, gid);
     if (linkedWsId) {
         return state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
     }
+    if (gid) {
+        const byGuild = state.scripts.filter((s) => s.ownerGuildId && String(s.ownerGuildId) === gid);
+        if (byGuild.length > 0) return byGuild;
+    }
     const ownedByDiscord = state.scripts.filter((s) => s.ownerDiscordId && String(s.ownerDiscordId) === uid);
     if (ownedByDiscord.length > 0) return ownedByDiscord;
-    return state.scripts;
+    return [];
 }
 
 function getScriptById(scriptId) {
     return state.scripts.find((s) => s.id === scriptId) || null;
-}
-
-function getScriptByNameOrId(query) {
-    const q = String(query || '').trim().toLowerCase();
-    if (!q) return null;
-    return (
-        state.scripts.find((s) => s.id.toLowerCase() === q) ||
-        state.scripts.find((s) => s.name.toLowerCase() === q) ||
-        state.scripts.find((s) => s.name.toLowerCase().includes(q)) ||
-        null
-    );
 }
 
 function getActiveWhitelist(userId, scriptId) {
@@ -666,7 +685,6 @@ function ensureUserLoaderToken(userId, scriptId) {
     const wl = getActiveWhitelist(cleanUserId, scriptId);
     const keyRecord = getUserKeyForScript(cleanUserId, scriptId);
 
-    // Yalnız aktiv whitelist-i və ya aktivləşdirilmiş key-i olan istifadəçiyə icazə ver
     if (!wl && !keyRecord) {
         return null;
     }
@@ -683,7 +701,6 @@ function ensureUserLoaderToken(userId, scriptId) {
         return wl;
     }
 
-    // Aktiv key var, lakin hələ whitelist qeydi yaradılmayıbsa onu key-ə uyğun yarat
     const createdWl = {
         id: generateId('wl'),
         userId: cleanUserId,
@@ -858,7 +875,7 @@ const slashCommands = [
                 .setRequired(false)
         )
         .addStringOption((opt) =>
-            opt.setName('title').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(false)
+            opt.setName('title').setDescription('Panel başlığı').setRequired(false)
         )
         .addStringOption((opt) =>
             opt.setName('name').setDescription('Alternativ panel başlığı').setRequired(false)
@@ -874,7 +891,7 @@ const slashCommands = [
                 .setRequired(false)
         )
         .addStringOption((opt) =>
-            opt.setName('title').setDescription('Panel başlığı (məs: SADOHUB)').setRequired(false)
+            opt.setName('title').setDescription('Panel başlığı').setRequired(false)
         )
         .addStringOption((opt) =>
             opt.setName('name').setDescription('Alternativ panel başlığı').setRequired(false)
@@ -966,12 +983,15 @@ async function syncSlashCommands() {
     console.log('[SADO PROTECT] Slash əmrlər sinxronizasiya olundu.');
 }
 
+const pendingSelections = new Map();
+const pendingCopySnippets = new Map();
+
 async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
     const userScripts = getScriptsForDiscordUser(interaction.user.id, interaction.guildId);
     if (userScripts.length === 0) {
         const msg =
-            '❌ Bu sunucu və ya Discord ID üçün saytda bağlı skript tapılmadı.\n' +
-            `Saytda **Discord Bot & Panel** bölməsinə bu sunucu ID-sini (\`${interaction.guildId || ''}\`) əlavə edib skript yaradın.`;
+            '❌ Bu sunucu üçün saytda bağlı skript tapılmadı.\n' +
+            `Saytda **Discord Bot & Panel** bölməsindən bu sunucunu (\`${interaction.guild?.name || interaction.guildId || ''}\`) seçib skript yaradın.`;
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply({ content: msg });
         } else {
@@ -1033,14 +1053,11 @@ async function resolveScriptOrAsk(interaction, explicitQuery, pendingAction) {
     return null;
 }
 
-const pendingSelections = new Map();
-const pendingCopySnippets = new Map();
-
 async function executePanelPost(channel, panelName, script) {
     const finalTitle =
         String(panelName || '').trim() ||
-        (script && script.name ? script.name : null) ||
-        (channel && channel.guild ? channel.guild.name : 'SCRIPT PANEL');
+        (channel && channel.guild ? channel.guild.name : null) ||
+        (script && script.name ? script.name : 'SCRIPT PANEL');
     const embed = buildPanelEmbed(finalTitle, script);
     const components = buildPanelComponents(script.id);
     const msg = await channel.send({ embeds: [embed], components });
@@ -1149,6 +1166,17 @@ function attachBotHandlers(botClient) {
         }
     });
 
+    botClient.on('guildCreate', (guild) => {
+        if (!guild) return;
+        console.log(`[SADO PROTECT] Bot yeni sunucuya qoşuldu: ${guild.name} (${guild.id})`);
+        for (const ws of Object.values(state.workspaces || {})) {
+            if (ws && Array.isArray(ws.guildIds) && ws.guildIds.includes(String(guild.id))) {
+                ws.guildName = guild.name;
+            }
+        }
+        persistState();
+    });
+
     botClient.on('error', (err) => {
         console.error('[SADO PROTECT] Discord client error:', err.message);
     });
@@ -1218,7 +1246,8 @@ function attachBotHandlers(botClient) {
                         channelId: interaction.channelId
                     });
                     if (!script) return;
-                    await executePanelPost(interaction.channel, panelName || script.name, script);
+                    const defaultTitle = panelName || (interaction.guild ? interaction.guild.name : script.name);
+                    await executePanelPost(interaction.channel, defaultTitle, script);
                     await interaction.editReply({
                         content: `✅ **${script.name}** üçün panel bu kanala göndərildi!`
                     });
@@ -1390,7 +1419,8 @@ function attachBotHandlers(botClient) {
 
                 if (pending.type === 'setpanel') {
                     const ch = await interaction.guild.channels.fetch(pending.channelId);
-                    await executePanelPost(ch, pending.panelName || script.name, script);
+                    const defaultTitle = pending.panelName || (interaction.guild ? interaction.guild.name : script.name);
+                    await executePanelPost(ch, defaultTitle, script);
                     await interaction.update({
                         content: `✅ **${script.name}** üçün panel kanala göndərildi!`,
                         components: []
@@ -1906,13 +1936,32 @@ function renderDashboardHtml() {
     z-index: 60;
     display: none;
   }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .check-row input { width: auto; }
+  .badge-obf {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.16);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    margin-left: 6px;
+  }
 </style>
 </head>
 <body>
 <div class="topbar">
   <div class="brand-wrap">
     <button class="menu-btn" id="menuBtn" type="button">☰</button>
-    <div class="brand-title">SADO PROTECT</div>
+    <div class="brand-title" id="headerBrandTitle">SADO PROTECT</div>
   </div>
   <div class="status-pill" id="botStatusPill">Bot: Yüklənir...</div>
 </div>
@@ -1922,7 +1971,8 @@ function renderDashboardHtml() {
   <div style="font-weight:700;padding:4px 10px 10px;border-bottom:1px solid var(--border);margin-bottom:6px;">Menyu</div>
   <button class="nav-btn active" data-sec="sec-overview">📊 İcmal</button>
   <button class="nav-btn" data-sec="sec-scripts">📜 Skriptlər &amp; Dosya</button>
-  <button class="nav-btn" data-sec="sec-bot">🤖 Discord Bot &amp; Panel</button>
+  <button class="nav-btn" data-sec="sec-obf">🛡️ Lua Obfuscator</button>
+  <button class="nav-btn" data-sec="sec-bot">🤖 Join Discord &amp; Panel</button>
   <button class="nav-btn" data-sec="sec-keys">🔑 Key &amp; Whitelist</button>
   <button class="nav-btn" data-sec="sec-backup">💾 Backup &amp; Yaddaş</button>
 </aside>
@@ -1933,7 +1983,7 @@ function renderDashboardHtml() {
       <div class="card"><div class="muted">Skriptlər</div><div class="stat-val" id="statScripts">0</div></div>
       <div class="card"><div class="muted">Yaradılmış Key-lər</div><div class="stat-val" id="statKeys">0</div></div>
       <div class="card"><div class="muted">Aktiv Whitelist</div><div class="stat-val" id="statWl">0</div></div>
-      <div class="card"><div class="muted">Bulud / Qalıcı Yaddaş</div><div class="stat-val" id="statCloud" style="font-size:16px;margin-top:10px;">Yoxlanılır</div></div>
+      <div class="card"><div class="muted">Qoşulu Sunucu</div><div class="stat-val" id="statGuild" style="font-size:16px;margin-top:10px;">Seçilməyib</div></div>
     </div>
     <div class="card">
       <h3>Son Key-lər (Yaradan &amp; İşlədən)</h3>
@@ -1950,6 +2000,10 @@ function renderDashboardHtml() {
       <input type="file" id="scriptFileInput" accept=".lua,.txt,.luau" />
       <label>Skript Kodu</label>
       <textarea id="scriptCodeInput" placeholder="-- Lua skript kodunu bura yazın və ya dosya seçin"></textarea>
+      <label class="check-row">
+        <input type="checkbox" id="scriptObfuscateCheck" checked />
+        <span>Skripti yadda saxlayanda avtomatik <b>Lua Obfuscate</b> et (kodu şifrələ)</span>
+      </label>
       <button class="btn green" id="saveScriptBtn" type="button">Skripti Yadda Saxla</button>
     </div>
     <div class="card">
@@ -1958,27 +2012,49 @@ function renderDashboardHtml() {
     </div>
   </section>
 
+  <section class="section" id="sec-obf">
+    <div class="card">
+      <h3>🛡️ Lua Obfuscator (Kodu Şifrələ &amp; Gizlət)</h3>
+      <div class="muted">Lua kodunuzu oxunmaz hala salın. İstəsəniz birbaşa burada şifrələyib kopyalaya, ya da bir kliklə yeni qorunan skript kimi panelə əlavə edə bilərsiniz.</div>
+      <label>Qoruma Səviyyəsi</label>
+      <select id="obfLevelSelect">
+        <option value="standard">Standart (Sürətli Bytecode / XOR Şifrələmə)</option>
+        <option value="high">Yüksək (Anti-Tamper + XOR Şifrələmə)</option>
+      </select>
+      <label>Orijinal Lua Kodu</label>
+      <textarea id="obfSourceInput" placeholder="print('Salam SADO PROTECT')"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn green" id="runObfBtn" type="button">🛡️ Obfuscate Et</button>
+        <button class="btn" id="copyObfBtn" type="button">📋 Şifrələnmiş Kodu Kopyala</button>
+      </div>
+      <label>Şifrələnmiş (Obfuscated) Lua Çıxışı</label>
+      <textarea id="obfOutputText" readonly placeholder="Şifrələnmiş kod burada görünəcək..."></textarea>
+      <div class="row-2">
+        <div>
+          <label>Birbaşa Skript Kimi Yarat (Adı)</label>
+          <input id="obfSaveScriptName" placeholder="Məs: SADO VIP OBF" />
+        </div>
+      </div>
+      <button class="btn green" id="obfSaveAsScriptBtn" type="button">➕ Şifrələnmiş Kodu Skript Kimi Yadda Saxla</button>
+    </div>
+  </section>
+
   <section class="section" id="sec-bot">
     <div class="card">
-      <h3>Gizli ID Kontrolu &amp; Sunucu / Discord Bağlantısı</h3>
-      <div class="muted">Dostunuz botu öz sunucusuna qoşduqdan sonra ona bot tokenini verməyə ehtiyac yoxdur. Öz telefonundan bu sayta girib öz <b>Discord Sunucu ID-sini (Server ID)</b> buraya yazsın — həmin sunucuda yaratdığı skript, key və panel yalnız onun özünə aid olacaq.</div>
-      <label>Sizin Gizli Cihaz ID-niz</label>
-      <input id="workspaceIdDisplay" readonly />
-      <label>Discord Sunucu ID (Server ID — tokensiz qoşulmaq üçün)</label>
+      <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
+      <div class="muted">1. Əvvəlcə aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br>2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bütün idarəetmə paneli tam sizə bağlanacaq.</div>
+      <div style="margin-top:12px;">
+        <a class="btn green" id="botInviteLinkBtn" href="#" target="_blank" style="text-decoration:none;display:inline-block;">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>
+      </div>
+      <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
+      <select id="guildSelectDropdown">
+        <option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option>
+      </select>
+      <label>Və ya Discord Sunucu ID (Server ID)</label>
       <input id="linkGuildIdInput" placeholder="Məs: 123456789012345678" />
       <label>Discord User ID (istəyə bağlı)</label>
       <input id="linkDiscordIdInput" placeholder="Məs: 123456789012345678" />
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn green" id="linkDiscordIdBtn" type="button">Sunucu / Discord ID-ni Bağla</button>
-        <a class="btn ghost" id="botInviteLinkBtn" href="#" target="_blank" style="text-decoration:none;display:none;">➕ Botu Sunucuya Dəvət Et</a>
-      </div>
-    </div>
-    <div class="card">
-      <h3>Discord Bot Token (İstəyə bağlı — Admin)</h3>
-      <div class="muted">Bot artıq aktivdirsə dostunuzun buraya token yazmasına ehtiyac yoxdur; yalnız Sunucu ID yazması kifayətdir.</div>
-      <label>Discord Bot Token</label>
-      <input type="password" id="botTokenInput" placeholder="MTQx..." />
-      <button class="btn" id="saveTokenBtn" type="button">Tokeni Saxla və Botu Başlat</button>
+      <button class="btn" id="linkDiscordIdBtn" type="button">✅ Sunucunu İdarəetmə Panelinə Bağla</button>
     </div>
     <div class="card">
       <h3>Panel Buton və Embed Dizaynı</h3>
@@ -2169,11 +2245,39 @@ function fillPanelCfgForm(cfg) {
   document.getElementById('cfgGetStatsStyle').value = cfg.getStatsStyle || 'Secondary';
 }
 
+document.getElementById('guildSelectDropdown').onchange = (e) => {
+  const val = e.target.value;
+  if (val) {
+    document.getElementById('linkGuildIdInput').value = val;
+  }
+};
+
 async function refreshAll() {
   const data = await api('/api/state');
   if (!data || !data.ok) return;
-  const wsEl = document.getElementById('workspaceIdDisplay');
-  if (wsEl) wsEl.value = data.workspaceId || CURRENT_WS_ID;
+
+  const headerTitleEl = document.getElementById('headerBrandTitle');
+  const statGuildEl = document.getElementById('statGuild');
+  if (data.connectedGuild && data.connectedGuild.guildName) {
+    headerTitleEl.textContent = data.connectedGuild.guildName + ' • SADO PROTECT';
+    statGuildEl.textContent = data.connectedGuild.guildName;
+  } else {
+    headerTitleEl.textContent = 'SADO PROTECT';
+    statGuildEl.textContent = 'Sunucu seçilməyib';
+  }
+
+  const guildDropdown = document.getElementById('guildSelectDropdown');
+  if (guildDropdown && Array.isArray(data.guilds)) {
+    const prevVal = guildDropdown.value;
+    guildDropdown.innerHTML =
+      '<option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option>' +
+      data.guilds.map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>').join('');
+    if (prevVal) guildDropdown.value = prevVal;
+    else if (data.connectedGuild && data.connectedGuild.guildId) {
+      guildDropdown.value = data.connectedGuild.guildId;
+    }
+  }
+
   const linkedGuildInput = document.getElementById('linkGuildIdInput');
   if (linkedGuildInput && !linkedGuildInput.value && Array.isArray(data.linkedGuildIds) && data.linkedGuildIds.length > 0) {
     linkedGuildInput.value = data.linkedGuildIds[0];
@@ -2185,15 +2289,13 @@ async function refreshAll() {
   const inviteBtn = document.getElementById('botInviteLinkBtn');
   if (inviteBtn && data.botInviteUrl) {
     inviteBtn.href = data.botInviteUrl;
-    inviteBtn.style.display = 'inline-block';
   }
   const pill = document.getElementById('botStatusPill');
-  pill.textContent = data.botReady ? ('Bot Aktiv: ' + (data.botTag || '')) : (data.hasBotToken ? 'Bot Qoşulur...' : 'Token Gözlənilir');
+  pill.textContent = data.botReady ? ('SADO PROTECT Aktiv') : 'Bot Qoşulur...';
 
   document.getElementById('statScripts').textContent = (data.scripts || []).length;
   document.getElementById('statKeys').textContent = data.keysCount || 0;
   document.getElementById('statWl').textContent = data.whitelistsCount || 0;
-  document.getElementById('statCloud').textContent = data.cloudConnected ? 'Bulud + Disk' : 'Disk + Backup';
 
   fillPanelCfgForm(data.panelButtonConfig);
 
@@ -2207,8 +2309,13 @@ async function refreshAll() {
   const scriptsList = document.getElementById('scriptsList');
   scriptsList.innerHTML = (data.scripts || []).length
     ? data.scripts.map((s) =>
-        '<div class="list-item"><div><b>' + s.name + '</b> <span class="muted">(' + s.id + ')</span></div>' +
-        '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="deleteScript(\\'' + s.id + '\\')">Sil</button></div>'
+        '<div class="list-item"><div><b>' + s.name + '</b>' +
+        (s.obfuscated ? '<span class="badge-obf">OBFUSCATED</span>' : '') +
+        ' <span class="muted">(' + s.id + ')</span></div>' +
+        '<div style="display:flex;gap:6px;">' +
+        '<button class="btn ghost" style="margin-top:0;padding:6px 10px;" onclick="obfuscateExistingScript(\\'' + s.id + '\\')">🛡️ Şifrələ</button>' +
+        '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="deleteScript(\\'' + s.id + '\\')">Sil</button>' +
+        '</div></div>'
       ).join('')
     : '<div class="muted">Hələ skript yoxdur.</div>';
 
@@ -2229,6 +2336,12 @@ async function refreshAll() {
     : '<div class="muted">Aktiv whitelist yoxdur.</div>';
 }
 
+window.obfuscateExistingScript = async (id) => {
+  const r = await api('/api/scripts/' + encodeURIComponent(id) + '/obfuscate', { method: 'POST' });
+  showToast(r.message || 'Skript obfuscate edildi!');
+  refreshAll();
+};
+
 window.deleteScript = async (id) => {
   await api('/api/scripts/' + encodeURIComponent(id), { method: 'DELETE' });
   showToast('Skript silindi');
@@ -2244,27 +2357,77 @@ window.removeWl = async (id) => {
 document.getElementById('saveScriptBtn').onclick = async () => {
   const name = document.getElementById('scriptNameInput').value.trim();
   const code = document.getElementById('scriptCodeInput').value;
-  const r = await api('/api/scripts', { method: 'POST', body: JSON.stringify({ name, code }) });
+  const obfuscate = document.getElementById('scriptObfuscateCheck').checked;
+  const r = await api('/api/scripts', { method: 'POST', body: JSON.stringify({ name, code, obfuscate }) });
   if (r.ok) {
     document.getElementById('scriptNameInput').value = '';
     document.getElementById('scriptCodeInput').value = '';
     document.getElementById('scriptFileInput').value = '';
-    showToast('Skript yadda saxlandı!');
+    showToast(obfuscate ? 'Skript obfuscate edilərək yadda saxlandı!' : 'Skript yadda saxlandı!');
     refreshAll();
   } else {
     showToast(r.message || 'Xəta baş verdi');
   }
 };
 
-document.getElementById('saveTokenBtn').onclick = async () => {
-  const token = document.getElementById('botTokenInput').value.trim();
-  const r = await api('/api/bot-token', { method: 'POST', body: JSON.stringify({ token }) });
-  showToast(r.message || 'Yeniləndi');
-  setTimeout(refreshAll, 1500);
+document.getElementById('runObfBtn').onclick = async () => {
+  const code = document.getElementById('obfSourceInput').value;
+  const level = document.getElementById('obfLevelSelect').value;
+  const r = await api('/api/obfuscate', { method: 'POST', body: JSON.stringify({ code, level }) });
+  if (r.ok) {
+    document.getElementById('obfOutputText').value = r.obfuscated || '';
+    showToast('Lua kodu uğurla şifrələndi!');
+  } else {
+    showToast(r.message || 'Xəta baş verdi');
+  }
+};
+
+document.getElementById('copyObfBtn').onclick = async () => {
+  const out = document.getElementById('obfOutputText').value;
+  if (!out.trim()) {
+    showToast('Əvvəlcə kodu obfuscate edin.');
+    return;
+  }
+  await navigator.clipboard.writeText(out).catch(() => {});
+  showToast('Şifrələnmiş kod kopyalandı!');
+};
+
+document.getElementById('obfSaveAsScriptBtn').onclick = async () => {
+  const name = document.getElementById('obfSaveScriptName').value.trim();
+  const rawCode = document.getElementById('obfSourceInput').value;
+  const alreadyObf = document.getElementById('obfOutputText').value;
+  const level = document.getElementById('obfLevelSelect').value;
+  if (!name) {
+    showToast('Skript adı yazın.');
+    return;
+  }
+  if (!rawCode.trim() && !alreadyObf.trim()) {
+    showToast('Lua kodu daxil edin.');
+    return;
+  }
+  const r = await api('/api/scripts', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      code: alreadyObf.trim() ? alreadyObf : rawCode,
+      obfuscate: !alreadyObf.trim(),
+      obfuscateLevel: level,
+      preObfuscated: Boolean(alreadyObf.trim())
+    })
+  });
+  if (r.ok) {
+    document.getElementById('obfSaveScriptName').value = '';
+    showToast('Şifrələnmiş skript panelə əlavə olundu!');
+    refreshAll();
+  } else {
+    showToast(r.message || 'Xəta baş verdi');
+  }
 };
 
 document.getElementById('linkDiscordIdBtn').onclick = async () => {
-  const guildId = document.getElementById('linkGuildIdInput').value.trim();
+  const dropdownVal = document.getElementById('guildSelectDropdown').value.trim();
+  const inputVal = document.getElementById('linkGuildIdInput').value.trim();
+  const guildId = inputVal || dropdownVal;
   const discordUserId = document.getElementById('linkDiscordIdInput').value.trim();
   const r = await api('/api/workspace/link-discord', { method: 'POST', body: JSON.stringify({ guildId, discordUserId }) });
   showToast(r.message || 'Bağlandı');
@@ -2427,20 +2590,6 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        if (reqUrl.pathname === '/api/bot/config' && req.method === 'GET') {
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(
-                JSON.stringify({
-                    ok: true,
-                    botToken: runtimeBotToken || state.savedBotToken || '',
-                    discordBotToken: runtimeBotToken || state.savedBotToken || '',
-                    apiToken: runtimeBotToken || state.savedBotToken || '',
-                    panelButtonConfig: state.panelButtonConfig
-                })
-            );
-            return;
-        }
-
         if (!checkPanelAuth(req, reqUrl)) {
             res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Panel token tələb olunur.' }));
@@ -2453,13 +2602,28 @@ const server = http.createServer(async (req, res) => {
         }
         const activeWorkspace = ensureWorkspaceRecord(activeWsId);
 
+        if (reqUrl.pathname === '/api/obfuscate' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const code = String(body.code || '');
+            const level = String(body.level || 'standard');
+            if (!code.trim()) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Obfuscate etmək üçün Lua kodu yazın.' }));
+                return;
+            }
+            const obfuscated = obfuscateLuaSource(code, level);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, obfuscated }));
+            return;
+        }
+
         if (reqUrl.pathname === '/api/workspace/link-discord' && req.method === 'POST') {
             const body = await readJsonBody(req);
             const guildId = String(body.guildId || '').trim();
             const discordUserId = String(body.discordUserId || '').trim();
             if (!guildId && !discordUserId) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Ən azı Sunucu ID və ya Discord User ID daxil edin.' }));
+                res.end(JSON.stringify({ ok: false, message: 'Ən azı Sunucu seçin və ya Sunucu ID daxil edin.' }));
                 return;
             }
             if (guildId && !/^\d{15,22}$/.test(guildId)) {
@@ -2478,8 +2642,16 @@ const server = http.createServer(async (req, res) => {
                 if (discordUserId) s.ownerDiscordId = discordUserId;
             }
             persistState();
+            const info = resolveWorkspaceGuildDisplay(activeWorkspace);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, message: 'Sunucu / Discord ID bu cihaza bağlandı!' }));
+            res.end(
+                JSON.stringify({
+                    ok: true,
+                    message: info
+                        ? `✅ "${info.guildName}" sunucusu bu panelə bağlandı!`
+                        : '✅ Discord ID bu panelə bağlandı!'
+                })
+            );
             return;
         }
 
@@ -2494,11 +2666,13 @@ const server = http.createServer(async (req, res) => {
                 client && client.user
                     ? `https://discord.com/oauth2/authorize?client_id=${client.user.id}&permissions=8&scope=bot%20applications.commands`
                     : null;
+            const connectedGuild = resolveWorkspaceGuildDisplay(activeWorkspace);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(
                 JSON.stringify({
                     ok: true,
                     workspaceId: activeWsId,
+                    connectedGuild,
                     linkedGuildIds: activeWorkspace ? activeWorkspace.guildIds || [] : [],
                     linkedDiscordIds: activeWorkspace ? activeWorkspace.discordUserIds || [] : [],
                     botInviteUrl,
@@ -2506,13 +2680,12 @@ const server = http.createServer(async (req, res) => {
                     cloudConnected: Boolean((UPSTASH_URL && UPSTASH_TOKEN) || (JSONBIN_ID && JSONBIN_KEY)),
                     botReady: Boolean(client && client.user),
                     botTag: client && client.user ? client.user.tag : null,
-                    hasBotToken: Boolean(runtimeBotToken),
                     panelButtonConfig: state.panelButtonConfig,
                     guilds: getGuildsWithRolesSummary(),
                     scripts: wsScripts.map((s) => ({
                         id: s.id,
                         name: s.name,
-                        code: s.code || '',
+                        obfuscated: Boolean(s.obfuscated),
                         disabled: Boolean(s.disabled),
                         createdAt: s.createdAt
                     })),
@@ -2525,23 +2698,6 @@ const server = http.createServer(async (req, res) => {
                         .map(enrichMemberEntry)
                 })
             );
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/bot-token' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            const tok = String(body.token || '').trim();
-            if (!tok) {
-                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Token boş ola bilməz.' }));
-                return;
-            }
-            runtimeBotToken = tok;
-            state.savedBotToken = tok;
-            persistState();
-            await startOrRestartBot();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, message: 'Token yadda saxlanıldı və bot işə salındı!' }));
             return;
         }
 
@@ -2572,12 +2728,16 @@ const server = http.createServer(async (req, res) => {
         if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
             const body = await readJsonBody(req);
             const name = String(body.name || '').trim();
-            const code = String(body.code || '');
-            if (!name || !code.trim()) {
+            const rawCode = String(body.code || '');
+            const shouldObf = Boolean(body.obfuscate);
+            const preObf = Boolean(body.preObfuscated);
+            const obfLevel = String(body.obfuscateLevel || 'standard');
+            if (!name || !rawCode.trim()) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ ok: false, message: 'Skript adı və kodu tələb olunur.' }));
                 return;
             }
+            const finalCode = shouldObf ? obfuscateLuaSource(rawCode, obfLevel) : rawCode;
             const linkedGuild =
                 activeWorkspace && Array.isArray(activeWorkspace.guildIds) && activeWorkspace.guildIds.length > 0
                     ? activeWorkspace.guildIds[0]
@@ -2589,7 +2749,8 @@ const server = http.createServer(async (req, res) => {
             const script = {
                 id: generateId('scr'),
                 name,
-                code,
+                code: finalCode,
+                obfuscated: shouldObf || preObf,
                 ownerWorkspaceId: activeWsId,
                 ownerGuildId: linkedGuild,
                 ownerDiscordId: linkedDiscord,
@@ -2599,24 +2760,23 @@ const server = http.createServer(async (req, res) => {
             state.scripts.push(script);
             persistState();
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, script }));
+            res.end(JSON.stringify({ ok: true, script: { id: script.id, name: script.name, obfuscated: script.obfuscated } }));
             return;
         }
 
-        if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'PUT') {
-            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
+        if (reqUrl.pathname.endsWith('/obfuscate') && reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'POST') {
+            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length, -'/obfuscate'.length));
             const script = getScriptById(scriptId);
             if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
                 res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
                 return;
             }
-            const body = await readJsonBody(req);
-            if (body.name && String(body.name).trim()) script.name = String(body.name).trim();
-            if (typeof body.code === 'string' && body.code.trim()) script.code = body.code;
+            script.code = obfuscateLuaSource(script.code || '', 'high');
+            script.obfuscated = true;
             persistState();
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, script }));
+            res.end(JSON.stringify({ ok: true, message: `"${script.name}" uğurla obfuscate edildi!` }));
             return;
         }
 
@@ -2770,7 +2930,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     await hydrateFromCloudIfAvailable();
     startKeepAliveLoop();
     if (!runtimeBotToken) {
-        console.error('[SADO PROTECT] Qeyd: DISCORD_BOT_TOKEN hələ təyin edilməyib. Veb paneldən və ya Render Environment Variables bölməsindən daxil edə bilərsiniz.');
+        console.error('[SADO PROTECT] Qeyd: DISCORD_BOT_TOKEN hələ təyin edilməyib. Render Environment Variables bölməsindən daxil edin.');
     } else {
         startOrRestartBot().catch((err) => {
             console.error('[SADO PROTECT] Discord login xətası:', err.message);
