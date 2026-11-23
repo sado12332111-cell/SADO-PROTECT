@@ -319,7 +319,24 @@ function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
   const loaderUrl = `https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=`;
   return [
     `script_key = "${safeKey}"`,
-    `loadstring(game:HttpGet("${loaderUrl}" .. tostring(script_key)))()`,
+    'local function _sadoGetHwid()',
+    '  local ok, cid = pcall(function() return game:GetService("RbxAnalyticsService"):GetClientId() end)',
+    '  if ok and type(cid) == "string" and #cid > 0 then return cid end',
+    '  local fOk, fId = pcall(function()',
+    '    return (gethwid and gethwid()) or (syn and syn.cache_hwid) or (identifyexecutor and identifyexecutor()) or tostring(game.Players.LocalPlayer.UserId)',
+    '  end)',
+    '  if fOk and type(fId) == "string" and #fId > 0 then return fId end',
+    '  return "SADO-HWID-FALLBACK"',
+    'end',
+    'local _hwid = _sadoGetHwid()',
+    `local _url = "${loaderUrl}" .. tostring(script_key) .. "&hwid=" .. tostring(_hwid)`,
+    'local _raw = game:HttpGet(_url)',
+    'if type(_raw) == "string" and string.find(_raw, "HWID_MISMATCH", 1, true) then',
+    '  local lp = game:GetService("Players").LocalPlayer',
+    '  if lp then lp:Kick("[SADO PROTECT] Bu script/key başqa cihaza (HWID) bağlıdır!") end',
+    '  return',
+    'end',
+    'loadstring(_raw)()',
   ].join('\n');
 }
 
@@ -900,6 +917,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           item.hwid = '';
           item.hwidResetAt = new Date().toISOString();
         }
+        for (const kItem of state.keys) {
+          if (kItem.usedByDiscordId === userId && (!scriptId || scriptId === 'default' || kItem.scriptId === scriptId)) {
+            kItem.hwid = '';
+          }
+        }
         saveStore().catch(() => {});
 
         await interaction.reply({
@@ -1256,6 +1278,7 @@ app.post('/api/obfuscate', (req, res) => {
 app.get('/api/loader/:token', (req, res) => {
   const token = String(req.params.token || '').trim();
   const providedKey = String(req.query.key || '').trim();
+  const providedHwid = String(req.query.hwid || '').trim();
   const ua = String(req.headers['user-agent'] || '').toLowerCase();
   const acceptHeader = String(req.headers['accept'] || '').toLowerCase();
   const secFetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
@@ -1306,6 +1329,27 @@ app.get('/api/loader/:token', (req, res) => {
     );
     if (isBlacklisted) {
       res.status(403).type('text/plain; charset=utf-8').send('-- [SADO PROTECT] User Blacklisted.');
+      return;
+    }
+  }
+
+  if (providedHwid) {
+    const boundHwid = (validWl && validWl.hwid) || (validKey && validKey.hwid) || '';
+    if (!boundHwid) {
+      if (validWl) {
+        validWl.hwid = providedHwid;
+        validWl.hwidBoundAt = new Date().toISOString();
+      }
+      if (validKey) {
+        validKey.hwid = providedHwid;
+        validKey.hwidBoundAt = new Date().toISOString();
+      }
+      saveStore().catch(() => {});
+    } else if (boundHwid !== providedHwid) {
+      res
+        .status(403)
+        .type('text/plain; charset=utf-8')
+        .send('-- [SADO PROTECT] HWID_MISMATCH: Script bound to another device.');
       return;
     }
   }
