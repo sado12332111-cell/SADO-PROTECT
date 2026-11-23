@@ -1014,6 +1014,13 @@ async function syncSlashCommands() {
     if (!runtimeBotToken || !client || !client.user) return;
     const rest = new REST({ version: '10' }).setToken(runtimeBotToken);
     await rest.put(Routes.applicationCommands(client.user.id), { body: slashCommands });
+    if (client.guilds && client.guilds.cache) {
+        for (const g of client.guilds.cache.values()) {
+            try {
+                await rest.put(Routes.applicationGuildCommands(client.user.id, g.id), { body: slashCommands });
+            } catch (_) {}
+        }
+    }
     console.log('[SADO PROTECT] Slash əmrlər sinxronizasiya olundu.');
 }
 
@@ -1207,6 +1214,10 @@ function attachBotHandlers(botClient) {
             if (ws && Array.isArray(ws.guildIds) && ws.guildIds.includes(String(guild.id))) {
                 ws.guildName = guild.name;
             }
+        }
+        if (runtimeBotToken && botClient.user) {
+            const rest = new REST({ version: '10' }).setToken(runtimeBotToken);
+            rest.put(Routes.applicationGuildCommands(botClient.user.id, guild.id), { body: slashCommands }).catch(() => {});
         }
         persistState();
     });
