@@ -209,6 +209,12 @@ let botStatus = {
   guilds: []
 };
 
+function syncBotGuildsCache() {
+  if (client && client.guilds && client.guilds.cache) {
+    botStatus.guilds = client.guilds.cache.map(g => ({ id: g.id, name: g.name }));
+  }
+}
+
 function buildSlashCommands() {
   return [
     new SlashCommandBuilder()
@@ -370,11 +376,11 @@ function createPanelButtons(scriptId) {
   );
 }
 
-client.once('ready', async () => {
+client.on('clientReady', async () => {
   botStatus.online = true;
-  botStatus.tag = client.user.tag;
-  botStatus.guilds = client.guilds.cache.map(g => ({ id: g.id, name: g.name }));
-  console.log(`SADO PROTECT Bot online: ${client.user.tag}`);
+  botStatus.tag = client.user ? client.user.tag : '';
+  syncBotGuildsCache();
+  console.log(`SADO PROTECT Bot online: ${botStatus.tag}`);
 
   if (state.activeGuildId) {
     const realName = await fetchGuildNameFromDiscord(state.activeGuildId);
@@ -386,8 +392,22 @@ client.once('ready', async () => {
   await syncSlashCommands();
 });
 
+client.on('ready', async () => {
+  botStatus.online = true;
+  botStatus.tag = client.user ? client.user.tag : '';
+  syncBotGuildsCache();
+  if (state.activeGuildId) {
+    const realName = await fetchGuildNameFromDiscord(state.activeGuildId);
+    if (realName) {
+      state.activeGuildName = realName;
+      saveState();
+    }
+  }
+  await syncSlashCommands();
+});
+
 client.on('guildCreate', async guild => {
-  botStatus.guilds = client.guilds.cache.map(g => ({ id: g.id, name: g.name }));
+  syncBotGuildsCache();
   state.activeGuildId = guild.id;
   state.activeGuildName = guild.name;
   saveState();
@@ -395,7 +415,7 @@ client.on('guildCreate', async guild => {
 });
 
 client.on('guildDelete', () => {
-  botStatus.guilds = client.guilds.cache.map(g => ({ id: g.id, name: g.name }));
+  syncBotGuildsCache();
 });
 
 client.on('interactionCreate', async interaction => {
@@ -647,8 +667,17 @@ client.on('interactionCreate', async interaction => {
 
         const activeEntry = wl || keyRecord;
         if (!activeEntry) {
+          const panelEmbed = new EmbedBuilder()
+            .setTitle('🔐 SADO PROTECT • Script & Key Access')
+            .setDescription(
+              `❌ **Status:** Whitelist / Key tapılmadı\n` +
+              `Skripti əldə etmək üçün əvvəlcə **🔑 Redeem Key** düyməsinə basıb key daxil edin.`
+            )
+            .setColor(0xef4444)
+            .setFooter({ text: 'SADO PROTECT • Script Loader Panel' });
+
           await interaction.reply({
-            content: '❌ Sizin bu skript üçün aktiv whitelist/key icazəniz yoxdur. Əvvəlcə **Redeem Key** düyməsi ilə key daxil edin.',
+            embeds: [panelEmbed],
             ephemeral: true
           });
           return;
@@ -663,11 +692,26 @@ client.on('interactionCreate', async interaction => {
         }
 
         const sid = activeEntry.scriptId || scriptId;
+        const scriptObj = state.scripts.find(s => s.id === sid);
+        const scriptLabel = scriptObj ? scriptObj.name : sid;
+        const userKeyVal = (keyRecord && keyRecord.key) || 'WHITELISTED';
         const loaderUrl = `${PUBLIC_SITE_URL}/api/loader/${sid}?uid=${interaction.user.id}`;
-        const luaLoader = `loadstring(game:HttpGet("${loaderUrl}"))()`;
+        const luaLoader = `script_key = "${userKeyVal}"\nloadstring(game:HttpGet("${loaderUrl}"))()`;
+
+        const scriptPanelEmbed = new EmbedBuilder()
+          .setTitle(`📜 ${scriptLabel} • Script & Key Panel`)
+          .setDescription(
+            `✅ **Status:** Aktiv\n` +
+            `🔑 **Key:** \`${userKeyVal}\`\n` +
+            `📦 **Script:** \`${scriptLabel}\`\n\n` +
+            `\`\`\`lua\n${luaLoader}\n\`\`\``
+          )
+          .setColor(0x22c55e)
+          .setFooter({ text: 'SADO PROTECT • Executor Loader' })
+          .setTimestamp();
 
         await interaction.reply({
-          content: `✅ **Skript Hazırdır!** Aşağıdakı kodu executor-a yapışdırın:\n\`\`\`lua\n${luaLoader}\n\`\`\``,
+          embeds: [scriptPanelEmbed],
           ephemeral: true
         });
         return;
@@ -777,22 +821,54 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
+let botLoginInFlight = null;
+
 async function startDiscordBot(token) {
   const cleanToken = resolveBotToken(token);
   if (!cleanToken) return { ok: false, message: 'Token boşdur.' };
-  try {
-    if (client.isReady()) {
-      await client.destroy();
-    }
-    state.botToken = cleanToken;
-    saveState();
-    await client.login(cleanToken);
-    return { ok: true };
-  } catch (err) {
-    botStatus.online = false;
-    console.error('Discord bot login warning (server stays alive):', err.message);
-    return { ok: false, message: err.message || 'Discord giriş xətası' };
+
+  if (botLoginInFlight) {
+    return botLoginInFlight;
   }
+
+  botLoginInFlight = (async () => {
+    try {
+      state.botToken = cleanToken;
+      saveState();
+
+      if (client.isReady()) {
+        botStatus.online = true;
+        botStatus.tag = client.user ? client.user.tag : botStatus.tag;
+        syncBotGuildsCache();
+        return { ok: true, tag: botStatus.tag };
+      }
+
+      const loginPromise = client.login(cleanToken);
+      const readyPromise = new Promise(resolve => {
+        if (client.isReady()) return resolve(true);
+        client.once('ready', () => resolve(true));
+        client.once('clientReady', () => resolve(true));
+        setTimeout(() => resolve(Boolean(client.isReady())), 4500);
+      });
+
+      await loginPromise;
+      await readyPromise;
+
+      botStatus.online = Boolean(client.isReady());
+      botStatus.tag = client.user ? client.user.tag : botStatus.tag;
+      syncBotGuildsCache();
+
+      return { ok: true, tag: botStatus.tag };
+    } catch (err) {
+      botStatus.online = Boolean(client.isReady());
+      console.error('Discord bot login warning (server stays alive):', err.message);
+      return { ok: false, message: err.message || 'Discord giriş xətası' };
+    } finally {
+      botLoginInFlight = null;
+    }
+  })();
+
+  return botLoginInFlight;
 }
 
 // ==================== EXPRESS API ROUTES ====================
@@ -805,15 +881,17 @@ app.get('/api/state', async (req, res) => {
     }
   }
 
-  const guildsList = client.isReady()
-    ? client.guilds.cache.map(g => ({ id: g.id, name: g.name }))
-    : botStatus.guilds;
+  const isBotOnline = Boolean(client.isReady() || botStatus.online);
+  const guildsList =
+    client.guilds && client.guilds.cache && client.guilds.cache.size > 0
+      ? client.guilds.cache.map(g => ({ id: g.id, name: g.name }))
+      : botStatus.guilds;
 
   res.json({
     ok: true,
     bot: {
-      online: Boolean(client.isReady()),
-      tag: client.user ? client.user.tag : '',
+      online: isBotOnline,
+      tag: client.user ? client.user.tag : botStatus.tag || '',
       hasToken: Boolean(resolveBotToken(state.botToken)),
       inviteUrl: BOT_INVITE_URL,
       oauthEnabled: Boolean(BOT_CLIENT_SECRET),
@@ -842,7 +920,7 @@ app.post('/api/bot/token', async (req, res) => {
   if (!result.ok) {
     return res.status(400).json(result);
   }
-  res.json({ ok: true, tag: client.user ? client.user.tag : '' });
+  res.json({ ok: true, online: true, tag: client.user ? client.user.tag : result.tag || '' });
 });
 
 app.post('/api/workspace/link', async (req, res) => {
@@ -1665,15 +1743,21 @@ app.get('/', (req, res) => {
     document.getElementById('saveOneTimeTokenBtn').onclick = async () => {
       const token = document.getElementById('oneTimeTokenInput').value.trim();
       if (!token) { showToast('Token daxil edin.'); return; }
+      const pill = document.getElementById('botStatusPill');
+      pill.textContent = 'Bot: Qoşulur...';
       const r = await api('/api/bot/token', {
         method: 'POST',
         body: JSON.stringify({ token })
       });
       if (r.ok) {
         document.getElementById('oneTimeTokenInput').value = '';
+        pill.textContent = 'Bot: Online ✅';
+        pill.classList.add('online');
+        document.getElementById('oneTimeTokenCard').style.display = 'none';
         showToast('Bot aktivləşdirildi!');
         refreshAll();
       } else {
+        pill.textContent = 'Bot: Offline';
         showToast(r.message || 'Token xətası');
       }
     };
