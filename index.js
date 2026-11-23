@@ -393,40 +393,38 @@ function getWorkspaceIdFromReq(req, reqUrl) {
 
 function ensureWorkspaceRecord(wsId, discordUserId = null, guildId = null, guildName = null) {
     if (!wsId) return null;
-    if (!state.workspaces[wsId]) {
-        state.workspaces[wsId] = {
-            id: wsId,
-            discordUserIds: [],
-            guildIds: [],
-            guildName: '',
-            createdAt: nowMs()
-        };
-    }
-    if (!Array.isArray(state.workspaces[wsId].discordUserIds)) {
-        state.workspaces[wsId].discordUserIds = [];
-    }
-    if (!Array.isArray(state.workspaces[wsId].guildIds)) {
-        state.workspaces[wsId].guildIds = [];
-    }
-    if (discordUserId) {
-        const uid = String(discordUserId).trim();
-        if (uid && !state.workspaces[wsId].discordUserIds.includes(uid)) {
-            state.workspaces[wsId].discordUserIds.push(uid);
+async function fetchGuildInfoById(guildId) {
+    const gid = String(guildId || '').trim();
+    if (!gid) return null;
+
+    if (client && client.guilds) {
+        const cached = client.guilds.cache.get(gid);
+        if (cached && cached.name) {
+            return { id: cached.id, name: cached.name, botInGuild: true };
         }
-    }
-    if (guildId) {
-        const gid = String(guildId).trim();
-        if (gid) {
-            state.workspaces[wsId].guildIds = [gid];
-            const liveGuild = client && client.guilds ? client.guilds.cache.get(gid) : null;
-            if (guildName) {
-                state.workspaces[wsId].guildName = String(guildName).trim();
-            } else if (liveGuild && liveGuild.name) {
-                state.workspaces[wsId].guildName = liveGuild.name;
+        try {
+            const fetched = await client.guilds.fetch(gid);
+            if (fetched && fetched.name) {
+                return { id: fetched.id, name: fetched.name, botInGuild: true };
             }
-        }
+        } catch (_) {}
     }
-    return state.workspaces[wsId];
+
+    if (runtimeBotToken) {
+        try {
+            const resp = await fetch(`https://discord.com/api/v10/guilds/${encodeURIComponent(gid)}`, {
+                headers: { Authorization: `Bot ${runtimeBotToken}` }
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.name) {
+                    return { id: String(data.id || gid), name: String(data.name), botInGuild: true };
+                }
+            }
+        } catch (_) {}
+    }
+
+    return null;
 }
 
 function resolveWorkspaceGuildDisplay(ws) {
@@ -441,10 +439,12 @@ function resolveWorkspaceGuildDisplay(ws) {
         }
         return { guildId: gid, guildName: liveGuild.name, botInGuild: true };
     }
+    const cleanSavedName = String(ws.guildName || '').trim();
+    const isFallbackLabel = !cleanSavedName || cleanSavedName === `Sunucu (${gid})`;
     return {
         guildId: gid,
-        guildName: ws.guildName || `Sunucu (${gid})`,
-        botInGuild: false
+        guildName: isFallbackLabel ? `Sunucu (${gid})` : cleanSavedName,
+        botInGuild: !isFallbackLabel
     };
 }
 
@@ -2044,7 +2044,7 @@ function renderDashboardHtml() {
       <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
       <div class="muted">1. Əvvəlcə aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br>2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bütün idarəetmə paneli tam sizə bağlanacaq.</div>
       <div style="margin-top:12px;">
-        <a class="btn green" id="botInviteLinkBtn" href="#" target="_blank" style="text-decoration:none;display:inline-block;">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>
+        <a class="btn green" id="botInviteLinkBtn" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:inline-block;">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>
       </div>
       <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
       <select id="guildSelectDropdown">
@@ -2287,8 +2287,8 @@ async function refreshAll() {
     linkedInput.value = data.linkedDiscordIds[0];
   }
   const inviteBtn = document.getElementById('botInviteLinkBtn');
-  if (inviteBtn && data.botInviteUrl) {
-    inviteBtn.href = data.botInviteUrl;
+  if (inviteBtn) {
+    inviteBtn.href = data.botInviteUrl || 'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
   }
   const pill = document.getElementById('botStatusPill');
   pill.textContent = data.botReady ? ('SADO PROTECT Aktiv') : 'Bot Qoşulur...';
@@ -2636,7 +2636,14 @@ const server = http.createServer(async (req, res) => {
                 res.end(JSON.stringify({ ok: false, message: 'Düzgün Discord User ID daxil edin.' }));
                 return;
             }
-            ensureWorkspaceRecord(activeWsId, discordUserId || null, guildId || null);
+            let resolvedGuildName = null;
+            if (guildId) {
+                const fetchedGuild = await fetchGuildInfoById(guildId);
+                if (fetchedGuild && fetchedGuild.name) {
+                    resolvedGuildName = fetchedGuild.name;
+                }
+            }
+            ensureWorkspaceRecord(activeWsId, discordUserId || null, guildId || null, resolvedGuildName);
             for (const s of getScriptsForWorkspace(activeWsId)) {
                 if (guildId) s.ownerGuildId = guildId;
                 if (discordUserId) s.ownerDiscordId = discordUserId;
@@ -2647,6 +2654,7 @@ const server = http.createServer(async (req, res) => {
             res.end(
                 JSON.stringify({
                     ok: true,
+                    connectedGuild: info,
                     message: info
                         ? `✅ "${info.guildName}" sunucusu bu panelə bağlandı!`
                         : '✅ Discord ID bu panelə bağlandı!'
@@ -2664,208 +2672,17 @@ const server = http.createServer(async (req, res) => {
             );
             const botInviteUrl =
                 'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
-            const connectedGuild = resolveWorkspaceGuildDisplay(activeWorkspace);
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(
-                JSON.stringify({
-                    ok: true,
-                    workspaceId: activeWsId,
-                    connectedGuild,
-                    linkedGuildIds: activeWorkspace ? activeWorkspace.guildIds || [] : [],
-                    linkedDiscordIds: activeWorkspace ? activeWorkspace.discordUserIds || [] : [],
-                    botInviteUrl,
-                    authRequired: Boolean(PANEL_TOKEN),
-                    cloudConnected: Boolean((UPSTASH_URL && UPSTASH_TOKEN) || (JSONBIN_ID && JSONBIN_KEY)),
-                    botReady: Boolean(client && client.user),
-                    botTag: client && client.user ? client.user.tag : null,
-                    panelButtonConfig: state.panelButtonConfig,
-                    guilds: getGuildsWithRolesSummary(),
-                    scripts: wsScripts.map((s) => ({
-                        id: s.id,
-                        name: s.name,
-                        obfuscated: Boolean(s.obfuscated),
-                        disabled: Boolean(s.disabled),
-                        createdAt: s.createdAt
-                    })),
-                    keysCount: wsKeys.length,
-                    whitelistsCount: wsWhitelists.length,
-                    recentKeys: wsKeys.slice(-50).reverse().map(enrichMemberEntry),
-                    whitelists: wsWhitelists
-                        .slice(-50)
-                        .reverse()
-                        .map(enrichMemberEntry)
-                })
-            );
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/panel-config' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            state.panelButtonConfig = {
-                ...state.panelButtonConfig,
-                embedColor: String(body.embedColor || state.panelButtonConfig.embedColor || '#5865F2').trim(),
-                redeemLabel: String(body.redeemLabel || 'Redeem Key').trim().slice(0, 80),
-                redeemEmoji: String(body.redeemEmoji ?? '').trim().slice(0, 32),
-                redeemStyle: String(body.redeemStyle || 'Success').trim(),
-                getScriptLabel: String(body.getScriptLabel || 'Get Script').trim().slice(0, 80),
-                getScriptEmoji: String(body.getScriptEmoji ?? '').trim().slice(0, 32),
-                getScriptStyle: String(body.getScriptStyle || 'Primary').trim(),
-                resetHwidLabel: String(body.resetHwidLabel || 'Reset HWID').trim().slice(0, 80),
-                resetHwidEmoji: String(body.resetHwidEmoji ?? '').trim().slice(0, 32),
-                resetHwidStyle: String(body.resetHwidStyle || 'Secondary').trim(),
-                getStatsLabel: String(body.getStatsLabel || 'Get Stats').trim().slice(0, 80),
-                getStatsEmoji: String(body.getStatsEmoji ?? '').trim().slice(0, 32),
-                getStatsStyle: String(body.getStatsStyle || 'Secondary').trim()
-            };
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, panelButtonConfig: state.panelButtonConfig }));
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            const name = String(body.name || '').trim();
-            const rawCode = String(body.code || '');
-            const shouldObf = Boolean(body.obfuscate);
-            const preObf = Boolean(body.preObfuscated);
-            const obfLevel = String(body.obfuscateLevel || 'standard');
-            if (!name || !rawCode.trim()) {
-                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Skript adı və kodu tələb olunur.' }));
-                return;
-            }
-            const finalCode = shouldObf ? obfuscateLuaSource(rawCode, obfLevel) : rawCode;
-            const linkedGuild =
-                activeWorkspace && Array.isArray(activeWorkspace.guildIds) && activeWorkspace.guildIds.length > 0
-                    ? activeWorkspace.guildIds[0]
-                    : null;
-            const linkedDiscord =
-                activeWorkspace && Array.isArray(activeWorkspace.discordUserIds) && activeWorkspace.discordUserIds.length > 0
-                    ? activeWorkspace.discordUserIds[0]
-                    : null;
-            const script = {
-                id: generateId('scr'),
-                name,
-                code: finalCode,
-                obfuscated: shouldObf || preObf,
-                ownerWorkspaceId: activeWsId,
-                ownerGuildId: linkedGuild,
-                ownerDiscordId: linkedDiscord,
-                disabled: false,
-                createdAt: nowMs()
-            };
-            state.scripts.push(script);
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, script: { id: script.id, name: script.name, obfuscated: script.obfuscated } }));
-            return;
-        }
-
-        if (reqUrl.pathname.endsWith('/obfuscate') && reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'POST') {
-            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length, -'/obfuscate'.length));
-            const script = getScriptById(scriptId);
-            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
-                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
-                return;
-            }
-            script.code = obfuscateLuaSource(script.code || '', 'high');
-            script.obfuscated = true;
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, message: `"${script.name}" uğurla obfuscate edildi!` }));
-            return;
-        }
-
-        if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'DELETE') {
-            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
-            const targetScript = getScriptById(scriptId);
-            if (targetScript && isScriptOwnedByWorkspace(targetScript, activeWsId)) {
-                state.scripts = state.scripts.filter((s) => s.id !== scriptId);
-                persistState();
-            }
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true }));
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/keys' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            const script = getScriptById(String(body.scriptId || '').trim());
-            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
-                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
-                return;
-            }
-            const durationMs = parseDurationToMs(body.time);
-            if (durationMs === undefined) {
-                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Yanlış müddət formatı.' }));
-                return;
-            }
-            const amount = Math.min(50, Math.max(1, Number(body.amount || 1)));
-            const created = [];
-            for (let i = 0; i < amount; i++) {
-                const code = generateKeyCode();
-                state.keys.push({
-                    id: generateId('key'),
-                    code,
-                    scriptId: script.id,
-                    durationMs,
-                    expiresAt: null,
-                    createdBy: null,
-                    createdByName: 'Veb Panel',
-                    redeemedBy: null,
-                    redeemedByName: null,
-                    redeemedAt: null,
-                    hwid: null,
-                    disabled: false,
-                    createdAt: nowMs()
-                });
-                created.push(code);
-            }
-            persistState();
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, keys: created }));
-            return;
-        }
-
-        if (reqUrl.pathname === '/api/whitelist' && req.method === 'POST') {
-            const body = await readJsonBody(req);
-            const script = getScriptById(String(body.scriptId || '').trim());
-            const userId = String(body.userId || '').trim();
-            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
-                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
-                return;
-            }
-            if (!userId) {
-                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Discord User ID daxil edin.' }));
-                return;
-            }
-            const durationMs = parseDurationToMs(body.time);
-            if (durationMs === undefined) {
-                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: false, message: 'Yanlış müddət formatı.' }));
-                return;
-            }
-            await applyWhitelistForTargets(script, [{ id: userId }], durationMs);
-            const autoKey = getUserKeyForScript(userId, script.id);
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: true, key: autoKey ? autoKey.code : null }));
-            return;
-        }
-
-        if (reqUrl.pathname.startsWith('/api/whitelist/') && req.method === 'DELETE') {
-            const wlId = decodeURIComponent(reqUrl.pathname.slice('/api/whitelist/'.length));
-            const targetWl = state.whitelists.find((w) => w.id === wlId);
-            if (targetWl) {
-                const scr = getScriptById(targetWl.scriptId);
-                if (scr && isScriptOwnedByWorkspace(scr, activeWsId)) {
-                    targetWl.revoked = true;
+            let connectedGuild = resolveWorkspaceGuildDisplay(activeWorkspace);
+            if (connectedGuild && connectedGuild.guildId && !connectedGuild.botInGuild) {
+                const fetchedGuild = await fetchGuildInfoById(connectedGuild.guildId);
+                if (fetchedGuild && fetchedGuild.name) {
+                    activeWorkspace.guildName = fetchedGuild.name;
                     persistState();
+                    connectedGuild = {
+                        guildId: connectedGuild.guildId,
+                        guildName: fetchedGuild.name,
+                        botInGuild: true
+                    };
                 }
             }
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
