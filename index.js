@@ -369,6 +369,38 @@ async function ensureBotOnline() {
     botStatus = 'online';
     botLastError = '';
   } catch (err) {
+    botLastError = err && err.message ? err.message : 'Login xətası';
+    botStatus = client.isReady() ? 'online' : 'connecting';
+    console.warn('[BOT] Qoşulma cəhdi uğursuz oldu (yenidən cəhd ediləcək):', botLastError);
+  } finally {
+    isConnectingNow = false;
+  }
+}
+
+function startWatchdog() {
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = setInterval(async () => {
+    try {
+      if ((state.botToken || '').trim()) {
+        if (!client.isReady()) {
+          await ensureBotOnline();
+        } else {
+          botStatus = 'online';
+          if (state.activeGuildId && (!state.activeGuildName || state.activeGuildName.startsWith('Sunucu ('))) {
+            const name = await resolveGuildName(state.activeGuildId);
+            if (name && !name.startsWith('Sunucu (')) {
+              state.activeGuildName = name;
+              await saveStore();
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[WATCHDOG] Xəta:', err.message);
+    }
+  }, 15000);
+}
+
 async function registerSlashCommands(token) {
   const cleanToken = (token || '').trim();
   if (!cleanToken) return;
