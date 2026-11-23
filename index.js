@@ -1272,23 +1272,6 @@ app.get('/api/loader/:token', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.type('text/plain; charset=utf-8').send(protectedPayload);
 });
-    }
-    const obfuscated = obfuscateLuaCode(code, level);
-    res.json({ ok: true, obfuscated });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.get('/api/loader/:token', (req, res) => {
-  const token = String(req.params.token || '').trim();
-  const sc = state.scripts.find((s) => s.loaderToken === token || s.id === token);
-  if (!sc) {
-    res.status(404).type('text/plain').send('-- Script not found');
-    return;
-  }
-  res.type('text/plain; charset=utf-8').send(sc.code);
-});
 
 app.get('/api/keys', (req, res) => {
   res.json({ ok: true, keys: state.keys });
