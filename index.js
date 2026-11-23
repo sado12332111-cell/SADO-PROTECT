@@ -1292,37 +1292,57 @@ app.get('/', (req, res) => {
       --text: #f1f5f9;
       --muted: #94a3b8;
       --accent: #5865F2;
+      --accent-2: #a855f7;
+      --cyan: #06b6d4;
       --green: #22c55e;
       --red: #ef4444;
       --amber: #f59e0b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, system-ui, -apple-system, sans-serif; }
-    body { background: var(--bg); color: var(--text); min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(circle at 12% 8%, rgba(88, 101, 242, 0.20), transparent 36%),
+        radial-gradient(circle at 88% 14%, rgba(168, 85, 247, 0.16), transparent 38%),
+        radial-gradient(circle at 50% 92%, rgba(6, 182, 212, 0.12), transparent 42%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
     .topbar {
       position: sticky; top: 0; z-index: 40;
       display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 12px 16px; background: rgba(15, 20, 34, 0.95);
-      border-bottom: 1px solid var(--border); backdrop-filter: blur(8px);
+      padding: 12px 16px; background: rgba(15, 20, 34, 0.92);
+      border-bottom: 1px solid rgba(129, 140, 248, 0.25); backdrop-filter: blur(10px);
+      box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
     }
     .menu-btn {
-      width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border);
-      background: var(--card-2); color: var(--text); font-size: 20px; cursor: pointer;
+      width: 40px; height: 40px; border-radius: 10px; border: 1px solid rgba(129, 140, 248, 0.35);
+      background: linear-gradient(135deg, rgba(88, 101, 242, 0.24), rgba(168, 85, 247, 0.20));
+      color: var(--text); font-size: 20px; cursor: pointer;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
-    .brand-title { font-weight: 800; font-size: 15px; line-height: 1.25; }
+    .brand-title {
+      font-weight: 800; font-size: 15px; line-height: 1.25;
+      background: linear-gradient(90deg, #ffffff, #a5b4fc, #67e8f9);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
     .brand-sub { font-size: 11px; color: var(--muted); }
     .status-pill {
       padding: 6px 11px; border-radius: 999px; font-size: 12px; font-weight: 600;
       background: var(--card-2); border: 1px solid var(--border); white-space: nowrap;
     }
-    .status-pill.online { border-color: rgba(34, 197, 94, 0.45); color: #4ade80; }
+    .status-pill.online {
+      border-color: rgba(34, 197, 94, 0.5); color: #4ade80;
+      box-shadow: 0 0 14px rgba(34, 197, 94, 0.2);
+    }
     .drawer-backdrop {
       display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: 45;
     }
     .drawer-backdrop.open { display: block; }
     .drawer {
       position: fixed; top: 0; left: -280px; width: 265px; height: 100%;
-      background: #0f1422; border-right: 1px solid var(--border); z-index: 50;
+      background: linear-gradient(180deg, #101628 0%, #0b0f1c 100%);
+      border-right: 1px solid rgba(129, 140, 248, 0.25); z-index: 50;
       padding: 18px 14px; transition: left 0.22s ease; display: flex; flex-direction: column; gap: 8px;
     }
     .drawer.open { left: 0; }
@@ -1331,32 +1351,41 @@ app.get('/', (req, res) => {
       text-align: left; padding: 11px 12px; border-radius: 10px; border: 1px solid transparent;
       background: transparent; color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer;
     }
-    .nav-item:hover, .nav-item.active { background: var(--card-2); border-color: var(--border); color: #fff; }
+    .nav-item:hover, .nav-item.active {
+      background: linear-gradient(90deg, rgba(88, 101, 242, 0.24), rgba(168, 85, 247, 0.16));
+      border-color: rgba(129, 140, 248, 0.35); color: #fff;
+    }
     .container { max-width: 820px; margin: 0 auto; padding: 16px; }
     .section { display: none; flex-direction: column; gap: 14px; }
     .section.active { display: flex; }
     .card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px;
+      background: linear-gradient(160deg, rgba(22, 29, 48, 0.94), rgba(14, 19, 32, 0.96));
+      border: 1px solid rgba(129, 140, 248, 0.22); border-radius: 14px; padding: 16px;
+      box-shadow: 0 10px 28px rgba(2, 6, 23, 0.35);
     }
     .card h3 { font-size: 16px; margin-bottom: 8px; }
     .muted { color: var(--muted); font-size: 13px; line-height: 1.45; }
     .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .stat-grid .card:nth-child(1) { border-top: 3px solid #6366f1; }
+    .stat-grid .card:nth-child(2) { border-top: 3px solid #a855f7; }
+    .stat-grid .card:nth-child(3) { border-top: 3px solid #22c55e; }
+    .stat-grid .card:nth-child(4) { border-top: 3px solid #06b6d4; }
     .stat-val { font-size: 26px; font-weight: 800; margin-top: 6px; }
-    label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; font-weight: 600; }
-    input, select, textarea {
-      width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border);
-      background: #0d1220; color: var(--text); font-size: 14px; outline: none;
+    .btn-primary {
+      background: linear-gradient(135deg, #5865F2, #7c3aed); color: #fff;
+      box-shadow: 0 6px 18px rgba(99, 102, 241, 0.32);
     }
-    textarea { min-height: 130px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-    .btn {
-      width: 100%; padding: 12px 14px; border-radius: 10px; border: none;
-      font-weight: 700; font-size: 14px; cursor: pointer; margin-top: 10px;
-      display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;
+    .btn-green {
+      background: linear-gradient(135deg, #22c55e, #10b981); color: #052e16;
+      box-shadow: 0 6px 18px rgba(34, 197, 94, 0.28);
     }
-    .btn-primary { background: var(--accent); color: #fff; }
-    .btn-green { background: var(--green); color: #052e16; }
-    .btn-amber { background: var(--amber); color: #1c1917; }
-    .btn-red { background: var(--red); color: #fff; }
+    .btn-amber {
+      background: linear-gradient(135deg, #f59e0b, #f97316); color: #1c1917;
+      box-shadow: 0 6px 18px rgba(245, 158, 11, 0.25);
+    }
+    .btn-red {
+      background: linear-gradient(135deg, #ef4444, #e11d48); color: #fff;
+    }
     .btn-sm { width: auto; padding: 7px 11px; font-size: 12px; margin-top: 0; border-radius: 8px; }
     .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
     .list-item {
@@ -1459,8 +1488,11 @@ app.get('/', (req, res) => {
 
       <div class="card">
         <h3>🎨 Panel Buton və Embed Dizaynı</h3>
-        <label>Embed Rəngi (HEX)</label>
-        <input type="text" id="cfgEmbedColor" value="#5865F2" />
+        <label>Embed Rəngi (HEX & Rəng Seçici)</label>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <input type="color" id="cfgColorPicker" value="#5865F2" style="width:52px; height:42px; padding:3px; cursor:pointer; flex-shrink:0;" />
+          <input type="text" id="cfgEmbedColor" value="#5865F2" style="flex:1;" />
+        </div>
         <label>Panel Başlığı</label>
         <input type="text" id="cfgTitle" placeholder="SADO PROTECT • Script Panel" />
         <label>Panel Açıqlaması</label>
@@ -1674,7 +1706,10 @@ app.get('/', (req, res) => {
         if (data.activeGuildId) document.getElementById('linkGuildIdInput').value = data.activeGuildId;
         if (data.activeDiscordUserId) document.getElementById('linkDiscordIdInput').value = data.activeDiscordUserId;
         if (data.panelConfig) {
-          document.getElementById('cfgEmbedColor').value = data.panelConfig.embedColor || '#5865F2';
+          const hexVal = data.panelConfig.embedColor || '#5865F2';
+          document.getElementById('cfgEmbedColor').value = hexVal;
+          const pickerEl = document.getElementById('cfgColorPicker');
+          if (pickerEl && /^#[0-9a-fA-F]{6}$/.test(hexVal)) pickerEl.value = hexVal;
           document.getElementById('cfgTitle').value = data.panelConfig.title || '';
           document.getElementById('cfgDescription').value = data.panelConfig.description || '';
           document.getElementById('cfgRedeemLabel').value = data.panelConfig.redeemLabel || '🔑 Redeem Key';
@@ -1768,13 +1803,13 @@ app.get('/', (req, res) => {
         method: 'POST',
         body: JSON.stringify({ guildId, discordUserId })
       });
-      if (r.ok) {
-        document.getElementById('linkGuildIdInput').value = '';
-        initialInputsLoaded = false;
-        showToast('Sunucu bağlandı: ' + (r.guildName || guildId));
-        refreshAll();
-      } else {
-        showToast(r.message || 'Xəta');
+    document.getElementById('cfgColorPicker').oninput = (e) => {
+      document.getElementById('cfgEmbedColor').value = e.target.value.toUpperCase();
+    };
+    document.getElementById('cfgEmbedColor').oninput = (e) => {
+      const val = e.target.value.trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+        document.getElementById('cfgColorPicker').value = val;
       }
     };
 
