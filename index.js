@@ -213,21 +213,25 @@ function hexToDiscordInt(hex) {
   return Number.isFinite(parsed) ? parsed : 0x5865f2;
 }
 
+function normalizeButtonStyleKey(styleName, fallback = 'secondary') {
+  const s = String(styleName || '').trim().toLowerCase();
+  if (['green', 'success', 'yaşıl', 'yasil', '2', '3'].includes(s)) return 'green';
+  if (['blurple', 'blue', 'primary', 'mavi', '1'].includes(s)) return 'blurple';
+  if (['red', 'danger', 'qırmızı', 'qirmizi', '4'].includes(s)) return 'red';
+  if (['grey', 'gray', 'secondary', 'boz'].includes(s)) return 'grey';
+  return fallback;
+}
+
 function mapStyleToButtonStyle(styleName, fallback = ButtonStyle.Secondary) {
-  switch ((styleName || '').toLowerCase()) {
+  const key = normalizeButtonStyleKey(styleName, '');
+  switch (key) {
     case 'green':
-    case 'success':
       return ButtonStyle.Success;
     case 'blurple':
-    case 'blue':
-    case 'primary':
       return ButtonStyle.Primary;
     case 'red':
-    case 'danger':
       return ButtonStyle.Danger;
     case 'grey':
-    case 'gray':
-    case 'secondary':
       return ButtonStyle.Secondary;
     default:
       return fallback;
@@ -481,6 +485,25 @@ function buildPanelEmbedAndButtons(scriptObj, overrideCfg = null) {
   );
 
   return { embed, row };
+}
+
+async function syncExistingDiscordPanels() {
+  if (!client.isReady() || !Array.isArray(state.panels) || !state.panels.length) return;
+  const recentPanels = state.panels.slice(-25);
+  for (const pnl of recentPanels) {
+    if (!pnl || !pnl.channelId || !pnl.messageId) continue;
+    try {
+      const ch = await client.channels.fetch(pnl.channelId);
+      if (!ch || !ch.isTextBased()) continue;
+      const msg = await ch.messages.fetch(pnl.messageId);
+      if (!msg) continue;
+      const sc = state.scripts.find((s) => s.id === pnl.scriptId) || state.scripts[0];
+      const { embed, row } = buildPanelEmbedAndButtons(sc);
+      await msg.edit({ embeds: [embed], components: [row] });
+    } catch (_err) {
+      // Silinmiş və ya əlçatmaz mesaj ötürülür
+    }
+  }
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -868,7 +891,7 @@ app.post('/api/workspace/link', async (req, res) => {
   }
 });
 
-// Panel buton və embed dizaynını yadda saxla
+// Panel buton və embed dizaynını yadda saxla və mövcud Discord panellərində yenilə
 app.post('/api/panel-config', async (req, res) => {
   try {
     const body = req.body || {};
@@ -883,20 +906,21 @@ app.post('/api/panel-config', async (req, res) => {
         .trim()
         .slice(0, 1500),
       redeemLabel: String(body.redeemLabel || 'Redeem Key').trim().slice(0, 80),
-      redeemStyle: String(body.redeemStyle || 'green').trim(),
+      redeemStyle: normalizeButtonStyleKey(body.redeemStyle, 'green'),
       getScriptLabel: String(body.getScriptLabel || 'Get Script').trim().slice(0, 80),
-      getScriptStyle: String(body.getScriptStyle || 'blurple').trim(),
+      getScriptStyle: normalizeButtonStyleKey(body.getScriptStyle, 'blurple'),
       resetHwidLabel: String(body.resetHwidLabel || 'Reset HWID').trim().slice(0, 80),
-      resetHwidStyle: String(body.resetHwidStyle || 'grey').trim(),
+      resetHwidStyle: normalizeButtonStyleKey(body.resetHwidStyle, 'grey'),
       statsLabel: String(body.statsLabel || 'Stats').trim().slice(0, 80),
-      statsStyle: String(body.statsStyle || 'grey').trim(),
+      statsStyle: normalizeButtonStyleKey(body.statsStyle, 'grey'),
     };
     await saveStore();
+    syncExistingDiscordPanels().catch(() => {});
 
     res.json({
       ok: true,
       panelConfig: state.panelConfig,
-      message: 'Panel dizaynı yadda saxlanıldı!',
+      message: 'Panel dizaynı və buton rəngləri yadda saxlanıldı!',
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
@@ -1596,7 +1620,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     .btn-row-2 .btn { margin-top: 0; }
 
-    /* Button design pairs */
+    /* Button design pairs & live preview buttons */
     .btn-style-pair {
       display: grid;
       grid-template-columns: 1.45fr 1fr;
@@ -1608,6 +1632,55 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .btn-style-pair select {
       margin-top: 0;
     }
+
+    .panel-preview-box {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(7, 11, 22, 0.92);
+      border: 1px solid var(--border);
+      border-left: 4px solid #5865F2;
+    }
+
+    .panel-preview-title {
+      font-size: 15px;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .panel-preview-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .panel-preview-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .discord-mock-btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      font-weight: 700;
+      color: #ffffff;
+      cursor: pointer;
+      transition: transform 0.12s ease, filter 0.15s ease;
+    }
+
+    .discord-mock-btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.08);
+    }
+
+    .discord-mock-btn.style-green { background: #248046; box-shadow: 0 3px 10px rgba(36, 128, 70, 0.35); }
+    .discord-mock-btn.style-blurple { background: #5865F2; box-shadow: 0 3px 10px rgba(88, 101, 242, 0.35); }
+    .discord-mock-btn.style-grey { background: #4E5058; box-shadow: 0 3px 10px rgba(78, 80, 88, 0.35); }
+    .discord-mock-btn.style-red { background: #DA373C; box-shadow: 0 3px 10px rgba(218, 55, 60, 0.35); }
 
     /* Checkbox line */
     .check-row {
@@ -1954,6 +2027,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </select>
         </div>
 
+        <div class="panel-preview-box" id="panelLivePreviewBox">
+          <div class="panel-preview-title" id="previewTitleText">SADO PROTECT • Script Panel</div>
+          <div class="panel-preview-desc" id="previewDescText">Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.</div>
+          <div class="panel-preview-buttons">
+            <button type="button" class="discord-mock-btn style-green" id="previewRedeemBtn">Redeem Key</button>
+            <button type="button" class="discord-mock-btn style-blurple" id="previewGetScriptBtn">Get Script</button>
+            <button type="button" class="discord-mock-btn style-grey" id="previewResetHwidBtn">Reset HWID</button>
+            <button type="button" class="discord-mock-btn style-grey" id="previewStatsBtn">Stats</button>
+          </div>
+        </div>
+
         <button class="btn btn-primary" id="savePanelConfigBtn" type="button">💾 Panel Dizaynını Yadda Saxla</button>
       </div>
     </section>
@@ -1985,6 +2069,48 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           .replace(/"/g, '&quot;');
       }
 
+      function applyMockButtonStyle(el, styleVal) {
+        if (!el) return;
+        const s = String(styleVal || 'grey').toLowerCase();
+        const mapped =
+          s === 'green' || s === 'success'
+            ? 'green'
+            : s === 'blurple' || s === 'blue' || s === 'primary'
+            ? 'blurple'
+            : s === 'red' || s === 'danger'
+            ? 'red'
+            : 'grey';
+        el.className = 'discord-mock-btn style-' + mapped;
+      }
+
+      function syncPanelPreview() {
+        const hex = (document.getElementById('cfgEmbedColor').value || '#5865F2').trim();
+        const box = document.getElementById('panelLivePreviewBox');
+        if (box) {
+          box.style.borderLeftColor = /^#[0-9A-Fa-f]{6}$/.test(hex) ? hex : '#5865F2';
+        }
+        document.getElementById('previewTitleText').textContent =
+          document.getElementById('cfgTitle').value.trim() || 'SADO PROTECT • Script Panel';
+        document.getElementById('previewDescText').textContent =
+          document.getElementById('cfgDescription').value.trim() ||
+          'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.';
+
+        const rBtn = document.getElementById('previewRedeemBtn');
+        const gBtn = document.getElementById('previewGetScriptBtn');
+        const hBtn = document.getElementById('previewResetHwidBtn');
+        const sBtn = document.getElementById('previewStatsBtn');
+
+        rBtn.textContent = document.getElementById('cfgRedeemLabel').value.trim() || 'Redeem Key';
+        gBtn.textContent = document.getElementById('cfgGetScriptLabel').value.trim() || 'Get Script';
+        hBtn.textContent = document.getElementById('cfgResetHwidLabel').value.trim() || 'Reset HWID';
+        sBtn.textContent = document.getElementById('cfgStatsLabel').value.trim() || 'Stats';
+
+        applyMockButtonStyle(rBtn, document.getElementById('cfgRedeemStyle').value);
+        applyMockButtonStyle(gBtn, document.getElementById('cfgGetScriptStyle').value);
+        applyMockButtonStyle(hBtn, document.getElementById('cfgResetHwidStyle').value);
+        applyMockButtonStyle(sBtn, document.getElementById('cfgStatsStyle').value);
+      }
+
       // 3 xətt menyu aç/bağla
       const drawer = document.getElementById('sideDrawer');
       const backdrop = document.getElementById('drawerBackdrop');
@@ -2013,16 +2139,37 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         });
       });
 
-      // Rəng seçici ilə HEX input sinxronizasiyası
+      // Rəng seçici ilə HEX input sinxronizasiyası və canlı önizləmə
       const colorPicker = document.getElementById('cfgColorPicker');
       const colorHexInput = document.getElementById('cfgEmbedColor');
       colorPicker.addEventListener('input', () => {
         colorHexInput.value = colorPicker.value.toUpperCase();
+        syncPanelPreview();
       });
       colorHexInput.addEventListener('input', () => {
         const v = colorHexInput.value.trim();
         if (/^#[0-9A-Fa-f]{6}$/.test(v)) {
           colorPicker.value = v;
+        }
+        syncPanelPreview();
+      });
+
+      [
+        'cfgTitle',
+        'cfgDescription',
+        'cfgRedeemLabel',
+        'cfgRedeemStyle',
+        'cfgGetScriptLabel',
+        'cfgGetScriptStyle',
+        'cfgResetHwidLabel',
+        'cfgResetHwidStyle',
+        'cfgStatsLabel',
+        'cfgStatsStyle',
+      ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.addEventListener('input', syncPanelPreview);
+          el.addEventListener('change', syncPanelPreview);
         }
       });
 
@@ -2151,6 +2298,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               document.getElementById('cfgResetHwidStyle').value = c.resetHwidStyle || 'grey';
               document.getElementById('cfgStatsLabel').value = c.statsLabel || 'Stats';
               document.getElementById('cfgStatsStyle').value = c.statsStyle || 'grey';
+              syncPanelPreview();
             }
           }
 
@@ -2518,6 +2666,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           body: JSON.stringify(payload),
         });
         const j = await r.json();
+        syncPanelPreview();
         showToast(j.message || 'Panel dizaynı yadda saxlanıldı!');
       });
 
