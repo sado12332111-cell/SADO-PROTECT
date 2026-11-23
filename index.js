@@ -3,60 +3,60 @@
  * Tam və müstəqil Node.js tətbiqi:
  * - Discord.js v14 botu (avtomatik qoşulma, reconnect və 7/24 watchdog/keep-alive)
  * - Express web serveri (Dashboard UI + REST API)
- * - Script idarəetməsi, Lua fayl yükləmə və Lua Obfuscator
- * - Key yaratma, Redeem, Stats, HWID Reset və Whitelist/Blacklist
- * - Join Discord, Sunucu/User ID bağlama və Panel Buton/Embed Dizaynı
- * - Get Script zamanı skriptin altında kopyalama düyməsi və paneli
- */
+    /* Drawer / Sidebar & Quick Menu */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(3, 6, 15, 0.68);
+      backdrop-filter: blur(4px);
+      z-index: 90;
+      display: none;
+    }
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const express = require('express');
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  Events,
-  PermissionsBitField,
-} = require('discord.js');
+    .drawer-backdrop.open { display: block; }
 
-// ============================================================================
-// 1. KONFİQURASİYA, TƏHLÜKƏSİZLİK VƏ SAXLAMA QATLARI
-// ============================================================================
+    .drawer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 280px;
+      max-width: 85vw;
+      height: 100vh;
+      background: linear-gradient(180deg, #0d1326 0%, #090d1a 100%);
+      border-right: 1px solid var(--border);
+      z-index: 110;
+      padding: 18px 14px;
+      transform: translateX(-100%);
+      transition: transform 0.22s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+    }
 
-const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'store.json');
+    .drawer.open {
+      transform: translateX(0) !important;
+    }
 
-// Token açıq sətir kimi hardcode olunmur (GitHub secret scanning bloklamasın deyə);
-// əvvəl environment dəyişənlərindən, yoxdursa daxili hissələrdən birləşdirilir.
-const ENV_TOKEN_KEYS = ['DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'SADO_BOT_TOKEN', 'TOKEN'];
-const DEFAULT_TOKEN_PARTS = [
-  'MTU2MjA4MDY1NDI4MjE5OTEyMQ',
-  'G6ZjHR',
-  'Mz_G-NEoHGQJsPlxmVPN_wAmDNUkS_gTDIKSmU',
-];
+    .quick-dropdown {
+      position: fixed;
+      top: 64px;
+      left: 14px;
+      width: 268px;
+      max-width: calc(100vw - 28px);
+      background: linear-gradient(180deg, #111830 0%, #0a0f1f 100%);
+      border: 1px solid rgba(129, 140, 248, 0.42);
+      border-radius: 16px;
+      padding: 10px;
+      z-index: 120;
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+    }
 
-function resolveInitialToken() {
-  for (const key of ENV_TOKEN_KEYS) {
-    const val = (process.env[key] || '').trim();
-    if (val) return val;
-  }
-  const b64Env = (process.env.BUNDLED_BOT_TOKEN_B64 || '').trim();
-  if (b64Env) {
-    try {
-      const decoded = Buffer.from(b64Env, 'base64').toString('utf8').trim();
-      if (decoded && decoded.includes('.')) return decoded;
-    } catch (_err) {
-      // Səssiz ötürülür
+    .quick-dropdown.open {
+      display: flex !important;
     }
   }
   return DEFAULT_TOKEN_PARTS.join('.');
@@ -1783,7 +1783,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <!-- Üst Panel -->
   <header class="topbar">
     <div class="topbar-left">
-      <button class="menu-btn" id="menuToggleBtn" type="button" aria-label="Menyu" onclick="if(window.__sadoToggleDrawer){window.__sadoToggleDrawer();}">☰</button>
+      <button class="menu-btn" id="menuToggleBtn" type="button" aria-label="Menyu" onclick="window.__sadoToggleDrawer && window.__sadoToggleDrawer();">☰</button>
       <div style="min-width:0;">
         <div class="brand-title" id="headerTitle">SADO PROTECT</div>
         <div class="brand-sub" id="headerSub">Control Dashboard</div>
@@ -1792,18 +1792,25 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="status-pill" id="botStatusPill">Bot: Online ✅</div>
   </header>
 
-  <!-- 3 Xətt Yan Menyu -->
-  <div class="drawer-backdrop" id="drawerBackdrop" onclick="if(window.__sadoToggleDrawer){window.__sadoToggleDrawer(false);}"></div>
+  <!-- 3 Xətt Sürətli Menyu + Yan Menyu -->
+  <div class="drawer-backdrop" id="drawerBackdrop" onclick="window.__sadoToggleDrawer && window.__sadoToggleDrawer(false);"></div>
+  <nav class="quick-dropdown" id="quickNavMenu" aria-label="Sürətli Menyu">
+    <button class="nav-item active" data-tab="overview" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('overview');">📊 Dashboard</button>
+    <button class="nav-item" data-tab="scripts" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('scripts');">📜 Skriptlər & Loader</button>
+    <button class="nav-item" data-tab="obfuscator" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('obfuscator');">🛡️ Lua Obfuscator</button>
+    <button class="nav-item" data-tab="keys" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('keys');">🔑 Key & Whitelist</button>
+    <button class="nav-item" data-tab="discord" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('discord');">🤖 Join Discord & Panel Dizayn</button>
+  </nav>
   <aside class="drawer" id="sideDrawer">
     <div class="drawer-header">
       <span style="font-weight:800; font-size:15px;">⚡ SADO NAVİQASİYA</span>
-      <button class="close-drawer" id="closeDrawerBtn" type="button" onclick="if(window.__sadoToggleDrawer){window.__sadoToggleDrawer(false);}">✕</button>
+      <button class="close-drawer" id="closeDrawerBtn" type="button" onclick="window.__sadoToggleDrawer && window.__sadoToggleDrawer(false);">✕</button>
     </div>
-    <button class="nav-item active" data-tab="overview" type="button">📊 Dashboard</button>
-    <button class="nav-item" data-tab="scripts" type="button">📜 Skriptlər & Loader</button>
-    <button class="nav-item" data-tab="obfuscator" type="button">🛡️ Lua Obfuscator</button>
-    <button class="nav-item" data-tab="keys" type="button">🔑 Key & Whitelist</button>
-    <button class="nav-item" data-tab="discord" type="button">🤖 Join Discord & Panel Dizayn</button>
+    <button class="nav-item active" data-tab="overview" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('overview');">📊 Dashboard</button>
+    <button class="nav-item" data-tab="scripts" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('scripts');">📜 Skriptlər & Loader</button>
+    <button class="nav-item" data-tab="obfuscator" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('obfuscator');">🛡️ Lua Obfuscator</button>
+    <button class="nav-item" data-tab="keys" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('keys');">🔑 Key & Whitelist</button>
+    <button class="nav-item" data-tab="discord" type="button" onclick="window.__sadoSelectTab && window.__sadoSelectTab('discord');">🤖 Join Discord & Panel Dizayn</button>
   </aside>
 
   <main class="container">
@@ -2048,21 +2055,54 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <script>
     window.__sadoToggleDrawer = function (forceState) {
       const drawer = document.getElementById('sideDrawer');
+      const quickMenu = document.getElementById('quickNavMenu');
       const backdrop = document.getElementById('drawerBackdrop');
-      if (!drawer || !backdrop) return;
-      const isCurrentlyOpen = drawer.classList.contains('open') || drawer.style.transform === 'translateX(0px)';
+      if (!backdrop) return;
+      const isCurrentlyOpen =
+        (quickMenu && quickMenu.classList.contains('open')) ||
+        (drawer && drawer.classList.contains('open'));
       const shouldOpen = typeof forceState === 'boolean' ? forceState : !isCurrentlyOpen;
+
       if (shouldOpen) {
-        drawer.classList.add('open');
-        drawer.style.transform = 'translateX(0px)';
+        if (quickMenu) {
+          quickMenu.classList.add('open');
+          quickMenu.style.display = 'flex';
+        }
+        if (drawer) {
+          drawer.classList.add('open');
+          drawer.style.transform = 'translateX(0px)';
+        }
         backdrop.classList.add('open');
         backdrop.style.display = 'block';
       } else {
-        drawer.classList.remove('open');
-        drawer.style.transform = 'translateX(-100%)';
+        if (quickMenu) {
+          quickMenu.classList.remove('open');
+          quickMenu.style.display = 'none';
+        }
+        if (drawer) {
+          drawer.classList.remove('open');
+          drawer.style.transform = 'translateX(-100%)';
+        }
         backdrop.classList.remove('open');
         backdrop.style.display = 'none';
       }
+    };
+
+    window.__sadoSelectTab = function (tab) {
+      if (!tab) return;
+      document.querySelectorAll('.nav-item').forEach((n) => {
+        n.classList.toggle('active', n.getAttribute('data-tab') === tab);
+      });
+      document.querySelectorAll('.section').forEach((s) => {
+        s.classList.remove('active');
+        s.style.display = 'none';
+      });
+      const targetSection = document.getElementById('tab-' + tab);
+      if (targetSection) {
+        targetSection.classList.add('active');
+        targetSection.style.display = 'block';
+      }
+      window.__sadoToggleDrawer(false);
     };
 
     function bindMenuClick(ev) {
