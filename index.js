@@ -410,12 +410,6 @@ function startWatchdog() {
     }
   }, 60000);
 }
-      }
-    } catch (err) {
-      console.error('[WATCHDOG] Xəta:', err.message);
-    }
-  }, 15000);
-}
 
 async function registerSlashCommands() {
   if (!BOT_TOKEN) return;
