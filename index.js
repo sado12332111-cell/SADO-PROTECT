@@ -550,38 +550,71 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'panel') {
-        const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
-        const customTitle = String(interaction.options.getString('title') || '').trim();
-        const sc =
-          state.scripts.find((s) => s.id === chosenScriptArg || s.name.toLowerCase() === chosenScriptArg.toLowerCase()) ||
-          state.scripts[0];
+        try {
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ ephemeral: true });
+          }
 
-        if (!sc) {
-          await interaction.reply({
-            content: '❌ Saytda hələ heç bir skript yaradılmayıb. Əvvəl Dashboard-dan skript yaradın.',
-            ephemeral: true,
+          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
+          const customTitle = String(interaction.options.getString('title') || '').trim();
+          const sc =
+            state.scripts.find(
+              (s) =>
+                String(s.id) === chosenScriptArg ||
+                String(s.name || '').toLowerCase() === chosenScriptArg.toLowerCase()
+            ) || state.scripts[0];
+
+          if (!sc) {
+            await interaction.editReply({
+              content: '❌ Saytda hələ heç bir skript yaradılmayıb. Əvvəl Dashboard-dan skript yaradın.',
+            });
+            return;
+          }
+
+          let targetChannel = interaction.channel;
+          if (!targetChannel || typeof targetChannel.send !== 'function') {
+            if (interaction.channelId) {
+              targetChannel = await client.channels.fetch(interaction.channelId).catch(() => null);
+            }
+          }
+
+          if (!targetChannel || typeof targetChannel.send !== 'function') {
+            await interaction.editReply({
+              content: '❌ Bu kanalda mesaj göndərmək mümkün olmadı.',
+            });
+            return;
+          }
+
+          const overrideCfg = customTitle ? { title: customTitle } : null;
+          const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
+          const sentMsg = await targetChannel.send({ embeds: [embed], components: [row] });
+
+          state.panels.push({
+            id: generateId('pnl'),
+            guildId: interaction.guildId || state.activeGuildId || '',
+            channelId: targetChannel.id || interaction.channelId,
+            messageId: sentMsg.id,
+            scriptId: sc.id,
+            createdAt: new Date().toISOString(),
           });
-          return;
+          await saveStore();
+
+          await interaction.editReply({
+            content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
+          });
+        } catch (panelErr) {
+          console.error('[SLASH /panel ERROR]', panelErr && panelErr.message ? panelErr.message : panelErr);
+          const errMsg = `❌ Panel göndərilmədi: ${(panelErr && panelErr.message) || 'İcazə və ya kanal xətası'}`.slice(0, 1900);
+          try {
+            if (interaction.deferred || interaction.replied) {
+              await interaction.editReply({ content: errMsg });
+            } else {
+              await interaction.reply({ content: errMsg, ephemeral: true });
+            }
+          } catch (_replyErr) {
+            // Səssiz ötürülür
+          }
         }
-
-        const overrideCfg = customTitle ? { title: customTitle } : null;
-        const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
-        const sentMsg = await interaction.channel.send({ embeds: [embed], components: [row] });
-
-        state.panels.push({
-          id: generateId('pnl'),
-          guildId: interaction.guildId || state.activeGuildId || '',
-          channelId: interaction.channelId,
-          messageId: sentMsg.id,
-          scriptId: sc.id,
-          createdAt: new Date().toISOString(),
-        });
-        await saveStore();
-
-        await interaction.reply({
-          content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
-          ephemeral: true,
-        });
       }
       return;
     }
