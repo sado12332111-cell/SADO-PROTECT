@@ -2481,7 +2481,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const code = document.getElementById('newScriptCode').value || uploadedFileText;
         const obfuscate = document.getElementById('newScriptObfuscate').checked;
         const fileEl = document.getElementById('newScriptFileInput');
-        const fileName = fileEl.files && fileEl.files[0] ? fileEl.files[0].name : `${name || 'script'}.lua`;
+        const fileName =
+          fileEl.files && fileEl.files[0]
+            ? fileEl.files[0].name
+            : (name || 'script') + '.lua';
 
         const r = await fetch('/api/scripts', {
           method: 'POST',
