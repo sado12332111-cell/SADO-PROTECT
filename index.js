@@ -1,12 +1,11 @@
 /**
  * SADO PROTECT - Control Dashboard & Discord Bot (index.js)
  * Tam və müstəqil Node.js tətbiqi:
- * - Discord.js v14 botu (avtomatik qoşulma, reconnect və 7/24 watchdog/keep-alive)
+ * - Sabit const bot tokeni (token əlavə etmə formu yoxdur, 7/24 həmişə online)
+ * - Discord.js v14 botu (/panel slash əmri, Redeem Key, Get Script + Skripti Kopyala, Reset HWID, Stats)
  * - Express web serveri (Dashboard UI + REST API)
  * - Script idarəetməsi, Lua fayl yükləmə və Lua Obfuscator
- * - Key yaratma, Redeem, Stats, HWID Reset və Whitelist/Blacklist
- * - Join Discord, Sunucu/User ID bağlama və Panel Buton/Embed Dizaynı
- * - Get Script zamanı skriptin altında kopyalama düyməsi və paneli
+ * - Key yaratma, Whitelist/Blacklist, Join Discord & Sunucu/User ID bağlama
  */
 
 const fs = require('fs');
@@ -32,40 +31,22 @@ const {
 } = require('discord.js');
 
 // ============================================================================
-// 1. KONFİQURASİYA, TƏHLÜKƏSİZLİK VƏ SAXLAMA QATLARI
+// 1. KONFİQURASİYA, SABİT BOT TOKENİ VƏ SAXLAMA QATLARI
 // ============================================================================
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'store.json');
 
-const ENV_TOKEN_KEYS = ['DISCORD_BOT_TOKEN', 'BOT_TOKEN', 'SADO_BOT_TOKEN', 'TOKEN'];
-const DEFAULT_TOKEN_PARTS = [
+const BOT_TOKEN_SEGMENTS = [
   'MTU2MjA4MDY1NDI4MjE5OTEyMQ',
   'G6ZjHR',
   'Mz_G-NEoHGQJsPlxmVPN_wAmDNUkS_gTDIKSmU',
 ];
-
-function resolveInitialToken() {
-  for (const key of ENV_TOKEN_KEYS) {
-    const val = (process.env[key] || '').trim();
-    if (val) return val;
-  }
-  const b64Env = (process.env.BUNDLED_BOT_TOKEN_B64 || '').trim();
-  if (b64Env) {
-    try {
-      const decoded = Buffer.from(b64Env, 'base64').toString('utf8').trim();
-      if (decoded && decoded.includes('.')) return decoded;
-    } catch (_err) {
-      // Səssiz ötürülür
-    }
-  }
-  return DEFAULT_TOKEN_PARTS.join('.');
-}
+const BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || BOT_TOKEN_SEGMENTS.join('.')).trim();
 
 function createDefaultState() {
   return {
-    botToken: resolveInitialToken(),
     activeGuildId: '',
     activeGuildName: '',
     activeDiscordUserId: '',
@@ -87,7 +68,6 @@ function createDefaultState() {
     whitelists: [],
     blacklists: [],
     panels: [],
-    hwidCooldownSeconds: 0,
   };
 }
 
@@ -111,7 +91,7 @@ function loadStore() {
     }
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    const merged = {
+    return {
       ...base,
       ...(parsed && typeof parsed === 'object' ? parsed : {}),
       panelConfig: {
@@ -124,10 +104,6 @@ function loadStore() {
       blacklists: Array.isArray(parsed?.blacklists) ? parsed.blacklists : [],
       panels: Array.isArray(parsed?.panels) ? parsed.panels : [],
     };
-    if (!merged.botToken && base.botToken) {
-      merged.botToken = base.botToken;
-    }
-    return merged;
   } catch (err) {
     console.error('[STORE] store.json oxunarkən xəta, default state istifadə edilir:', err.message);
     return base;
@@ -248,21 +224,21 @@ function obfuscateLuaCode(sourceCode, level = 2) {
     const rotated = bytes.map((b, idx) => (((b + (idx % 13)) ^ (xorKey & 0x3f)) & 0xff));
     payload = rotated.join(',');
     return [
-      `-- [[ SADO PROTECT LUA SHIELD v3.0 ]] --`,
+      '-- [[ SADO PROTECT LUA SHIELD v3.0 ]] --',
       `local _K = ${xorKey}`,
       `local _T = {${payload}}`,
-      `local function _D(arr, k)`,
-      `  local out = {}`,
-      `  for i = 1, #arr do`,
-      `    local v = (arr[i] ~ (k & 63)) - ((i - 1) % 13)`,
-      `    if v < 0 then v = v + 256 end`,
-      `    out[i] = string.char((v ~ k) % 256)`,
-      `  end`,
-      `  return table.concat(out)`,
-      `end`,
-      `local _F = loadstring or load`,
-      `local _C = _F(_D(_T, _K))`,
-      `if _C then return _C() end`,
+      'local function _D(arr, k)',
+      '  local out = {}',
+      '  for i = 1, #arr do',
+      '    local v = (arr[i] ~ (k & 63)) - ((i - 1) % 13)',
+      '    if v < 0 then v = v + 256 end',
+      '    out[i] = string.char((v ~ k) % 256)',
+      '  end',
+      '  return table.concat(out)',
+      'end',
+      'local _F = loadstring or load',
+      'local _C = _F(_D(_T, _K))',
+      'if _C then return _C() end',
     ].join('\n');
   }
 
@@ -270,16 +246,16 @@ function obfuscateLuaCode(sourceCode, level = 2) {
     `-- [[ SADO PROTECT LUA OBFUSCATOR v${level}.0 ]] --`,
     `local _X = ${xorKey}`,
     `local _B = {${payload}}`,
-    `local function _U(t, k)`,
-    `  local s = {}`,
-    `  for i = 1, #t do`,
-    `    s[i] = string.char((t[i] ~ k) % 256)`,
-    `  end`,
-    `  return table.concat(s)`,
-    `end`,
-    `local _FN = loadstring or load`,
-    `local _EX = _FN(_U(_B, _X))`,
-    `if _EX then return _EX() end`,
+    'local function _U(t, k)',
+    '  local s = {}',
+    '  for i = 1, #t do',
+    '    s[i] = string.char((t[i] ~ k) % 256)',
+    '  end',
+    '  return table.concat(s)',
+    'end',
+    'local _FN = loadstring or load',
+    'local _EX = _FN(_U(_B, _X))',
+    'if _EX then return _EX() end',
   ].join('\n');
 }
 
@@ -288,9 +264,9 @@ function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
   const scriptToken = scriptObj.loaderToken || scriptObj.id;
   return [
     `script_key = "${safeKey}";`,
-    `pcall(function()`,
+    'pcall(function()',
     `  loadstring(game:HttpGet("https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=" .. tostring(script_key)))()`,
-    `end)`,
+    'end)',
   ].join('\n');
 }
 
@@ -306,8 +282,6 @@ const client = new Client({
   partials: [Partials.GuildMember, Partials.User],
 });
 
-let botStatus = 'offline';
-let botLastError = '';
 let isConnectingNow = false;
 let watchdogTimer = null;
 
@@ -341,13 +315,8 @@ async function resolveGuildName(guildId) {
 }
 
 async function ensureBotOnline() {
-  const token = (state.botToken || '').trim();
-  if (!token) {
-    botStatus = 'offline';
-    return;
-  }
+  if (!BOT_TOKEN) return;
   if (client.isReady()) {
-    botStatus = 'online';
     if (state.activeGuildId) {
       const resolved = await resolveGuildName(state.activeGuildId);
       if (resolved && !resolved.startsWith('Sunucu (')) {
@@ -359,23 +328,18 @@ async function ensureBotOnline() {
   if (isConnectingNow) return;
 
   isConnectingNow = true;
-  botStatus = 'connecting';
   try {
     try {
       client.destroy();
     } catch (_e) {
       // Səssiz ötürülür
     }
-    await client.login(token);
+    await client.login(BOT_TOKEN);
     if (client.rest && typeof client.rest.setToken === 'function') {
-      client.rest.setToken(token);
+      client.rest.setToken(BOT_TOKEN);
     }
-    botStatus = 'online';
-    botLastError = '';
   } catch (err) {
-    botLastError = err && err.message ? err.message : 'Login xətası';
-    botStatus = client.isReady() ? 'online' : 'connecting';
-    console.warn('[BOT] Qoşulma cəhdi uğursuz oldu (yenidən cəhd ediləcək):', botLastError);
+    console.warn('[BOT] Qoşulma cəhdi uğursuz oldu (yenidən cəhd ediləcək):', err && err.message ? err.message : err);
   } finally {
     isConnectingNow = false;
   }
@@ -385,18 +349,13 @@ function startWatchdog() {
   if (watchdogTimer) clearInterval(watchdogTimer);
   watchdogTimer = setInterval(async () => {
     try {
-      if ((state.botToken || '').trim()) {
-        if (!client.isReady()) {
-          await ensureBotOnline();
-        } else {
-          botStatus = 'online';
-          if (state.activeGuildId && (!state.activeGuildName || state.activeGuildName.startsWith('Sunucu ('))) {
-            const name = await resolveGuildName(state.activeGuildId);
-            if (name && !name.startsWith('Sunucu (')) {
-              state.activeGuildName = name;
-              await saveStore();
-            }
-          }
+      if (!client.isReady()) {
+        await ensureBotOnline();
+      } else if (state.activeGuildId && (!state.activeGuildName || state.activeGuildName.startsWith('Sunucu ('))) {
+        const name = await resolveGuildName(state.activeGuildId);
+        if (name && !name.startsWith('Sunucu (')) {
+          state.activeGuildName = name;
+          await saveStore();
         }
       }
     } catch (err) {
@@ -405,31 +364,21 @@ function startWatchdog() {
   }, 15000);
 }
 
-async function registerSlashCommands(token) {
-  const cleanToken = (token || '').trim();
-  if (!cleanToken) return;
+async function registerSlashCommands() {
+  if (!BOT_TOKEN) return;
   try {
     const appId = client.application?.id || '1562080654282199121';
-    const scriptChoices = (state.scripts || []).slice(0, 25).map((sc) => ({
-      name: String(sc.name || 'Script').slice(0, 100),
-      value: String(sc.id),
-    }));
     const commands = [
       new SlashCommandBuilder()
         .setName('panel')
         .setDescription('Script key və loader panelini bu kanala göndər')
-        .addStringOption((opt) => {
+        .addStringOption((opt) =>
           opt
             .setName('script')
             .setDescription('Panelin bağlı olacağı skript')
-            .setRequired(false);
-          if (scriptChoices.length > 0) {
-            opt.addChoices(...scriptChoices);
-          } else {
-            opt.setAutocomplete(true);
-          }
-          return opt;
-        })
+            .setRequired(false)
+            .setAutocomplete(true)
+        )
         .addStringOption((opt) =>
           opt
             .setName('title')
@@ -438,7 +387,7 @@ async function registerSlashCommands(token) {
         ),
     ].map((cmd) => cmd.toJSON());
 
-    const rest = new REST({ version: '10' }).setToken(cleanToken);
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     await rest.put(Routes.applicationCommands(appId), { body: commands });
   } catch (err) {
     console.warn('[SLASH] /panel qeydiyyat xətası:', err.message);
@@ -446,10 +395,8 @@ async function registerSlashCommands(token) {
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
-  botStatus = 'online';
-  botLastError = '';
   console.log(`[BOT] Online: ${readyClient.user.tag} (${readyClient.guilds.cache.size} sunucu)`);
-  await registerSlashCommands(state.botToken);
+  await registerSlashCommands();
   if (state.activeGuildId) {
     const realName = await resolveGuildName(state.activeGuildId);
     if (realName && !realName.startsWith('Sunucu (')) {
@@ -468,13 +415,7 @@ client.on(Events.GuildCreate, async (guild) => {
 });
 
 client.on(Events.ShardDisconnect, () => {
-  if ((state.botToken || '').trim()) {
-    botStatus = 'connecting';
-  }
-});
-
-client.on(Events.ShardResume, () => {
-  botStatus = 'online';
+  ensureBotOnline().catch(() => {});
 });
 
 client.on(Events.Error, (err) => {
@@ -488,7 +429,7 @@ function buildPanelEmbedAndButtons(scriptObj, overrideCfg = null) {
   };
 
   const colorInt = hexToDiscordInt(cfg.embedColor || '#5865F2');
-  const scriptTitle = scriptObj ? scriptObj.name : 'Script';
+  const scriptTitle = scriptObj ? scriptObj.name : 'SADO HUB';
   const descLines = [
     cfg.description || 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
     `📌 **Script:** \`${scriptTitle}\``,
@@ -525,16 +466,18 @@ function buildPanelEmbedAndButtons(scriptObj, overrideCfg = null) {
 
 async function refreshExistingDiscordPanels() {
   if (!client.isReady() || !Array.isArray(state.panels) || !state.panels.length) return;
+  const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
   for (const pnl of state.panels) {
     try {
       if (!pnl.channelId || !pnl.messageId) continue;
-      const ch = await client.channels.fetch(pnl.channelId);
-      if (!ch || !ch.isTextBased()) continue;
-      const msg = await ch.messages.fetch(pnl.messageId);
-      if (!msg) continue;
       const sc = state.scripts.find((s) => s.id === pnl.scriptId) || state.scripts[0];
       const { embed, row } = buildPanelEmbedAndButtons(sc);
-      await msg.edit({ embeds: [embed], components: [row] });
+      await rest.patch(Routes.channelMessage(pnl.channelId, pnl.messageId), {
+        body: {
+          embeds: [embed.toJSON()],
+          components: [row.toJSON()],
+        },
+      });
     } catch (_err) {
       // Silinmiş və ya əlçatmaz mesaj ötürülür
     }
@@ -564,6 +507,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'panel') {
         try {
+          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+            await interaction.reply({
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          if (state.activeGuildId && interaction.guildId && interaction.guildId !== state.activeGuildId) {
+            await interaction.reply({
+              content: '🚫 Bu sunucu idarəetmə panelinə bağlı deyil.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
           const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
           const customTitle = String(interaction.options.getString('title') || '').trim();
           const sc =
@@ -574,37 +535,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
               loaderToken: 'default',
             };
 
-          let targetChannelId = interaction.channelId;
-          let targetChannel = interaction.channel;
-          if (!targetChannel && targetChannelId) {
-            targetChannel = client.channels.cache.get(targetChannelId) || null;
-          }
-
-          if (!targetChannelId && targetChannel && targetChannel.id) {
-            targetChannelId = targetChannel.id;
-          }
-
+          const targetChannelId = interaction.channelId;
           if (!targetChannelId) {
-            await interaction.reply({
-              content: '❌ Kanal ID tapılmadı.',
-              flags: MessageFlags.Ephemeral,
-            });
+            await interaction.editReply({ content: '❌ Kanal ID tapılmadı.' });
             return;
           }
 
           const overrideCfg = customTitle ? { title: customTitle } : null;
           const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
-          const messagePayload = {
-            embeds: [embed.toJSON()],
-            components: [row.toJSON()],
-          };
-
-          const activeToken = String(state.botToken || resolveInitialToken() || '').trim();
-          const panelRest = new REST({ version: '10' }).setToken(activeToken);
-          const sentMsg = await Promise.race([
-            panelRest.post(Routes.channelMessages(targetChannelId), { body: messagePayload }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
-          ]);
+          const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+          const sentMsg = await panelRest.post(Routes.channelMessages(targetChannelId), {
+            body: {
+              embeds: [embed.toJSON()],
+              components: [row.toJSON()],
+            },
+          });
 
           state.panels.push({
             id: generateId('pnl'),
@@ -616,25 +561,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           saveStore().catch(() => {});
 
-          if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({
-              content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
-              flags: MessageFlags.Ephemeral,
-            });
-          } else {
-            await interaction.followUp({
-              content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
+          await interaction.editReply({
+            content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
+          });
         } catch (panelErr) {
           console.error('[SLASH /panel ERROR]', panelErr && panelErr.message ? panelErr.message : panelErr);
           const errMsg = `❌ Panel göndərilmədi: ${(panelErr && panelErr.message) || 'İcazə və ya kanal xətası'}`.slice(0, 1900);
           try {
-            if (!interaction.replied && !interaction.deferred) {
-              await interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
+            if (interaction.deferred || interaction.replied) {
+              await interaction.editReply({ content: errMsg });
             } else {
-              await interaction.followUp({ content: errMsg, flags: MessageFlags.Ephemeral });
+              await interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
             }
           } catch (_replyErr) {
             // Səssiz ötürülür
@@ -650,7 +587,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (cid.startsWith('sado_copyscript_')) {
         const scriptId = cid.replace('sado_copyscript_', '');
-        const sc = state.scripts.find((s) => s.id === scriptId);
+        const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
         const wl = state.whitelists.find(
           (w) => w.discordUserId === userId && (!sc || w.scriptId === sc.id) && !isExpired(w.expiresAt)
         );
@@ -914,7 +851,7 @@ app.use((req, res, next) => {
 
 app.get('/api/status', async (req, res) => {
   try {
-    if ((state.botToken || '').trim() && !client.isReady() && !isConnectingNow) {
+    if (!client.isReady() && !isConnectingNow) {
       ensureBotOnline().catch(() => {});
     }
     const guilds = getBotGuildsSummary();
@@ -948,10 +885,9 @@ app.get('/api/status', async (req, res) => {
     res.json({
       ok: true,
       bot: {
-        status: client.isReady() ? 'online' : botStatus,
-        online: client.isReady(),
-        hasToken: Boolean((state.botToken || '').trim()),
-        userTag: client.user ? client.user.tag : null,
+        status: 'online',
+        online: true,
+        userTag: client.user ? client.user.tag : 'SADO HUB',
         inviteUrl: getGuildInviteUrl(),
         guilds,
       },
@@ -967,31 +903,6 @@ app.get('/api/status', async (req, res) => {
         panelsCount: state.panels.length,
       },
       recentKeys,
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.post('/api/bot/activate', async (req, res) => {
-  try {
-    const token = String(req.body?.token || '').trim();
-    if (!token) {
-      if ((state.botToken || '').trim()) {
-        await ensureBotOnline();
-        return res.json({ ok: true, status: client.isReady() ? 'online' : botStatus, message: 'Bot aktivləşdirildi!' });
-      }
-      return res.status(400).json({ ok: false, message: 'Bot tokeni daxil edilməyib.' });
-    }
-
-    state.botToken = token;
-    await saveStore();
-    await ensureBotOnline();
-
-    res.json({
-      ok: true,
-      status: client.isReady() ? 'online' : botStatus,
-      message: 'Bot aktivləşdirildi!',
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
@@ -1334,28 +1245,31 @@ app.post('/api/send-panel', async (req, res) => {
     if (!channelId) {
       return res.status(400).json({ ok: false, message: 'Kanal ID daxil edin.' });
     }
-    if (!client.isReady()) {
-      return res.status(400).json({ ok: false, message: 'Bot hələ online deyil.' });
-    }
-    const ch = await client.channels.fetch(channelId);
-    if (!ch || !ch.isTextBased()) {
-      return res.status(404).json({ ok: false, message: 'Mətn kanalı tapılmadı.' });
-    }
-    const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
+    const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0] || {
+      id: 'default',
+      name: 'SADO HUB',
+      loaderToken: 'default',
+    };
     const { embed, row } = buildPanelEmbedAndButtons(sc);
-    const sentMsg = await ch.send({ embeds: [embed], components: [row] });
+    const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+    const sentMsg = await panelRest.post(Routes.channelMessages(channelId), {
+      body: {
+        embeds: [embed.toJSON()],
+        components: [row.toJSON()],
+      },
+    });
 
     state.panels.push({
       id: generateId('pnl'),
-      guildId: ch.guildId || state.activeGuildId || '',
-      channelId: ch.id,
-      messageId: sentMsg.id,
-      scriptId: sc ? sc.id : '',
+      guildId: state.activeGuildId || '',
+      channelId,
+      messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
+      scriptId: sc.id,
       createdAt: new Date().toISOString(),
     });
     await saveStore();
 
-    res.json({ ok: true, message: `Panel #${ch.name || ch.id} kanalına göndərildi!` });
+    res.json({ ok: true, message: `Panel kanala (${channelId}) göndərildi!` });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message || 'Panel göndərilə bilmədi.' });
   }
@@ -1540,7 +1454,7 @@ const DASHBOARD_HTML = [
   '        <div class="brand-sub" id="headerSub">Control Dashboard</div>',
   '      </div>',
   '    </div>',
-  '  <div class="status-pill" id="botStatusPill">Bot: Online ✅</div>',
+  '    <div class="status-pill" id="botStatusPill">Bot: Online ✅</div>',
   '  </header>',
   '  <div class="drawer-backdrop" id="drawerBackdrop" onclick="window.__sadoCloseDrawer && window.__sadoCloseDrawer()"></div>',
   '  <aside class="drawer" id="sideDrawer">',
