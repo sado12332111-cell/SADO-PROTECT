@@ -27,6 +27,9 @@ const PUBLIC_BASE_URL = String(
         process.env.RENDER_EXTERNAL_URL ||
         `http://127.0.0.1:${PORT}`
 ).replace(/\/+$/, '');
+const DISCORD_CLIENT_ID = String(process.env.DISCORD_CLIENT_ID || '1562080654282199121').trim();
+const DISCORD_CLIENT_SECRET = String(process.env.DISCORD_CLIENT_SECRET || '').trim();
+const BOT_INVITE_URL = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(DISCORD_CLIENT_ID)}&permissions=2147600384&integration_type=0&scope=applications.commands+bot`;
 const PANEL_TOKEN = String(process.env.PANEL_TOKEN || '').trim();
 const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || 4 * 60 * 1000);
 
@@ -513,11 +516,36 @@ function getScriptsForWorkspace(wsId) {
 function getScriptsForDiscordUser(discordUserId, guildId = null) {
     const gid = String(guildId || '').trim();
     const uid = String(discordUserId || '').trim();
+    const allScripts = Array.isArray(state.scripts) ? state.scripts : [];
     const linkedWsId = getWorkspaceIdForDiscordUser(uid, gid);
+    const matched = [];
+    const seen = new Set();
+
+    const addIfMatch = (s) => {
+        if (!s || !s.id || seen.has(s.id)) return;
+        seen.add(s.id);
+        matched.push(s);
+    };
+
     if (linkedWsId) {
-        const wsScripts = state.scripts.filter((s) => s.ownerWorkspaceId === linkedWsId);
-        if (wsScripts.length > 0) return wsScripts;
+        for (const s of allScripts) {
+            if (s.ownerWorkspaceId === linkedWsId) addIfMatch(s);
+        }
     }
+    if (gid) {
+        for (const s of allScripts) {
+            if (s.ownerGuildId && String(s.ownerGuildId) === gid) addIfMatch(s);
+        }
+    }
+    if (uid) {
+        for (const s of allScripts) {
+            if (s.ownerDiscordId && String(s.ownerDiscordId) === uid) addIfMatch(s);
+        }
+    }
+
+    if (matched.length > 0) return matched;
+    return allScripts;
+}
     if (gid) {
         const byGuild = state.scripts.filter((s) => s.ownerGuildId && String(s.ownerGuildId) === gid);
         if (byGuild.length > 0) return byGuild;
@@ -1237,7 +1265,13 @@ function attachBotHandlers(botClient) {
             if (interaction.isAutocomplete()) {
                 const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
                 const userScripts = getScriptsForDiscordUser(interaction.user.id, interaction.guildId);
-                const sourceList = userScripts.length > 0 ? userScripts : state.scripts;
+                const sourceList = userScripts.length > 0 ? userScripts : (state.scripts || []);
+                if (sourceList.length === 0) {
+                    await interaction.respond([
+                        { name: 'Saytda hələ skript yaradılmayıb (Əvvəlcə saytdan yaradın)', value: '__NO_SCRIPTS__' }
+                    ]).catch(() => {});
+                    return;
+                }
                 const matches = sourceList.filter(
                     (s) =>
                         !focused ||
@@ -1246,22 +1280,36 @@ function attachBotHandlers(botClient) {
                 );
                 const pool = matches.length > 0 ? matches : sourceList;
                 const choices = pool.slice(0, 25).map((s) => ({
-                    name: String(s.name || s.id || 'Script').slice(0, 100),
+                    name: `${String(s.name || 'Script').slice(0, 75)} (${String(s.id).slice(0, 18)})`,
                     value: String(s.id)
                 }));
                 await interaction.respond(choices).catch(() => {});
                 return;
             }
-
-            if (interaction.isChatInputCommand()) {
-                await interaction.deferReply({ ephemeral: true });
-
-                if (!hasCommandPermission(interaction)) {
-                    await interaction.editReply({
-                        content: '❌ Bu əmri işlətmək üçün icazəniz yoxdur (Top 2 rol və ya təyin edilmiş rol lazımdır).'
-                    });
-                    return;
-                }
+        return null;
+    }
+    if (explicitQuery && explicitQuery !== '__NO_SCRIPTS__') {
+        const q = String(explicitQuery || '').trim().toLowerCase();
+        const found =
+            userScripts.find((s) => s.id.toLowerCase() === q) ||
+            userScripts.find((s) => s.name.toLowerCase() === q) ||
+            userScripts.find((s) => s.name.toLowerCase().includes(q)) ||
+            (state.scripts || []).find((s) => s.id.toLowerCase() === q || s.name.toLowerCase() === q) ||
+            null;
+        if (!found) {
+            const msg = `❌ "${explicitQuery}" adlı skript tapılmadı.`;
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({ content: msg });
+            } else {
+                await interaction.reply({ content: msg, ephemeral: true });
+            }
+            return null;
+        }
+        return found;
+    }
+    if (userScripts.length === 1) {
+        return userScripts[0];
+    }
 
                 const cmd = interaction.commandName;
 
@@ -2112,9 +2160,10 @@ function renderDashboardHtml() {
   <section class="section" id="sec-bot">
     <div class="card">
       <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
-      <div class="muted">1. Əvvəlcə aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br>2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bütün idarəetmə paneli tam sizə bağlanacaq.</div>
-      <div style="margin-top:12px;">
+      <div class="muted">1. Əvvəlcə <b>Discord ilə Qoşul</b> və ya <b>Botu Sunucuna Əlavə Et</b> düyməsinə basın.<br>2. Bot sunucuya girdikdən sonra sunucunuz avtomatik (və ya siyahıdan seçilərək) bu panelə bağlanır və yuxarıda öz sunucunuzun adı görünür.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
         <a class="btn green" id="botInviteLinkBtn" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:inline-block;">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>
+        <a class="btn" id="oauthLoginLinkBtn" href="/auth/discord" style="text-decoration:none;display:inline-block;">🔗 Discord Hesabı &amp; Sunucuları Avtomatik Bağla</a>
       </div>
       <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
       <select id="guildSelectDropdown">
@@ -2359,6 +2408,10 @@ async function refreshAll() {
   const inviteBtn = document.getElementById('botInviteLinkBtn');
   if (inviteBtn) {
     inviteBtn.href = data.botInviteUrl || 'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
+  }
+  const oauthBtn = document.getElementById('oauthLoginLinkBtn');
+  if (oauthBtn && !data.oauthEnabled) {
+    oauthBtn.style.display = 'none';
   }
   const pill = document.getElementById('botStatusPill');
   pill.textContent = data.botReady ? ('SADO PROTECT Aktiv') : 'Bot Qoşulur...';
@@ -2690,9 +2743,102 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        if (!checkPanelAuth(req, reqUrl)) {
-            res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, authRequired: true, message: 'Panel token tələb olunur.' }));
+        if (reqUrl.pathname === '/auth/discord' && req.method === 'GET') {
+            if (!DISCORD_CLIENT_SECRET) {
+                res.writeHead(302, { Location: BOT_INVITE_URL });
+                res.end();
+                return;
+            }
+            let wsId = getWorkspaceIdFromReq(req, reqUrl) || generateId('ws');
+            ensureWorkspaceRecord(wsId);
+            const redirectUri = `${PUBLIC_BASE_URL}/auth/discord/callback`;
+            const oauthUrl =
+                `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(DISCORD_CLIENT_ID)}` +
+                `&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}` +
+                `&scope=${encodeURIComponent('identify guilds bot applications.commands')}` +
+                `&permissions=2147600384&state=${encodeURIComponent(wsId)}`;
+            res.writeHead(302, {
+                Location: oauthUrl,
+                'Set-Cookie': `sado_ws_id=${encodeURIComponent(wsId)}; Path=/; Max-Age=31536000; SameSite=Lax`
+            });
+            res.end();
+            return;
+        }
+
+        if (reqUrl.pathname === '/auth/discord/callback' && req.method === 'GET') {
+            const code = String(reqUrl.searchParams.get('code') || '').trim();
+            const returnedGuildId = String(reqUrl.searchParams.get('guild_id') || '').trim();
+            const stateWs = String(reqUrl.searchParams.get('state') || '').trim();
+            let wsId = (stateWs && /^[a-zA-Z0-9_-]{8,64}$/.test(stateWs) ? stateWs : getWorkspaceIdFromReq(req, reqUrl)) || generateId('ws');
+
+            if (code && DISCORD_CLIENT_SECRET) {
+                try {
+                    const redirectUri = `${PUBLIC_BASE_URL}/auth/discord/callback`;
+                    const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            client_id: DISCORD_CLIENT_ID,
+                            client_secret: DISCORD_CLIENT_SECRET,
+                            grant_type: 'authorization_code',
+                            code,
+                            redirect_uri: redirectUri
+                        })
+                    });
+                    if (tokenRes.ok) {
+                        const tokData = await tokenRes.json();
+                        const accessToken = tokData.access_token;
+                        let linkedUid = null;
+                        let pickedGuildId = returnedGuildId || null;
+                        let pickedGuildName = null;
+
+                        const userRes = await fetch('https://discord.com/api/v10/users/@me', {
+                            headers: { Authorization: `Bearer ${accessToken}` }
+                        });
+                        if (userRes.ok) {
+                            const u = await userRes.json();
+                            if (u && u.id) {
+                                linkedUid = String(u.id);
+                                rememberUserProfile(u);
+                            }
+                        }
+
+                        const guildsRes = await fetch('https://discord.com/api/v10/users/@me/guilds', {
+                            headers: { Authorization: `Bearer ${accessToken}` }
+                        });
+                        if (guildsRes.ok) {
+                            const userGuilds = await guildsRes.json();
+                            if (Array.isArray(userGuilds)) {
+                                if (pickedGuildId) {
+                                    const match = userGuilds.find((g) => String(g.id) === pickedGuildId);
+                                    if (match && match.name) pickedGuildName = match.name;
+                                } else {
+                                    const botGuildMatch = userGuilds.find((g) => client && client.guilds && client.guilds.cache.has(String(g.id)));
+                                    if (botGuildMatch) {
+                                        pickedGuildId = String(botGuildMatch.id);
+                                        pickedGuildName = botGuildMatch.name;
+                                    }
+                                }
+                            }
+                        }
+
+                        ensureWorkspaceRecord(wsId, linkedUid, pickedGuildId, pickedGuildName);
+                        for (const s of getScriptsForWorkspace(wsId)) {
+                            if (pickedGuildId) s.ownerGuildId = pickedGuildId;
+                            if (linkedUid) s.ownerDiscordId = linkedUid;
+                        }
+                        persistState();
+                    }
+                } catch (oauthErr) {
+                    console.error('[SADO PROTECT] Discord OAuth callback xətası:', oauthErr.message);
+                }
+            }
+
+            res.writeHead(302, {
+                Location: '/',
+                'Set-Cookie': `sado_ws_id=${encodeURIComponent(wsId)}; Path=/; Max-Age=31536000; SameSite=Lax`
+            });
+            res.end();
             return;
         }
 
@@ -2771,7 +2917,7 @@ const server = http.createServer(async (req, res) => {
                 (w) => wsScriptIds.has(w.scriptId) && !w.revoked && !isExpired(w.expiresAt)
             );
             const botInviteUrl =
-                'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
+            const botInviteUrl = BOT_INVITE_URL;
             let connectedGuild = resolveWorkspaceGuildDisplay(activeWorkspace);
             if (connectedGuild && connectedGuild.guildId && !connectedGuild.botInGuild) {
                 const fetchedGuild = await fetchGuildInfoById(connectedGuild.guildId);
@@ -2796,6 +2942,7 @@ const server = http.createServer(async (req, res) => {
                 JSON.stringify({
                     ok: true,
                     botReady: Boolean(client && client.user),
+                    oauthEnabled: Boolean(DISCORD_CLIENT_SECRET),
                     botInviteUrl,
                     connectedGuild,
                     linkedGuildIds: Array.isArray(activeWorkspace.guildIds) ? activeWorkspace.guildIds : [],
