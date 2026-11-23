@@ -406,17 +406,26 @@ async function registerSlashCommands(token) {
   if (!cleanToken) return;
   try {
     const appId = client.application?.id || '1562080654282199121';
+    const scriptChoices = (state.scripts || []).slice(0, 25).map((sc) => ({
+      name: String(sc.name || 'Script').slice(0, 100),
+      value: String(sc.id),
+    }));
     const commands = [
       new SlashCommandBuilder()
         .setName('panel')
         .setDescription('Script key və loader panelini bu kanala göndər')
-        .addStringOption((opt) =>
+        .addStringOption((opt) => {
           opt
             .setName('script')
             .setDescription('Panelin bağlı olacağı skript')
-            .setRequired(false)
-            .setAutocomplete(true)
-        )
+            .setRequired(false);
+          if (scriptChoices.length > 0) {
+            opt.addChoices(...scriptChoices);
+          } else {
+            opt.setAutocomplete(true);
+          }
+          return opt;
+        })
         .addStringOption((opt) =>
           opt
             .setName('title')
@@ -540,8 +549,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             name: String(sc.name || 'Script').slice(0, 100),
             value: String(sc.id),
           }));
-        if (!choices.length && state.scripts[0]) {
-          choices.push({ name: String(state.scripts[0].name || 'Script').slice(0, 100), value: String(state.scripts[0].id) });
+        if (!choices.length) {
+          choices.push({ name: 'Aktiv Skript (Avtomatik)', value: 'default' });
         }
         await interaction.respond(choices);
       }
