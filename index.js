@@ -564,7 +564,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
           const customTitle = String(interaction.options.getString('title') || '').trim();
           const sc =
-            state.scripts.find(
+            state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
+            state.scripts[0] || {
+              id: 'default',
+              name: chosenScriptArg && chosenScriptArg !== 'default' ? chosenScriptArg : 'SADO HUB',
+              loaderToken: 'default',
+            };
+
           let targetChannelId = interaction.channelId;
           let targetChannel = interaction.channel;
           if (!targetChannel && targetChannelId) {
