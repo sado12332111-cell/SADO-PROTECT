@@ -316,28 +316,7 @@ function obfuscateLuaCode(sourceCode, level = 3) {
 function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
   const safeKey = String(keyValue || 'YOUR_KEY_HERE').replace(/"/g, '\\"');
   const scriptToken = scriptObj.loaderToken || scriptObj.id;
-  const loaderUrl = `https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=`;
-  return [
-    `script_key = "${safeKey}"`,
-    'local function _sadoGetHwid()',
-    '  local ok, cid = pcall(function() return game:GetService("RbxAnalyticsService"):GetClientId() end)',
-    '  if ok and type(cid) == "string" and #cid > 0 then return cid end',
-    '  local fOk, fId = pcall(function()',
-    '    return (gethwid and gethwid()) or (syn and syn.cache_hwid) or (identifyexecutor and identifyexecutor()) or tostring(game.Players.LocalPlayer.UserId)',
-    '  end)',
-    '  if fOk and type(fId) == "string" and #fId > 0 then return fId end',
-    '  return "SADO-HWID-FALLBACK"',
-    'end',
-    'local _hwid = _sadoGetHwid()',
-    `local _url = "${loaderUrl}" .. tostring(script_key) .. "&hwid=" .. tostring(_hwid)`,
-    'local _raw = game:HttpGet(_url)',
-    'if type(_raw) == "string" and string.find(_raw, "HWID_MISMATCH", 1, true) then',
-    '  local lp = game:GetService("Players").LocalPlayer',
-    '  if lp then lp:Kick("[SADO PROTECT] Bu script/key başqa cihaza (HWID) bağlıdır!") end',
-    '  return',
-    'end',
-    'loadstring(_raw)()',
-  ].join('\n');
+  return `script_key = "${safeKey}"; loadstring(game:HttpGet("https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=" .. tostring(script_key)))()`;
 }
 
 // ============================================================================
@@ -1333,23 +1312,28 @@ app.get('/api/loader/:token', (req, res) => {
     }
   }
 
-  if (providedHwid) {
+  const reqHwid =
+    providedHwid ||
+    String(req.headers['syn-fingerprint'] || req.headers['exploit-guid'] || req.headers['fingerprint'] || req.headers['hwid'] || '').trim();
+
+  if (reqHwid) {
     const boundHwid = (validWl && validWl.hwid) || (validKey && validKey.hwid) || '';
     if (!boundHwid) {
       if (validWl) {
-        validWl.hwid = providedHwid;
+        validWl.hwid = reqHwid;
         validWl.hwidBoundAt = new Date().toISOString();
       }
       if (validKey) {
-        validKey.hwid = providedHwid;
+        validKey.hwid = reqHwid;
         validKey.hwidBoundAt = new Date().toISOString();
       }
       saveStore().catch(() => {});
-    } else if (boundHwid !== providedHwid) {
+    } else if (boundHwid !== reqHwid) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res
-        .status(403)
+        .status(200)
         .type('text/plain; charset=utf-8')
-        .send('-- [SADO PROTECT] HWID_MISMATCH: Script bound to another device.');
+        .send('local p = game:GetService("Players").LocalPlayer; if p then p:Kick("[SADO PROTECT] Bu script başqa cihaza bağlıdır!") end');
       return;
     }
   }
