@@ -316,7 +316,7 @@ function obfuscateLuaCode(sourceCode, level = 3) {
 function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
   const safeKey = String(keyValue || 'YOUR_KEY_HERE').replace(/"/g, '\\"');
   const scriptToken = scriptObj.loaderToken || scriptObj.id;
-  return `script_key = "${safeKey}"; loadstring(game:HttpGet("https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=" .. tostring(script_key)))()`;
+  return `script_key = "${safeKey}"; loadstring(game:HttpGet("https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=" .. tostring(script_key) .. "&hwid=" .. tostring((gethwid and gethwid()) or (syn and syn.cache_replace and "") or ((identifyexecutor and identifyexecutor()) or "") .. "_" .. tostring((game:GetService("RbxAnalyticsService"):GetClientId())))))()`;
 }
 
 // ============================================================================
@@ -1316,7 +1316,7 @@ app.get('/api/loader/:token', (req, res) => {
     providedHwid ||
     String(req.headers['syn-fingerprint'] || req.headers['exploit-guid'] || req.headers['fingerprint'] || req.headers['hwid'] || '').trim();
 
-  if (reqHwid) {
+  if (reqHwid && reqHwid !== '_') {
     const boundHwid = (validWl && validWl.hwid) || (validKey && validKey.hwid) || '';
     if (!boundHwid) {
       if (validWl) {
