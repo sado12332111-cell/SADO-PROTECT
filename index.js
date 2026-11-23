@@ -28,6 +28,7 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
+  MessageFlags,
 } = require('discord.js');
 
 // ============================================================================
@@ -561,7 +562,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === 'panel') {
         try {
           if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           }
 
           const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
@@ -618,7 +619,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (interaction.deferred || interaction.replied) {
               await interaction.editReply({ content: errMsg });
             } else {
-              await interaction.reply({ content: errMsg, ephemeral: true });
+              await interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
             }
           } catch (_replyErr) {
             // Səssiz ötürülür
@@ -659,7 +660,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({
           content: snippet,
           embeds: [copyEmbed],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -697,7 +698,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
 
         if (!sc) {
-          await interaction.reply({ content: '❌ Bu panel üçün aktiv skript tapılmadı.', ephemeral: true });
+          await interaction.reply({ content: '❌ Bu panel üçün aktiv skript tapılmadı.', flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -705,7 +706,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           (b) => b.discordUserId === userId && (!b.scriptId || b.scriptId === sc.id)
         );
         if (isBl) {
-          await interaction.reply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.', ephemeral: true });
+          await interaction.reply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.', flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -717,7 +718,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.reply({
             content:
               '⚠️ Sizin bu skript üçün aktiv whitelist/key qeydiniz yoxdur. Əvvəl **Redeem Key** düyməsi ilə key aktivləşdirin.',
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           return;
         }
@@ -750,7 +751,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({
           embeds: [scriptPanelEmbed],
           components: [copyActionRow],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -762,7 +763,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         if (!matchingWl.length) {
-          await interaction.reply({ content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.', ephemeral: true });
+          await interaction.reply({ content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.', flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -774,7 +775,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.reply({
           content: `🔄 HWID uğurla sıfırlandı (${matchingWl.length} qeyd yeniləndi). Yeni girişdə yeni HWID bağlanacaq.`,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -797,7 +798,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           )
           .setTimestamp();
 
-        await interaction.reply({ embeds: [statsEmbed], ephemeral: true });
+        await interaction.reply({ embeds: [statsEmbed], flags: MessageFlags.Ephemeral });
         return;
       }
     }
@@ -815,21 +816,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           (b) => b.discordUserId === userId && (!targetScript || !b.scriptId || b.scriptId === targetScript.id)
         );
         if (isBl) {
-          await interaction.reply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.', ephemeral: true });
+          await interaction.reply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.', flags: MessageFlags.Ephemeral });
           return;
         }
 
         const keyObj = state.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
         if (!keyObj) {
-          await interaction.reply({ content: '❌ Daxil edilən key tapılmadı.', ephemeral: true });
+          await interaction.reply({ content: '❌ Daxil edilən key tapılmadı.', flags: MessageFlags.Ephemeral });
           return;
         }
         if (keyObj.used && keyObj.usedByDiscordId && keyObj.usedByDiscordId !== userId) {
-          await interaction.reply({ content: '⚠️ Bu key artıq başqa istifadəçi tərəfindən işlədilib.', ephemeral: true });
+          await interaction.reply({ content: '⚠️ Bu key artıq başqa istifadəçi tərəfindən işlədilib.', flags: MessageFlags.Ephemeral });
           return;
         }
         if (keyObj.expiresAt && isExpired(keyObj.expiresAt)) {
-          await interaction.reply({ content: '⌛ Bu key-in vaxtı bitib.', ephemeral: true });
+          await interaction.reply({ content: '⌛ Bu key-in vaxtı bitib.', flags: MessageFlags.Ephemeral });
           return;
         }
 
@@ -866,7 +867,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await saveStore();
         await interaction.reply({
           content: `✅ Key uğurla aktivləşdirildi! **${keyObj.key}** — Müddət: **${formatExpiry(keyObj.expiresAt || expiresAt)}**.`,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     }
@@ -874,7 +875,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error('[INTERACTION ERROR]', err.message);
     if (interaction && !interaction.replied && !interaction.deferred) {
       try {
-        await interaction.reply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.', ephemeral: true });
+        await interaction.reply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.', flags: MessageFlags.Ephemeral });
       } catch (_e) {
         // Səssiz ötürülür
       }
