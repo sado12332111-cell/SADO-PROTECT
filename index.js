@@ -456,6 +456,22 @@ async function registerSlashCommands() {
             .setDescription('Müddət (0 = Lifetime, məs: 1d, 7d, 30d)')
             .setRequired(false)
         ),
+      new SlashCommandBuilder()
+        .setName('unwhitelist')
+        .setDescription('İstifadəçini whitelist-dən sil')
+        .addUserOption((opt) =>
+          opt
+            .setName('user')
+            .setDescription('Whitelist-dən çıxarılacaq Discord istifadəçisi')
+            .setRequired(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('script')
+            .setDescription('Skript seçin (boş buraxılsa hamısından silinər)')
+            .setRequired(false)
+            .setAutocomplete(true)
+        ),
     ].map((cmd) => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
@@ -558,7 +574,11 @@ async function refreshExistingDiscordPanels() {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isAutocomplete()) {
-      if (interaction.commandName === 'panel' || interaction.commandName === 'whitelist') {
+      if (
+        interaction.commandName === 'panel' ||
+        interaction.commandName === 'whitelist' ||
+        interaction.commandName === 'unwhitelist'
+      ) {
         try {
           const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
           const allScripts = Array.isArray(state.scripts) ? state.scripts : [];
@@ -610,6 +630,76 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'unwhitelist') {
+        try {
+          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+            await interaction.reply({
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+          const targetUser = interaction.options.getUser('user', true);
+          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
+
+          const matchedScript = chosenScriptArg
+            ? state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg)
+            : null;
+
+          const beforeCount = state.whitelists.length;
+          state.whitelists = state.whitelists.filter((w) => {
+            if (w.discordUserId !== targetUser.id) return true;
+            if (!chosenScriptArg) return false;
+            if (matchedScript) return w.scriptId !== matchedScript.id;
+            return w.scriptId !== chosenScriptArg;
+          });
+          const removedCount = beforeCount - state.whitelists.length;
+
+          for (const kItem of state.keys) {
+            if (
+              kItem.usedByDiscordId === targetUser.id &&
+              (!chosenScriptArg ||
+                (matchedScript ? kItem.scriptId === matchedScript.id : kItem.scriptId === chosenScriptArg))
+            ) {
+              kItem.used = false;
+              kItem.usedByDiscordId = null;
+              kItem.hwid = '';
+            }
+          }
+
+          await saveStore();
+
+          const scriptLabel = matchedScript
+            ? `**${matchedScript.name}**`
+            : chosenScriptArg
+              ? `\`${chosenScriptArg}\``
+              : '**bütün skriptlər**';
+
+          if (removedCount > 0) {
+            await interaction.editReply({
+              content: `🗑️ <@${targetUser.id}> istifadəçisi ${scriptLabel} üzrə whitelist-dən silindi (${removedCount} qeyd).`,
+            });
+          } else {
+            await interaction.editReply({
+              content: `⚠️ <@${targetUser.id}> istifadəçisi üçün ${scriptLabel} üzrə aktiv whitelist qeydi tapılmadı.`,
+            });
+          }
+        } catch (unwlErr) {
+          console.error('[SLASH /unwhitelist ERROR]', unwlErr && unwlErr.message ? unwlErr.message : unwlErr);
+          try {
+            if (interaction.deferred || interaction.replied) {
+              await interaction.editReply({ content: `❌ Unwhitelist xətası: ${unwlErr.message}` });
+            } else {
+              await interaction.reply({ content: `❌ Unwhitelist xətası: ${unwlErr.message}`, flags: MessageFlags.Ephemeral });
+            }
+          } catch (_e) {}
+        }
+        return;
+      }
+
       if (interaction.commandName === 'whitelist') {
         try {
           if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
