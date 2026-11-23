@@ -871,6 +871,34 @@ async function startDiscordBot(token) {
   return botLoginInFlight;
 }
 
+function scheduleBotWatchdog() {
+  if (global._sadoBotWatchdog) clearInterval(global._sadoBotWatchdog);
+  global._sadoBotWatchdog = setInterval(async () => {
+    try {
+      const token = resolveBotToken(state.botToken);
+      if (!token) return;
+      if (client.isReady()) {
+        botStatus.online = true;
+        botStatus.tag = client.user ? client.user.tag : botStatus.tag;
+        syncBotGuildsCache();
+        return;
+      }
+      botStatus.online = false;
+      await startDiscordBot(token);
+    } catch (err) {
+      console.warn('Bot watchdog check warning:', err.message);
+    }
+  }, 20000);
+}
+
+process.on('uncaughtException', err => {
+  console.error('Uncaught exception kept alive:', err && err.message ? err.message : err);
+});
+
+process.on('unhandledRejection', reason => {
+  console.error('Unhandled rejection kept alive:', reason);
+});
+
 // ==================== EXPRESS API ROUTES ====================
 app.get('/api/state', async (req, res) => {
   if (state.activeGuildId && !state.activeGuildName) {
@@ -1387,14 +1415,6 @@ app.get('/', (req, res) => {
 
     <!-- JOIN DISCORD & PANEL -->
     <section class="section" id="tab-discord">
-      <div class="card" id="oneTimeTokenCard" style="display:none; border-color: rgba(245, 158, 11, 0.5);">
-        <h3>⚡ Bot Aktivləşdirmə (1 Dəfəlik)</h3>
-        <p class="muted">Bot hazırda offline-dır. Aktiv etdikdən sonra bu bölmə avtomatik gizlənəcək.</p>
-        <label>Discord Bot Token</label>
-        <input type="password" id="oneTimeTokenInput" placeholder="Bot tokenini daxil edin" />
-        <button class="btn btn-amber" id="saveOneTimeTokenBtn">🚀 Botu Aktiv Et</button>
-      </div>
-
       <div class="card">
         <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
         <p class="muted">
@@ -1601,11 +1621,9 @@ app.get('/', (req, res) => {
       if (data.bot.online) {
         pill.textContent = 'Bot: Online ✅';
         pill.classList.add('online');
-        document.getElementById('oneTimeTokenCard').style.display = 'none';
       } else {
-        pill.textContent = 'Bot: Offline';
+        pill.textContent = 'Bot: Qoşulur...';
         pill.classList.remove('online');
-        document.getElementById('oneTimeTokenCard').style.display = 'block';
       }
 
       const headerTitle = document.getElementById('headerTitle');
@@ -1733,7 +1751,7 @@ app.get('/', (req, res) => {
         body: JSON.stringify({ guildId, discordUserId })
       });
       if (r.ok) {
-        showToast('Bağlandı: ' + r.guildName);
+        document.getElementById('linkGuildIdInput').value = '';
         refreshAll();
       } else {
         showToast(r.message || 'Xəta');
@@ -1965,6 +1983,7 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`SADO PROTECT running on port ${PORT}`);
+  scheduleBotWatchdog();
   const bootToken = resolveBotToken(state.botToken);
   if (bootToken) {
     await startDiscordBot(bootToken).catch(err => {
