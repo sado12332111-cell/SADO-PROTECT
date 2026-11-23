@@ -472,6 +472,30 @@ async function registerSlashCommands() {
             .setRequired(false)
             .setAutocomplete(true)
         ),
+      new SlashCommandBuilder()
+        .setName('genkey')
+        .setDescription('Seçilən skript üçün yeni key yaradır')
+        .addStringOption((opt) =>
+          opt
+            .setName('script')
+            .setDescription('Skript seçin')
+            .setRequired(false)
+            .setAutocomplete(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('duration')
+            .setDescription('Müddət (0 = Lifetime, məs: 1d, 7d, 30d)')
+            .setRequired(false)
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('amount')
+            .setDescription('Yaradılacaq key sayı (1 - 25)')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(25)
+        ),
     ].map((cmd) => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
@@ -577,7 +601,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (
         interaction.commandName === 'panel' ||
         interaction.commandName === 'whitelist' ||
-        interaction.commandName === 'unwhitelist'
+        interaction.commandName === 'unwhitelist' ||
+        interaction.commandName === 'genkey'
       ) {
         try {
           const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
@@ -630,6 +655,74 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'genkey') {
+        try {
+          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+            await interaction.reply({
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
+          const durationRaw = String(interaction.options.getString('duration') || '0').trim();
+          const rawAmount = interaction.options.getInteger('amount');
+          const amount = Math.max(1, Math.min(25, Number(rawAmount || 1)));
+
+          const sc =
+            state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
+            state.scripts[0] || {
+              id: 'default',
+              name: chosenScriptArg && chosenScriptArg !== 'default' ? chosenScriptArg : 'SADO HUB',
+            };
+
+          const durationSeconds = parseDurationToSeconds(durationRaw);
+          const createdKeys = [];
+
+          for (let i = 0; i < amount; i++) {
+            const expiresAt =
+              durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
+            const keyStr = generateKeyString();
+            const entry = {
+              id: generateId('key'),
+              key: keyStr,
+              scriptId: sc.id,
+              durationSeconds,
+              expiresAt,
+              used: false,
+              usedByDiscordId: null,
+              createdBy: interaction.user.tag || interaction.user.id,
+              createdAt: new Date().toISOString(),
+            };
+            state.keys.push(entry);
+            createdKeys.push(entry);
+          }
+
+          await saveStore();
+
+          const formattedList = createdKeys
+            .map((k) => `• \`${k.key}\` (${formatExpiry(k.expiresAt)})`)
+            .join('\n');
+
+          await interaction.editReply({
+            content: `✅ **${sc.name}** skripti üçün **${createdKeys.length}** ədəd key yaradıldı:\n${formattedList}`.slice(0, 1950),
+          });
+        } catch (genErr) {
+          console.error('[SLASH /genkey ERROR]', genErr && genErr.message ? genErr.message : genErr);
+          try {
+            if (interaction.deferred || interaction.replied) {
+              await interaction.editReply({ content: `❌ Key yaratma xətası: ${genErr.message}` });
+            } else {
+              await interaction.reply({ content: `❌ Key yaratma xətası: ${genErr.message}`, flags: MessageFlags.Ephemeral });
+            }
+          } catch (_e) {}
+        }
+        return;
+      }
+
       if (interaction.commandName === 'unwhitelist') {
         try {
           if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
