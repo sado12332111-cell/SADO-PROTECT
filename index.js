@@ -1489,7 +1489,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .stat-card.pink-top::before { background: linear-gradient(90deg, #ec4899, #a855f7); }
 
     .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-    .stat-value { font-size: 24px; font-weight: 800; color: #fff; word-break: break-word; }
+    .stat-value { font-size: 22px; font-weight: 800; color: #fff; overflow-wrap: break-word; word-break: normal; }
 
     .card {
       border-radius: 18px;
@@ -2046,6 +2046,38 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="toast" id="toastBox"></div>
 
   <script>
+    window.__sadoToggleDrawer = function (forceState) {
+      const drawer = document.getElementById('sideDrawer');
+      const backdrop = document.getElementById('drawerBackdrop');
+      if (!drawer || !backdrop) return;
+      const shouldOpen = typeof forceState === 'boolean' ? forceState : !drawer.classList.contains('open');
+      if (shouldOpen) {
+        drawer.classList.add('open');
+        backdrop.classList.add('open');
+      } else {
+        drawer.classList.remove('open');
+        backdrop.classList.remove('open');
+      }
+    };
+
+    document.addEventListener('click', function (ev) {
+      const menuBtn = ev.target && ev.target.closest ? ev.target.closest('#menuToggleBtn') : null;
+      if (menuBtn) {
+        ev.preventDefault();
+        window.__sadoToggleDrawer();
+        return;
+      }
+      const closeBtn = ev.target && ev.target.closest ? ev.target.closest('#closeDrawerBtn') : null;
+      if (closeBtn) {
+        ev.preventDefault();
+        window.__sadoToggleDrawer(false);
+        return;
+      }
+      if (ev.target && ev.target.id === 'drawerBackdrop') {
+        window.__sadoToggleDrawer(false);
+      }
+    });
+
     (function () {
       let initialInputsLoaded = false;
       let latestScripts = [];
@@ -2111,20 +2143,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         applyMockButtonStyle(sBtn, document.getElementById('cfgStatsStyle').value);
       }
 
-      // 3 xətt menyu aç/bağla
-      const drawer = document.getElementById('sideDrawer');
-      const backdrop = document.getElementById('drawerBackdrop');
       function openDrawer() {
-        drawer.classList.add('open');
-        backdrop.classList.add('open');
+        window.__sadoToggleDrawer(true);
       }
       function closeDrawer() {
-        drawer.classList.remove('open');
-        backdrop.classList.remove('open');
+        window.__sadoToggleDrawer(false);
       }
-      document.getElementById('menuToggleBtn').addEventListener('click', openDrawer);
-      document.getElementById('closeDrawerBtn').addEventListener('click', closeDrawer);
-      backdrop.addEventListener('click', closeDrawer);
 
       // Tab keçidləri
       document.querySelectorAll('.nav-item[data-tab]').forEach((btn) => {
