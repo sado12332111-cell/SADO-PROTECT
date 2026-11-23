@@ -1783,7 +1783,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <!-- Üst Panel -->
   <header class="topbar">
     <div class="topbar-left">
-      <button class="menu-btn" id="menuToggleBtn" type="button" aria-label="Menyu">☰</button>
+      <button class="menu-btn" id="menuToggleBtn" type="button" aria-label="Menyu" onclick="if(window.__sadoToggleDrawer){window.__sadoToggleDrawer();}">☰</button>
       <div style="min-width:0;">
         <div class="brand-title" id="headerTitle">SADO PROTECT</div>
         <div class="brand-sub" id="headerSub">Control Dashboard</div>
@@ -1793,11 +1793,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </header>
 
   <!-- 3 Xətt Yan Menyu -->
-  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <div class="drawer-backdrop" id="drawerBackdrop" onclick="if(window.__sadoToggleDrawer){window.__sadoToggleDrawer(false);}"></div>
   <aside class="drawer" id="sideDrawer">
     <div class="drawer-header">
       <span style="font-weight:800; font-size:15px;">⚡ SADO NAVİQASİYA</span>
-      <button class="close-drawer" id="closeDrawerBtn" type="button">✕</button>
+      <button class="close-drawer" id="closeDrawerBtn" type="button" onclick="if(window.__sadoToggleDrawer){window.__sadoToggleDrawer(false);}">✕</button>
     </div>
     <button class="nav-item active" data-tab="overview" type="button">📊 Dashboard</button>
     <button class="nav-item" data-tab="scripts" type="button">📜 Skriptlər & Loader</button>
@@ -2050,17 +2050,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const drawer = document.getElementById('sideDrawer');
       const backdrop = document.getElementById('drawerBackdrop');
       if (!drawer || !backdrop) return;
-      const shouldOpen = typeof forceState === 'boolean' ? forceState : !drawer.classList.contains('open');
+      const isCurrentlyOpen = drawer.classList.contains('open') || drawer.style.transform === 'translateX(0px)';
+      const shouldOpen = typeof forceState === 'boolean' ? forceState : !isCurrentlyOpen;
       if (shouldOpen) {
         drawer.classList.add('open');
+        drawer.style.transform = 'translateX(0px)';
         backdrop.classList.add('open');
+        backdrop.style.display = 'block';
       } else {
         drawer.classList.remove('open');
+        drawer.style.transform = 'translateX(-100%)';
         backdrop.classList.remove('open');
+        backdrop.style.display = 'none';
       }
     };
 
-    document.addEventListener('click', function (ev) {
+    function bindMenuClick(ev) {
       const menuBtn = ev.target && ev.target.closest ? ev.target.closest('#menuToggleBtn') : null;
       if (menuBtn) {
         ev.preventDefault();
@@ -2076,7 +2081,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (ev.target && ev.target.id === 'drawerBackdrop') {
         window.__sadoToggleDrawer(false);
       }
-    });
+    }
+
+    document.addEventListener('click', bindMenuClick, true);
+    document.addEventListener('touchend', bindMenuClick, { passive: false });
 
     (function () {
       let initialInputsLoaded = false;
