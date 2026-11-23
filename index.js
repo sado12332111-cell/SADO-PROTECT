@@ -25,6 +25,9 @@ const {
   TextInputBuilder,
   TextInputStyle,
   Events,
+  REST,
+  Routes,
+  SlashCommandBuilder,
 } = require('discord.js');
 
 // ============================================================================
@@ -366,42 +369,42 @@ async function ensureBotOnline() {
     botStatus = 'online';
     botLastError = '';
   } catch (err) {
-    botLastError = err && err.message ? err.message : 'Login xətası';
-    botStatus = client.isReady() ? 'online' : 'connecting';
-    console.warn('[BOT] Qoşulma cəhdi uğursuz oldu (yenidən cəhd ediləcək):', botLastError);
-  } finally {
-    isConnectingNow = false;
-  }
-}
+async function registerSlashCommands(token) {
+  const cleanToken = (token || '').trim();
+  if (!cleanToken) return;
+  try {
+    const appId = client.application?.id || '1562080654282199121';
+    const commands = [
+      new SlashCommandBuilder()
+        .setName('panel')
+        .setDescription('Script key və loader panelini bu kanala göndər')
+        .addStringOption((opt) =>
+          opt
+            .setName('script')
+            .setDescription('Panelin bağlı olacağı skript')
+            .setRequired(false)
+            .setAutocomplete(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('title')
+            .setDescription('Panel başlığı (istəyə bağlı)')
+            .setRequired(false)
+        ),
+    ].map((cmd) => cmd.toJSON());
 
-function startWatchdog() {
-  if (watchdogTimer) clearInterval(watchdogTimer);
-  watchdogTimer = setInterval(async () => {
-    try {
-      if ((state.botToken || '').trim()) {
-        if (!client.isReady()) {
-          await ensureBotOnline();
-        } else {
-          botStatus = 'online';
-          if (state.activeGuildId && (!state.activeGuildName || state.activeGuildName.startsWith('Sunucu ('))) {
-            const name = await resolveGuildName(state.activeGuildId);
-            if (name && !name.startsWith('Sunucu (')) {
-              state.activeGuildName = name;
-              await saveStore();
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[WATCHDOG] Xəta:', err.message);
-    }
-  }, 15000);
+    const rest = new REST({ version: '10' }).setToken(cleanToken);
+    await rest.put(Routes.applicationCommands(appId), { body: commands });
+  } catch (err) {
+    console.warn('[SLASH] /panel qeydiyyat xətası:', err.message);
+  }
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
   botStatus = 'online';
   botLastError = '';
   console.log(`[BOT] Online: ${readyClient.user.tag} (${readyClient.guilds.cache.size} sunucu)`);
+  await registerSlashCommands(state.botToken);
   if (state.activeGuildId) {
     const realName = await resolveGuildName(state.activeGuildId);
     if (realName && !realName.startsWith('Sunucu (')) {
@@ -495,6 +498,62 @@ async function refreshExistingDiscordPanels() {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName === 'panel') {
+        const focused = String(interaction.options.getFocused() || '').toLowerCase();
+        const choices = (state.scripts || [])
+          .filter((sc) => !focused || sc.name.toLowerCase().includes(focused) || sc.id.toLowerCase().includes(focused))
+          .slice(0, 25)
+          .map((sc) => ({
+            name: String(sc.name || 'Script').slice(0, 100),
+            value: String(sc.id),
+          }));
+        if (!choices.length && state.scripts[0]) {
+          choices.push({ name: String(state.scripts[0].name || 'Script').slice(0, 100), value: String(state.scripts[0].id) });
+        }
+        await interaction.respond(choices);
+      }
+      return;
+    }
+
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'panel') {
+        const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
+        const customTitle = String(interaction.options.getString('title') || '').trim();
+        const sc =
+          state.scripts.find((s) => s.id === chosenScriptArg || s.name.toLowerCase() === chosenScriptArg.toLowerCase()) ||
+          state.scripts[0];
+
+        if (!sc) {
+          await interaction.reply({
+            content: '❌ Saytda hələ heç bir skript yaradılmayıb. Əvvəl Dashboard-dan skript yaradın.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const overrideCfg = customTitle ? { title: customTitle } : null;
+        const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
+        const sentMsg = await interaction.channel.send({ embeds: [embed], components: [row] });
+
+        state.panels.push({
+          id: generateId('pnl'),
+          guildId: interaction.guildId || state.activeGuildId || '',
+          channelId: interaction.channelId,
+          messageId: sentMsg.id,
+          scriptId: sc.id,
+          createdAt: new Date().toISOString(),
+        });
+        await saveStore();
+
+        await interaction.reply({
+          content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
+          ephemeral: true,
+        });
+      }
+      return;
+    }
+
     if (interaction.isButton()) {
       const cid = interaction.customId || '';
       const userId = interaction.user.id;
