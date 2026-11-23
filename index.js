@@ -318,23 +318,7 @@ function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
   const loaderUrl = `https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=`;
   return [
     `script_key = "${safeKey}"`,
-    'local function _sadoFetch(url)',
-    '  local ok, res = pcall(function() return game:HttpGet(url) end)',
-    '  if ok and type(res) == "string" and #res > 0 then return res end',
-    '  local reqFn = (syn and syn.request) or (http and http.request) or http_request or request',
-    '  if type(reqFn) == "function" then',
-    '    local rOk, rData = pcall(function() return reqFn({ Url = url, Method = "GET" }) end)',
-    '    if rOk and type(rData) == "table" and type(rData.Body) == "string" then return rData.Body end',
-    '  end',
-    '  return nil',
-    'end',
-    `local _body = _sadoFetch("${loaderUrl}" .. tostring(script_key))`,
-    'if type(_body) == "string" and #_body > 0 then',
-    '  local fn, err = (loadstring or load)(_body)',
-    '  if type(fn) == "function" then return fn() else warn("[SADO PROTECT] " .. tostring(err)) end',
-    'else',
-    '  warn("[SADO PROTECT] Skript yüklənə bilmədi (Key və ya bağlantı yoxlanılmalıdır).")',
-    'end',
+    `loadstring(game:HttpGet("${loaderUrl}" .. tostring(script_key)))()`,
   ].join('\n');
 }
 
