@@ -263,12 +263,13 @@ function ultraObfuscateLuaCode(sourceCode, level = 3) {
     '  end',
     '  return table.concat(buf)',
     'end',
-    'local _LD = loadstring or load',
+    'local _GE = (type(getgenv) == "function" and getgenv()) or _G',
+    'local _LD = loadstring or load or (_GE and (_GE.loadstring or _GE.load))',
     'if type(_LD) ~= "function" then return end',
     'local _SRC = _SADO_VM(_DAT, _SA, _SB, _SLT)',
     'if type(_SRC) == "string" and #_SRC > 0 then',
     '  local _RUN, _ERR = _LD(_SRC, "@sado_vm")',
-    '  if type(_RUN) == "function" then _RUN() elseif _ERR then warn("[SADO PROTECT] " .. tostring(_ERR)) end',
+    '  if type(_RUN) == "function" then pcall(_RUN) elseif _ERR then warn("[SADO PROTECT] " .. tostring(_ERR)) end',
     'end',
   ].join('\n');
 }
@@ -306,9 +307,9 @@ function obfuscateLuaCode(sourceCode, level = 3) {
     '  end',
     '  return table.concat(s)',
     'end',
-    'local _FN = loadstring or load',
-    'local _EX = _FN(_U(_B, _X))',
-    'if type(_EX) == "function" then _EX() end',
+    'local _GE = (type(getgenv) == "function" and getgenv()) or _G',
+    'local _FN = loadstring or load or (_GE and (_GE.loadstring or _GE.load))',
+    'if type(_FN) == "function" then local _EX = _FN(_U(_B, _X)); if type(_EX) == "function" then pcall(_EX) end end',
   ].join('\n');
 }
 
