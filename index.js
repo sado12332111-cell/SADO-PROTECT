@@ -1371,6 +1371,24 @@ app.get('/', (req, res) => {
     .stat-grid .card:nth-child(3) { border-top: 3px solid #22c55e; }
     .stat-grid .card:nth-child(4) { border-top: 3px solid #06b6d4; }
     .stat-val { font-size: 26px; font-weight: 800; margin-top: 6px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-top: 10px; margin-bottom: 5px; font-weight: 600; }
+    input, select, textarea {
+      width: 100%; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid var(--border); background: #0d1220; color: var(--text); font-size: 14px;
+      outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.16);
+    }
+    textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      width: 100%; padding: 11px 14px; border-radius: 10px; border: none;
+      font-weight: 700; font-size: 14px; cursor: pointer; margin-top: 10px; text-decoration: none;
+      transition: transform 0.12s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+    }
+    .btn:active { transform: scale(0.99); }
     .btn-primary {
       background: linear-gradient(135deg, #5865F2, #7c3aed); color: #fff;
       box-shadow: 0 6px 18px rgba(99, 102, 241, 0.32);
