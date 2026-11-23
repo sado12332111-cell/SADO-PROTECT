@@ -2375,6 +2375,8 @@ async function refreshAll() {
         '</div></div>'
       ).join('')
     : '<div class="muted">Hələ skript yoxdur.</div>';
+}
+
 window.openUpdateScriptModal = async (id) => {
   const cached = (window.__loadedScriptsCache || []).find((x) => x.id === id);
   document.getElementById('editScriptIdInput').value = id;
