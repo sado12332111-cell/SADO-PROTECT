@@ -68,9 +68,13 @@ function defaultState() {
       title: 'SADO PROTECT • Script Panel',
       description: 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirə, skripti ala və HWID sıfırlaya bilərsiniz.',
       redeemLabel: '🔑 Redeem Key',
+      redeemStyle: 'green',
       getScriptLabel: '📜 Get Script',
+      getScriptStyle: 'blurple',
       resetHwidLabel: '🔄 Reset HWID',
-      statsLabel: '📊 Stats'
+      resetHwidStyle: 'grey',
+      statsLabel: '📊 Stats',
+      statsStyle: 'grey'
     }
   };
 }
@@ -361,23 +365,39 @@ function createPanelEmbed(scriptObj, customTitle) {
 function createPanelButtons(scriptId) {
   const cfg = state.panelConfig || {};
   const sid = scriptId || 'default';
+  const resolveStyle = (styleName, fallback) => {
+    const map = {
+      green: ButtonStyle.Success,
+      success: ButtonStyle.Success,
+      blurple: ButtonStyle.Primary,
+      primary: ButtonStyle.Primary,
+      blue: ButtonStyle.Primary,
+      grey: ButtonStyle.Secondary,
+      gray: ButtonStyle.Secondary,
+      secondary: ButtonStyle.Secondary,
+      red: ButtonStyle.Danger,
+      danger: ButtonStyle.Danger
+    };
+    return map[String(styleName || '').toLowerCase()] || fallback;
+  };
+
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`sado_redeem:${sid}`)
       .setLabel(cfg.redeemLabel || '🔑 Redeem Key')
-      .setStyle(ButtonStyle.Success),
+      .setStyle(resolveStyle(cfg.redeemStyle, ButtonStyle.Success)),
     new ButtonBuilder()
       .setCustomId(`sado_getscript:${sid}`)
       .setLabel(cfg.getScriptLabel || '📜 Get Script')
-      .setStyle(ButtonStyle.Primary),
+      .setStyle(resolveStyle(cfg.getScriptStyle, ButtonStyle.Primary)),
     new ButtonBuilder()
       .setCustomId(`sado_resethwid:${sid}`)
       .setLabel(cfg.resetHwidLabel || '🔄 Reset HWID')
-      .setStyle(ButtonStyle.Secondary),
+      .setStyle(resolveStyle(cfg.resetHwidStyle, ButtonStyle.Secondary)),
     new ButtonBuilder()
       .setCustomId(`sado_stats:${sid}`)
       .setLabel(cfg.statsLabel || '📊 Stats')
-      .setStyle(ButtonStyle.Secondary)
+      .setStyle(resolveStyle(cfg.statsStyle, ButtonStyle.Secondary))
   );
 }
 
@@ -1480,49 +1500,49 @@ app.get('/', (req, res) => {
     </section>
 
     <section class="section" id="tab-discord">
-      <div class="card">
-        <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
-        <p class="muted">
-          1. Aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br/>
-          2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bütün idarəetmə paneli tam sizə bağlanacaq.
-        </p>
-        <a class="btn btn-green" id="inviteBotBtn" href="${BOT_INVITE_URL}" target="_blank" rel="noopener">
-          ➕ SADO PROTECT Botunu Sunucuna Əlavə Et
-        </a>
-
-        <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
-        <select id="guildSelectDropdown">
-          <option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option>
-        </select>
-
-        <label>Və ya Discord Sunucu ID (Server ID)</label>
-        <input type="text" id="linkGuildIdInput" placeholder="Məs: 1559499280732131348" />
-
-        <label>Discord User ID (istəyə bağlı)</label>
-        <input type="text" id="linkDiscordIdInput" placeholder="Məs: 123456789012345678" />
-
-        <button class="btn btn-primary" id="linkWorkspaceBtn">✅ Sunucunu İdarəetmə Panelinə Bağla</button>
-      </div>
-
-      <div class="card">
-        <h3>🎨 Panel Buton və Embed Dizaynı</h3>
-        <label>Embed Rəngi (HEX & Rəng Seçici)</label>
-        <div style="display:flex; gap:10px; align-items:center;">
-          <input type="color" id="cfgColorPicker" value="#5865F2" style="width:52px; height:42px; padding:3px; cursor:pointer; flex-shrink:0;" />
-          <input type="text" id="cfgEmbedColor" value="#5865F2" style="flex:1;" />
+        <label>Redeem Key Düymə Mətni və Rəngi</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="cfgRedeemLabel" placeholder="🔑 Redeem Key" style="flex:1;" />
+          <select id="cfgRedeemStyle" style="width:140px; flex-shrink:0;">
+            <option value="green">🟢 Yaşıl</option>
+            <option value="blurple">🔵 Mavi</option>
+            <option value="grey">⚪ Boz</option>
+            <option value="red">🔴 Qırmızı</option>
+          </select>
         </div>
-        <label>Panel Başlığı</label>
-        <input type="text" id="cfgTitle" placeholder="SADO PROTECT • Script Panel" />
-        <label>Panel Açıqlaması</label>
-        <input type="text" id="cfgDescription" placeholder="Aşağıdakı düymələrdən istifadə edin..." />
-        <label>Redeem Key Düymə Mətni</label>
-        <input type="text" id="cfgRedeemLabel" placeholder="🔑 Redeem Key" />
-        <label>Get Script Düymə Mətni</label>
-        <input type="text" id="cfgGetScriptLabel" placeholder="📜 Get Script" />
-        <label>Reset HWID Düymə Mətni</label>
-        <input type="text" id="cfgResetHwidLabel" placeholder="🔄 Reset HWID" />
-        <label>Stats Düymə Mətni</label>
-        <input type="text" id="cfgStatsLabel" placeholder="📊 Stats" />
+
+        <label>Get Script Düymə Mətni və Rəngi</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="cfgGetScriptLabel" placeholder="📜 Get Script" style="flex:1;" />
+          <select id="cfgGetScriptStyle" style="width:140px; flex-shrink:0;">
+            <option value="blurple">🔵 Mavi</option>
+            <option value="green">🟢 Yaşıl</option>
+            <option value="grey">⚪ Boz</option>
+            <option value="red">🔴 Qırmızı</option>
+          </select>
+        </div>
+
+        <label>Reset HWID Düymə Mətni və Rəngi</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="cfgResetHwidLabel" placeholder="🔄 Reset HWID" style="flex:1;" />
+          <select id="cfgResetHwidStyle" style="width:140px; flex-shrink:0;">
+            <option value="grey">⚪ Boz</option>
+            <option value="blurple">🔵 Mavi</option>
+            <option value="green">🟢 Yaşıl</option>
+            <option value="red">🔴 Qırmızı</option>
+          </select>
+        </div>
+
+        <label>Stats Düymə Mətni və Rəngi</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="cfgStatsLabel" placeholder="📊 Stats" style="flex:1;" />
+          <select id="cfgStatsStyle" style="width:140px; flex-shrink:0;">
+            <option value="grey">⚪ Boz</option>
+            <option value="blurple">🔵 Mavi</option>
+            <option value="green">🟢 Yaşıl</option>
+            <option value="red">🔴 Qırmızı</option>
+          </select>
+        </div>
         <button class="btn btn-primary" id="savePanelCfgBtn">💾 Panel Dizaynını Yadda Saxla</button>
       </div>
     </section>
@@ -1731,9 +1751,13 @@ app.get('/', (req, res) => {
           document.getElementById('cfgTitle').value = data.panelConfig.title || '';
           document.getElementById('cfgDescription').value = data.panelConfig.description || '';
           document.getElementById('cfgRedeemLabel').value = data.panelConfig.redeemLabel || '🔑 Redeem Key';
+          document.getElementById('cfgRedeemStyle').value = data.panelConfig.redeemStyle || 'green';
           document.getElementById('cfgGetScriptLabel').value = data.panelConfig.getScriptLabel || '📜 Get Script';
+          document.getElementById('cfgGetScriptStyle').value = data.panelConfig.getScriptStyle || 'blurple';
           document.getElementById('cfgResetHwidLabel').value = data.panelConfig.resetHwidLabel || '🔄 Reset HWID';
+          document.getElementById('cfgResetHwidStyle').value = data.panelConfig.resetHwidStyle || 'grey';
           document.getElementById('cfgStatsLabel').value = data.panelConfig.statsLabel || '📊 Stats';
+          document.getElementById('cfgStatsStyle').value = data.panelConfig.statsStyle || 'grey';
         }
       }
 
@@ -1845,9 +1869,13 @@ app.get('/', (req, res) => {
       const title = document.getElementById('cfgTitle').value.trim();
       const description = document.getElementById('cfgDescription').value.trim();
       const redeemLabel = document.getElementById('cfgRedeemLabel').value.trim() || '🔑 Redeem Key';
+      const redeemStyle = document.getElementById('cfgRedeemStyle').value || 'green';
       const getScriptLabel = document.getElementById('cfgGetScriptLabel').value.trim() || '📜 Get Script';
+      const getScriptStyle = document.getElementById('cfgGetScriptStyle').value || 'blurple';
       const resetHwidLabel = document.getElementById('cfgResetHwidLabel').value.trim() || '🔄 Reset HWID';
+      const resetHwidStyle = document.getElementById('cfgResetHwidStyle').value || 'grey';
       const statsLabel = document.getElementById('cfgStatsLabel').value.trim() || '📊 Stats';
+      const statsStyle = document.getElementById('cfgStatsStyle').value || 'grey';
       const r = await api('/api/panel-config', {
         method: 'POST',
         body: JSON.stringify({
@@ -1855,9 +1883,13 @@ app.get('/', (req, res) => {
           title,
           description,
           redeemLabel,
+          redeemStyle,
           getScriptLabel,
+          getScriptStyle,
           resetHwidLabel,
-          statsLabel
+          resetHwidStyle,
+          statsLabel,
+          statsStyle
         })
       });
       if (r.ok) {
