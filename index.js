@@ -393,6 +393,39 @@ function getWorkspaceIdFromReq(req, reqUrl) {
 
 function ensureWorkspaceRecord(wsId, discordUserId = null, guildId = null, guildName = null) {
     if (!wsId) return null;
+    if (!state.workspaces[wsId] || typeof state.workspaces[wsId] !== 'object') {
+        state.workspaces[wsId] = {
+            id: wsId,
+            discordUserIds: [],
+            guildIds: [],
+            guildName: '',
+            createdAt: nowMs(),
+            updatedAt: nowMs()
+        };
+    }
+    const ws = state.workspaces[wsId];
+    ws.discordUserIds = Array.isArray(ws.discordUserIds) ? ws.discordUserIds : [];
+    ws.guildIds = Array.isArray(ws.guildIds) ? ws.guildIds : [];
+
+    const uid = String(discordUserId || '').trim();
+    if (uid && !ws.discordUserIds.includes(uid)) {
+        ws.discordUserIds.push(uid);
+    }
+
+    const gid = String(guildId || '').trim();
+    if (gid) {
+        ws.guildIds = [gid, ...ws.guildIds.filter((x) => x !== gid)];
+    }
+
+    const gname = String(guildName || '').trim();
+    if (gname) {
+        ws.guildName = gname;
+    }
+
+    ws.updatedAt = nowMs();
+    return ws;
+}
+
 async function fetchGuildInfoById(guildId) {
     const gid = String(guildId || '').trim();
     if (!gid) return null;
@@ -2685,6 +2718,226 @@ const server = http.createServer(async (req, res) => {
                     };
                 }
             }
+            const recentKeys = [...wsKeys]
+                .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+                .slice(0, 20)
+                .map(enrichMemberEntry);
+            const enrichedWhitelists = wsWhitelists.map(enrichMemberEntry);
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(
+                JSON.stringify({
+                    ok: true,
+                    botReady: Boolean(client && client.user),
+                    botInviteUrl,
+                    connectedGuild,
+                    linkedGuildIds: Array.isArray(activeWorkspace.guildIds) ? activeWorkspace.guildIds : [],
+                    linkedDiscordIds: Array.isArray(activeWorkspace.discordUserIds)
+                        ? activeWorkspace.discordUserIds
+                        : [],
+                    guilds: getGuildsWithRolesSummary().map((g) => ({ id: g.id, name: g.name })),
+                    scripts: wsScripts.map((s) => ({
+                        id: s.id,
+                        name: s.name,
+                        disabled: Boolean(s.disabled),
+                        obfuscated: Boolean(s.obfuscated),
+                        createdAt: s.createdAt
+                    })),
+                    keysCount: wsKeys.length,
+                    whitelistsCount: wsWhitelists.length,
+                    recentKeys,
+                    whitelists: enrichedWhitelists,
+                    panelButtonConfig: state.panelButtonConfig
+                })
+            );
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/scripts' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const name = String(body.name || '').trim();
+            const rawCode = String(body.code || '');
+            const shouldObf = Boolean(body.obfuscate);
+            const obfLevel = String(body.obfuscateLevel || 'standard');
+            const preObf = Boolean(body.preObfuscated);
+
+            if (!name) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript adını daxil edin.' }));
+                return;
+            }
+            if (!rawCode.trim()) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript kodunu daxil edin.' }));
+                return;
+            }
+
+            const finalCode = shouldObf ? obfuscateLuaSource(rawCode, obfLevel) : rawCode;
+            const primaryGuildId =
+                Array.isArray(activeWorkspace.guildIds) && activeWorkspace.guildIds.length > 0
+                    ? String(activeWorkspace.guildIds[0])
+                    : null;
+            const primaryDiscordId =
+                Array.isArray(activeWorkspace.discordUserIds) && activeWorkspace.discordUserIds.length > 0
+                    ? String(activeWorkspace.discordUserIds[0])
+                    : null;
+
+            const newScript = {
+                id: generateId('scr'),
+                name,
+                code: finalCode,
+                obfuscated: Boolean(shouldObf || preObf),
+                disabled: false,
+                ownerWorkspaceId: activeWsId,
+                ownerGuildId: primaryGuildId,
+                ownerDiscordId: primaryDiscordId,
+                createdAt: nowMs()
+            };
+            state.scripts.push(newScript);
+            persistState();
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, script: { id: newScript.id, name: newScript.name } }));
+            return;
+        }
+
+        if (reqUrl.pathname.match(/^\/api\/scripts\/[^/]+\/obfuscate$/) && req.method === 'POST') {
+            const scriptId = decodeURIComponent(reqUrl.pathname.split('/')[3]);
+            const script = getScriptById(scriptId);
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            script.code = obfuscateLuaSource(script.code || '', 'standard');
+            script.obfuscated = true;
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, message: `"${script.name}" obfuscate edildi!` }));
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/scripts/') && req.method === 'DELETE') {
+            const scriptId = decodeURIComponent(reqUrl.pathname.slice('/api/scripts/'.length));
+            const script = getScriptById(scriptId);
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Skript tapılmadı.' }));
+                return;
+            }
+            state.scripts = state.scripts.filter((s) => s.id !== scriptId);
+            state.keys = state.keys.filter((k) => k.scriptId !== scriptId);
+            state.whitelists = state.whitelists.filter((w) => w.scriptId !== scriptId);
+            state.panels = state.panels.filter((p) => p.scriptId !== scriptId);
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/panel-config' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            state.panelButtonConfig = {
+                ...state.panelButtonConfig,
+                embedColor: String(body.embedColor || state.panelButtonConfig.embedColor || '#5865F2').trim(),
+                redeemLabel: String(body.redeemLabel || state.panelButtonConfig.redeemLabel || 'Redeem Key').trim(),
+                redeemEmoji: String(body.redeemEmoji ?? state.panelButtonConfig.redeemEmoji ?? '🔑').trim(),
+                redeemStyle: String(body.redeemStyle || state.panelButtonConfig.redeemStyle || 'Success').trim(),
+                getScriptLabel: String(body.getScriptLabel || state.panelButtonConfig.getScriptLabel || 'Get Script').trim(),
+                getScriptEmoji: String(body.getScriptEmoji ?? state.panelButtonConfig.getScriptEmoji ?? '📜').trim(),
+                getScriptStyle: String(body.getScriptStyle || state.panelButtonConfig.getScriptStyle || 'Primary').trim(),
+                resetHwidLabel: String(body.resetHwidLabel || state.panelButtonConfig.resetHwidLabel || 'Reset HWID').trim(),
+                resetHwidEmoji: String(body.resetHwidEmoji ?? state.panelButtonConfig.resetHwidEmoji ?? '🔄').trim(),
+                resetHwidStyle: String(body.resetHwidStyle || state.panelButtonConfig.resetHwidStyle || 'Secondary').trim(),
+                getStatsLabel: String(body.getStatsLabel || state.panelButtonConfig.getStatsLabel || 'Get Stats').trim(),
+                getStatsEmoji: String(body.getStatsEmoji ?? state.panelButtonConfig.getStatsEmoji ?? '📊').trim(),
+                getStatsStyle: String(body.getStatsStyle || state.panelButtonConfig.getStatsStyle || 'Secondary').trim()
+            };
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, panelButtonConfig: state.panelButtonConfig }));
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/keys' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const scriptId = String(body.scriptId || '').trim();
+            const script = getScriptById(scriptId);
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Düzgün skript seçin.' }));
+                return;
+            }
+            const durationMs = parseDurationToMs(body.time || '0');
+            if (durationMs === undefined) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Yanlış müddət formatı.' }));
+                return;
+            }
+            const amount = Math.max(1, Math.min(50, Number(body.amount || 1)));
+            const created = [];
+            for (let i = 0; i < amount; i++) {
+                const code = generateKeyCode();
+                state.keys.push({
+                    id: generateId('key'),
+                    code,
+                    scriptId: script.id,
+                    durationMs,
+                    expiresAt: null,
+                    createdBy: null,
+                    createdByName: 'Veb Panel',
+                    redeemedBy: null,
+                    redeemedByName: null,
+                    redeemedAt: null,
+                    hwid: null,
+                    disabled: false,
+                    createdAt: nowMs()
+                });
+                created.push(code);
+            }
+            persistState();
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, keys: created }));
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/whitelist' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const scriptId = String(body.scriptId || '').trim();
+            const userId = String(body.userId || '').trim();
+            const script = getScriptById(scriptId);
+            if (!script || !isScriptOwnedByWorkspace(script, activeWsId)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Düzgün skript seçin.' }));
+                return;
+            }
+            if (!/^\d{15,22}$/.test(userId)) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Düzgün Discord User ID daxil edin.' }));
+                return;
+            }
+            const durationMs = parseDurationToMs(body.time || '0');
+            if (durationMs === undefined) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Yanlış müddət formatı.' }));
+                return;
+            }
+            await applyWhitelistForTargets(script, [{ id: userId }], durationMs);
+            const keyRec = getUserKeyForScript(userId, script.id);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: true, key: keyRec ? keyRec.code : null }));
+            return;
+        }
+
+        if (reqUrl.pathname.startsWith('/api/whitelist/') && req.method === 'DELETE') {
+            const wlId = decodeURIComponent(reqUrl.pathname.slice('/api/whitelist/'.length));
+            const target = state.whitelists.find((w) => w.id === wlId);
+            if (!target) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Whitelist tapılmadı.' }));
+                return;
+            }
+            await removeWhitelistForTargets({ id: target.scriptId }, [{ id: target.userId }]);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: true }));
             return;
