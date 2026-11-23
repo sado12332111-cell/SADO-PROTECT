@@ -3,7 +3,7 @@
  * Tam və müstəqil Node.js tətbiqi:
  * - Sabit const bot tokeni (7/24 həmişə online)
  * - Discord.js v14 botu (/panel, /whitelist, Redeem Key, Get Script + Skripti Kopyala, Reset HWID, Stats)
- * - Express web serveri (Dashboard UI + REST API + Anti-Dump Protected Loader)
+ * - Express web serveri (Dashboard UI + REST API + Protected Loader)
  * - Script idarəetməsi, Lua fayl yükləmə və Ultra Lua Obfuscator
  * - Key yaratma, Whitelist/Blacklist, Join Discord & Sunucu/User ID bağlama
  */
@@ -268,7 +268,7 @@ function ultraObfuscateLuaCode(sourceCode, level = 3) {
     'local _SRC = _SADO_VM(_DAT, _SA, _SB, _SLT)',
     'if type(_SRC) == "string" and #_SRC > 0 then',
     '  local _RUN, _ERR = _LD(_SRC, "@sado_vm")',
-    '  if type(_RUN) == "function" then return _RUN() elseif _ERR then warn("[SADO PROTECT] " .. tostring(_ERR)) end',
+    '  if type(_RUN) == "function" then _RUN() elseif _ERR then warn("[SADO PROTECT] " .. tostring(_ERR)) end',
     'end',
   ].join('\n');
 }
@@ -308,7 +308,7 @@ function obfuscateLuaCode(sourceCode, level = 3) {
     'end',
     'local _FN = loadstring or load',
     'local _EX = _FN(_U(_B, _X))',
-    'if type(_EX) == "function" then return _EX() end',
+    'if type(_EX) == "function" then _EX() end',
   ].join('\n');
 }
 
@@ -1265,16 +1265,11 @@ app.get('/api/loader/:token', (req, res) => {
     return;
   }
 
-  const isBrowser =
+  const isBrowserDocument =
     secFetchDest === 'document' ||
-    acceptHeader.includes('text/html') ||
-    ua.includes('mozilla/') ||
-    ua.includes('chrome/') ||
-    ua.includes('safari/') ||
-    ua.includes('firefox/') ||
-    ua.includes('edg/');
+    (acceptHeader.includes('text/html') && !ua.includes('roblox'));
 
-  if (isBrowser || !providedKey || providedKey === 'YOUR_KEY_HERE' || providedKey === 'YOUR_KEY') {
+  if (isBrowserDocument || !providedKey || providedKey === 'YOUR_KEY_HERE' || providedKey === 'YOUR_KEY') {
     res
       .status(403)
       .type('text/plain; charset=utf-8')
