@@ -367,6 +367,9 @@ async function ensureBotOnline() {
       // Səssiz ötürülür
     }
     await client.login(token);
+    if (client.rest && typeof client.rest.setToken === 'function') {
+      client.rest.setToken(token);
+    }
     botStatus = 'online';
     botLastError = '';
   } catch (err) {
@@ -596,18 +599,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
             components: [row.toJSON()],
           };
 
-          let sentMsg = null;
-          if (targetChannel && typeof targetChannel.send === 'function') {
-            sentMsg = await Promise.race([
-              targetChannel.send({ embeds: [embed], components: [row] }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
-            ]);
-          } else {
-            sentMsg = await Promise.race([
-              client.rest.post(Routes.channelMessages(targetChannelId), { body: messagePayload }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
-            ]);
-          }
+          const activeToken = String(state.botToken || resolveInitialToken() || '').trim();
+          const panelRest = new REST({ version: '10' }).setToken(activeToken);
+          const sentMsg = await Promise.race([
+            panelRest.post(Routes.channelMessages(targetChannelId), { body: messagePayload }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
+          ]);
 
           state.panels.push({
             id: generateId('pnl'),
