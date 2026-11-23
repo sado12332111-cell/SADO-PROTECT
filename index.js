@@ -546,14 +546,6 @@ function getScriptsForDiscordUser(discordUserId, guildId = null) {
     if (matched.length > 0) return matched;
     return allScripts;
 }
-    if (gid) {
-        const byGuild = state.scripts.filter((s) => s.ownerGuildId && String(s.ownerGuildId) === gid);
-        if (byGuild.length > 0) return byGuild;
-    }
-    const ownedByDiscord = state.scripts.filter((s) => s.ownerDiscordId && String(s.ownerDiscordId) === uid);
-    if (ownedByDiscord.length > 0) return ownedByDiscord;
-    return state.scripts;
-}
 
 function getScriptById(scriptId) {
     return state.scripts.find((s) => s.id === scriptId) || null;
@@ -1286,30 +1278,21 @@ function attachBotHandlers(botClient) {
                 await interaction.respond(choices).catch(() => {});
                 return;
             }
-        return null;
-    }
-    if (explicitQuery && explicitQuery !== '__NO_SCRIPTS__') {
-        const q = String(explicitQuery || '').trim().toLowerCase();
-        const found =
-            userScripts.find((s) => s.id.toLowerCase() === q) ||
-            userScripts.find((s) => s.name.toLowerCase() === q) ||
-            userScripts.find((s) => s.name.toLowerCase().includes(q)) ||
-            (state.scripts || []).find((s) => s.id.toLowerCase() === q || s.name.toLowerCase() === q) ||
-            null;
-        if (!found) {
-            const msg = `❌ "${explicitQuery}" adlı skript tapılmadı.`;
-            if (interaction.deferred || interaction.replied) {
-                await interaction.editReply({ content: msg });
-            } else {
-                await interaction.reply({ content: msg, ephemeral: true });
-            }
-            return null;
-        }
-        return found;
-    }
-    if (userScripts.length === 1) {
-        return userScripts[0];
-    }
+
+            if (interaction.isChatInputCommand()) {
+                if (!interaction.guild) {
+                    await interaction.reply({ content: '❌ Bu əmr yalnız Discord sunucusunda işləyir.', ephemeral: true });
+                    return;
+                }
+                if (!hasCommandPermission(interaction)) {
+                    await interaction.reply({
+                        content: '❌ Bu əmri işlətmək üçün icazəniz yoxdur.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+
+                await interaction.deferReply({ ephemeral: true });
 
                 const cmd = interaction.commandName;
 
@@ -2916,7 +2899,6 @@ const server = http.createServer(async (req, res) => {
             const wsWhitelists = state.whitelists.filter(
                 (w) => wsScriptIds.has(w.scriptId) && !w.revoked && !isExpired(w.expiresAt)
             );
-            const botInviteUrl =
             const botInviteUrl = BOT_INVITE_URL;
             let connectedGuild = resolveWorkspaceGuildDisplay(activeWorkspace);
             if (connectedGuild && connectedGuild.guildId && !connectedGuild.botInGuild) {
