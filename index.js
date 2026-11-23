@@ -1224,15 +1224,19 @@ function attachBotHandlers(botClient) {
             if (interaction.user) rememberUserProfile(interaction.user);
 
             if (interaction.isAutocomplete()) {
-                const focused = String(interaction.options.getFocused() || '').toLowerCase();
+                const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
                 const userScripts = getScriptsForDiscordUser(interaction.user.id, interaction.guildId);
-                const matches = userScripts.filter(
-                    (s) => !focused || s.name.toLowerCase().includes(focused) || s.id.toLowerCase().includes(focused)
+                const sourceList = userScripts.length > 0 ? userScripts : state.scripts;
+                const matches = sourceList.filter(
+                    (s) =>
+                        !focused ||
+                        String(s.name || '').toLowerCase().includes(focused) ||
+                        String(s.id || '').toLowerCase().includes(focused)
                 );
-                const pool = matches.length > 0 ? matches : userScripts;
+                const pool = matches.length > 0 ? matches : sourceList;
                 const choices = pool.slice(0, 25).map((s) => ({
-                    name: s.name.slice(0, 100),
-                    value: s.id
+                    name: String(s.name || s.id || 'Script').slice(0, 100),
+                    value: String(s.id)
                 }));
                 await interaction.respond(choices).catch(() => {});
                 return;
