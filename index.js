@@ -561,10 +561,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'panel') {
         try {
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-          }
-
           const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
           const customTitle = String(interaction.options.getString('title') || '').trim();
           const sc =
@@ -575,8 +571,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ) || state.scripts[0];
 
           if (!sc) {
-            await interaction.editReply({
+            await interaction.reply({
               content: '❌ Saytda hələ heç bir skript yaradılmayıb. Əvvəl Dashboard-dan skript yaradın.',
+              flags: MessageFlags.Ephemeral,
             });
             return;
           }
@@ -584,20 +581,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
           let targetChannel = interaction.channel;
           if (!targetChannel || typeof targetChannel.send !== 'function') {
             if (interaction.channelId) {
-              targetChannel = await client.channels.fetch(interaction.channelId).catch(() => null);
+              targetChannel = await Promise.race([
+                client.channels.fetch(interaction.channelId),
+                new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
+              ]).catch(() => null);
             }
           }
 
           if (!targetChannel || typeof targetChannel.send !== 'function') {
-            await interaction.editReply({
+            await interaction.reply({
               content: '❌ Bu kanalda mesaj göndərmək mümkün olmadı.',
+              flags: MessageFlags.Ephemeral,
             });
             return;
           }
 
           const overrideCfg = customTitle ? { title: customTitle } : null;
           const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
-          const sentMsg = await targetChannel.send({ embeds: [embed], components: [row] });
+          const sentMsg = await Promise.race([
+            targetChannel.send({ embeds: [embed], components: [row] }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
+          ]);
 
           state.panels.push({
             id: generateId('pnl'),
@@ -607,19 +611,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
             scriptId: sc.id,
             createdAt: new Date().toISOString(),
           });
-          await saveStore();
+          saveStore().catch(() => {});
 
-          await interaction.editReply({
-            content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
-          });
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+              content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            await interaction.followUp({
+              content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
         } catch (panelErr) {
           console.error('[SLASH /panel ERROR]', panelErr && panelErr.message ? panelErr.message : panelErr);
           const errMsg = `❌ Panel göndərilmədi: ${(panelErr && panelErr.message) || 'İcazə və ya kanal xətası'}`.slice(0, 1900);
           try {
-            if (interaction.deferred || interaction.replied) {
-              await interaction.editReply({ content: errMsg });
-            } else {
+            if (!interaction.replied && !interaction.deferred) {
               await interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
+            } else {
+              await interaction.followUp({ content: errMsg, flags: MessageFlags.Ephemeral });
             }
           } catch (_replyErr) {
             // Səssiz ötürülür
