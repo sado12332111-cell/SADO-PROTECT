@@ -1310,9 +1310,8 @@ app.get('/api/loader/:token', (req, res) => {
     }
   }
 
-  const protectedPayload = ultraObfuscateLuaCode(sc.code, 3);
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-  res.type('text/plain; charset=utf-8').send(protectedPayload);
+  res.type('text/plain; charset=utf-8').send(String(sc.code || ''));
 });
 
 app.get('/api/keys', (req, res) => {
