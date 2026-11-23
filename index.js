@@ -565,32 +565,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const customTitle = String(interaction.options.getString('title') || '').trim();
           const sc =
             state.scripts.find(
-              (s) =>
-                String(s.id) === chosenScriptArg ||
-                String(s.name || '').toLowerCase() === chosenScriptArg.toLowerCase()
-            ) || state.scripts[0];
-
-          if (!sc) {
-            await interaction.reply({
-              content: '❌ Saytda hələ heç bir skript yaradılmayıb. Əvvəl Dashboard-dan skript yaradın.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
+          let targetChannelId = interaction.channelId;
           let targetChannel = interaction.channel;
-          if (!targetChannel || typeof targetChannel.send !== 'function') {
-            if (interaction.channelId) {
-              targetChannel = await Promise.race([
-                client.channels.fetch(interaction.channelId),
-                new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
-              ]).catch(() => null);
-            }
+          if (!targetChannel && targetChannelId) {
+            targetChannel = client.channels.cache.get(targetChannelId) || null;
           }
 
-          if (!targetChannel || typeof targetChannel.send !== 'function') {
+          if (!targetChannelId && targetChannel && targetChannel.id) {
+            targetChannelId = targetChannel.id;
+          }
+
+          if (!targetChannelId) {
             await interaction.reply({
-              content: '❌ Bu kanalda mesaj göndərmək mümkün olmadı.',
+              content: '❌ Kanal ID tapılmadı.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -598,16 +585,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           const overrideCfg = customTitle ? { title: customTitle } : null;
           const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
-          const sentMsg = await Promise.race([
-            targetChannel.send({ embeds: [embed], components: [row] }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
-          ]);
+          const messagePayload = {
+            embeds: [embed.toJSON()],
+            components: [row.toJSON()],
+          };
+
+          let sentMsg = null;
+          if (targetChannel && typeof targetChannel.send === 'function') {
+            sentMsg = await Promise.race([
+              targetChannel.send({ embeds: [embed], components: [row] }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
+            ]);
+          } else {
+            sentMsg = await Promise.race([
+              client.rest.post(Routes.channelMessages(targetChannelId), { body: messagePayload }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Kanal mesaj göndərmə vaxtı bitdi')), 4000)),
+            ]);
+          }
 
           state.panels.push({
             id: generateId('pnl'),
             guildId: interaction.guildId || state.activeGuildId || '',
-            channelId: targetChannel.id || interaction.channelId,
-            messageId: sentMsg.id,
+            channelId: targetChannelId,
+            messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
             scriptId: sc.id,
             createdAt: new Date().toISOString(),
           });
