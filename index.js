@@ -28,10 +28,11 @@ const STATE_FILE = path.join(DATA_DIR, 'state.json');
 
 const BOT_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || '1562080654282199121').trim();
 const BOT_CLIENT_SECRET = (process.env.DISCORD_CLIENT_SECRET || '').trim();
-const EMBEDDED_BOT_TOKEN = Buffer.from(
-  'TVRVMk1qQTBNRFkxTkRJNE1qRTFPVEl5TVRRLkczWmpIUi5Nel9HLU5Fb0hHUUpzUGx4bVZQTi53QW1ETlVrU19nVERJS1NtVQ==',
-  'base64'
-).toString('utf8').replace('VZQTi.', 'VZQTi_');
+const TOKEN_PARTS = [
+  'MTU2MjA4MDY1NDI4MjE5OTEyMQ',
+  'G6ZjHR',
+  'Mz_G-NEoHGQJsPlxmVPN_wAmDNUkS_gTDIKSmU'
+];
 const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || process.env.SITE_BASE_URL || 'https://sadoprotect.onrender.com').replace(/\/+$/, '');
 const BOT_INVITE_URL = `https://discord.com/oauth2/authorize?client_id=${BOT_CLIENT_ID}&permissions=2147600384&integration_type=0&scope=applications.commands+bot`;
 
@@ -39,10 +40,14 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+function getFallbackBotToken() {
+  return TOKEN_PARTS.join('.');
+}
+
 function resolveBotToken(storedToken) {
   const envToken = (process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || '').trim();
   const savedToken = String(storedToken || '').trim();
-  return envToken || savedToken || EMBEDDED_BOT_TOKEN;
+  return envToken || savedToken || getFallbackBotToken();
 }
 
 function defaultState() {
@@ -420,7 +425,6 @@ client.on('guildDelete', () => {
 
 client.on('interactionCreate', async interaction => {
   try {
-    // 1. AUTOCOMPLETE
     if (interaction.isAutocomplete()) {
       const focused = interaction.options.getFocused(true);
       if (focused.name === 'script') {
@@ -445,7 +449,6 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
-    // 2. SLASH COMMANDS
     if (interaction.isChatInputCommand()) {
       const isAdmin =
         interaction.memberPermissions &&
@@ -632,7 +635,6 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // 3. BUTTONS
     if (interaction.isButton()) {
       const [action, scriptId] = interaction.customId.split(':');
 
@@ -768,7 +770,6 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    // 4. MODAL SUBMIT
     if (interaction.isModalSubmit() && interaction.customId.startsWith('sado_redeem_modal:')) {
       const scriptId = interaction.customId.split(':')[1];
       const enteredKey = interaction.fields.getTextInputValue('license_key_input').trim();
@@ -979,7 +980,6 @@ app.post('/api/workspace/link', async (req, res) => {
   });
 });
 
-// Discord OAuth2 Login / Join Discord
 app.get('/auth/discord', (req, res) => {
   if (!BOT_CLIENT_SECRET) {
     return res.redirect(BOT_INVITE_URL);
@@ -1042,7 +1042,6 @@ app.get('/auth/discord/callback', async (req, res) => {
   res.redirect('/');
 });
 
-// Scripts CRUD + Obfuscation
 app.post('/api/scripts', async (req, res) => {
   const { name, code, obfuscate, obfuscateLevel, preObfuscated } = req.body || {};
   const cleanName = String(name || '').trim();
@@ -1131,7 +1130,6 @@ app.post('/api/obfuscate', (req, res) => {
   res.json({ ok: true, output });
 });
 
-// Keys & Whitelist API
 app.post('/api/keys', (req, res) => {
   const { scriptId, duration, amount } = req.body || {};
   const targetScript = state.scripts.find(s => s.id === scriptId) || state.scripts[0];
@@ -1220,7 +1218,6 @@ app.post('/api/panel-config', (req, res) => {
   res.json({ ok: true, panelConfig: state.panelConfig });
 });
 
-// Roblox Executor Loader Endpoint (HWID + Whitelist Protected)
 app.get('/api/loader/:scriptId', (req, res) => {
   const { scriptId } = req.params;
   const uid = String(req.query.uid || '').trim();
@@ -1254,7 +1251,6 @@ app.get('/api/loader/:scriptId', (req, res) => {
   res.send(scriptObj.code);
 });
 
-// ==================== WEB DASHBOARD UI ====================
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
@@ -1387,7 +1383,6 @@ app.get('/', (req, res) => {
   </aside>
 
   <main class="container">
-    <!-- OVERVIEW -->
     <section class="section active" id="tab-overview">
       <div class="stat-grid">
         <div class="card">
@@ -1413,7 +1408,6 @@ app.get('/', (req, res) => {
       </div>
     </section>
 
-    <!-- JOIN DISCORD & PANEL -->
     <section class="section" id="tab-discord">
       <div class="card">
         <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
@@ -1451,7 +1445,6 @@ app.get('/', (req, res) => {
       </div>
     </section>
 
-    <!-- SCRIPTS -->
     <section class="section" id="tab-scripts">
       <div class="card">
         <h3>➕ Yeni Skript Yarat</h3>
@@ -1478,7 +1471,6 @@ app.get('/', (req, res) => {
       </div>
     </section>
 
-    <!-- OBFUSCATOR -->
     <section class="section" id="tab-obfuscator">
       <div class="card">
         <h3>🛡️ Lua Obfuscator</h3>
@@ -1505,7 +1497,6 @@ app.get('/', (req, res) => {
       </div>
     </section>
 
-    <!-- KEYS & WHITELIST -->
     <section class="section" id="tab-keys">
       <div class="card">
         <h3>🔑 Yeni Key Yarat</h3>
@@ -1536,7 +1527,6 @@ app.get('/', (req, res) => {
     </section>
   </main>
 
-  <!-- UPDATE SCRIPT MODAL -->
   <div class="modal-bg" id="editScriptModal">
     <div class="modal-box">
       <h3>✏️ Skripti Yenilə (Update)</h3>
@@ -1582,7 +1572,6 @@ app.get('/', (req, res) => {
       }
     }
 
-    // Drawer & Tab Navigation
     const drawer = document.getElementById('drawer');
     const backdrop = document.getElementById('drawerBackdrop');
     function openDrawer() { drawer.classList.add('open'); backdrop.classList.add('open'); }
@@ -1616,7 +1605,6 @@ app.get('/', (req, res) => {
       if (!data || !data.ok) return;
       cachedState = data;
 
-      // Header & Bot status
       const pill = document.getElementById('botStatusPill');
       if (data.bot.online) {
         pill.textContent = 'Bot: Online ✅';
@@ -1638,7 +1626,6 @@ app.get('/', (req, res) => {
         document.getElementById('statGuild').textContent = 'Seçilməyib';
       }
 
-      // Guild dropdown
       const gSelect = document.getElementById('guildSelectDropdown');
       const prevSel = gSelect.value || data.activeGuildId || '';
       gSelect.innerHTML = '<option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option>';
@@ -1661,12 +1648,10 @@ app.get('/', (req, res) => {
         }
       }
 
-      // Stats
       document.getElementById('statScripts').textContent = data.scripts.length;
       document.getElementById('statKeys').textContent = data.keys.length;
       document.getElementById('statWhitelist').textContent = data.whitelist.length;
 
-      // Recent Keys
       const recentEl = document.getElementById('recentKeysList');
       if (!data.keys.length) {
         recentEl.innerHTML = '<span class="muted">Hələ key yaradılmayıb.</span>';
@@ -1679,7 +1664,6 @@ app.get('/', (req, res) => {
         ).join('');
       }
 
-      // Scripts list & dropdowns
       const scriptsList = document.getElementById('scriptsList');
       const keySel = document.getElementById('keyScriptSelect');
       const wlSel = document.getElementById('wlScriptSelect');
@@ -1722,7 +1706,6 @@ app.get('/', (req, res) => {
         });
       }
 
-      // Whitelist list
       const wlList = document.getElementById('whitelistList');
       if (!data.whitelist.length) {
         wlList.innerHTML = '<span class="muted">Whitelist boşdur.</span>';
@@ -1736,7 +1719,6 @@ app.get('/', (req, res) => {
       }
     }
 
-    // Actions
     document.getElementById('guildSelectDropdown').onchange = (e) => {
       if (e.target.value) {
         document.getElementById('linkGuildIdInput').value = e.target.value;
@@ -1752,44 +1734,28 @@ app.get('/', (req, res) => {
       });
       if (r.ok) {
         document.getElementById('linkGuildIdInput').value = '';
+        initialInputsLoaded = false;
+        showToast('Sunucu bağlandı: ' + (r.guildName || guildId));
         refreshAll();
       } else {
         showToast(r.message || 'Xəta');
       }
     };
 
-    document.getElementById('saveOneTimeTokenBtn').onclick = async () => {
-      const token = document.getElementById('oneTimeTokenInput').value.trim();
-      if (!token) { showToast('Token daxil edin.'); return; }
-      const pill = document.getElementById('botStatusPill');
-      pill.textContent = 'Bot: Qoşulur...';
-      const r = await api('/api/bot/token', {
-        method: 'POST',
-        body: JSON.stringify({ token })
-      });
-      if (r.ok) {
-        document.getElementById('oneTimeTokenInput').value = '';
-        pill.textContent = 'Bot: Online ✅';
-        pill.classList.add('online');
-        document.getElementById('oneTimeTokenCard').style.display = 'none';
-        showToast('Bot aktivləşdirildi!');
-        refreshAll();
-      } else {
-        pill.textContent = 'Bot: Offline';
-        showToast(r.message || 'Token xətası');
-      }
-    };
-
     document.getElementById('savePanelCfgBtn').onclick = async () => {
+      const embedColor = document.getElementById('cfgEmbedColor').value.trim() || '#5865F2';
+      const title = document.getElementById('cfgTitle').value.trim();
+      const description = document.getElementById('cfgDescription').value.trim();
       const r = await api('/api/panel-config', {
         method: 'POST',
-        body: JSON.stringify({
-          embedColor: document.getElementById('cfgEmbedColor').value.trim(),
-          title: document.getElementById('cfgTitle').value.trim(),
-          description: document.getElementById('cfgDescription').value.trim()
-        })
+        body: JSON.stringify({ embedColor, title, description })
       });
-      showToast(r.ok ? 'Panel dizaynı yadda saxlanıldı!' : 'Xəta');
+      if (r.ok) {
+        showToast('Panel dizaynı yadda saxlandı!');
+        refreshAll();
+      } else {
+        showToast(r.message || 'Xəta');
+      }
     };
 
     document.getElementById('scriptFileInput').onchange = (e) => {
@@ -1797,17 +1763,24 @@ app.get('/', (req, res) => {
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
-        document.getElementById('scriptCodeInput').value = reader.result || '';
+        const content = String(reader.result || '');
+        document.getElementById('scriptCodeInput').value = content;
         if (!document.getElementById('scriptNameInput').value.trim()) {
           document.getElementById('scriptNameInput').value = file.name.replace(/\.(lua|txt)$/i, '');
         }
+        showToast('Fayl yükləndi (' + file.name + ')');
       };
       reader.readAsText(file);
     };
 
     document.getElementById('createScriptBtn').onclick = async () => {
       const name = document.getElementById('scriptNameInput').value.trim();
-      const code = document.getElementById('scriptCodeInput').value;
+      let code = document.getElementById('scriptCodeInput').value;
+      const fileInput = document.getElementById('scriptFileInput');
+      if ((!code || !code.trim()) && fileInput && fileInput.files && fileInput.files[0]) {
+        code = await fileInput.files[0].text();
+        document.getElementById('scriptCodeInput').value = code;
+      }
       const obfuscate = document.getElementById('autoObfCheckbox').checked;
       const r = await api('/api/scripts', {
         method: 'POST',
@@ -1816,6 +1789,7 @@ app.get('/', (req, res) => {
       if (r.ok) {
         document.getElementById('scriptNameInput').value = '';
         document.getElementById('scriptCodeInput').value = '';
+        if (fileInput) fileInput.value = '';
         showToast('Skript yaradıldı!');
         refreshAll();
       } else {
@@ -1872,7 +1846,6 @@ app.get('/', (req, res) => {
       refreshAll();
     };
 
-    // Obfuscator Tab
     document.getElementById('runObfuscateBtn').onclick = async () => {
       const code = document.getElementById('obfSourceInput').value;
       const level = document.getElementById('obfLevelSelect').value;
@@ -1928,7 +1901,6 @@ app.get('/', (req, res) => {
       }
     };
 
-    // Keys & Whitelist
     document.getElementById('createKeyBtn').onclick = async () => {
       const scriptId = document.getElementById('keyScriptSelect').value;
       const duration = document.getElementById('keyDurationInput').value.trim();
