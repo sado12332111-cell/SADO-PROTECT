@@ -1,10 +1,10 @@
 /**
  * SADO PROTECT - Control Dashboard & Discord Bot (index.js)
  * Tam və müstəqil Node.js tətbiqi:
- * - Sabit const bot tokeni (token əlavə etmə formu yoxdur, 7/24 həmişə online)
- * - Discord.js v14 botu (/panel slash əmri, Redeem Key, Get Script + Skripti Kopyala, Reset HWID, Stats)
- * - Express web serveri (Dashboard UI + REST API)
- * - Script idarəetməsi, Lua fayl yükləmə və Lua Obfuscator
+ * - Sabit const bot tokeni (7/24 həmişə online)
+ * - Discord.js v14 botu (/panel, /whitelist, Redeem Key, Get Script + Skripti Kopyala, Reset HWID, Stats)
+ * - Express web serveri (Dashboard UI + REST API + Anti-Dump Protected Loader)
+ * - Script idarəetməsi, Lua fayl yükləmə və Ultra Lua Obfuscator
  * - Key yaratma, Whitelist/Blacklist, Join Discord & Sunucu/User ID bağlama
  */
 
@@ -43,7 +43,7 @@ const BOT_TOKEN_SEGMENTS = [
   'G6ZjHR',
   'Mz_G-NEoHGQJsPlxmVPN_wAmDNUkS_gTDIKSmU',
 ];
-const BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || BOT_TOKEN_SEGMENTS.join('.')).trim();
+const BOT_TOKEN = BOT_TOKEN_SEGMENTS.join('.');
 
 function createDefaultState() {
   return {
@@ -128,7 +128,7 @@ function saveStore() {
 }
 
 // ============================================================================
-// 2. KÖMƏKÇİ FUNKSİYALAR, LUA OBFUSCATOR VƏ DİZAYN XƏRİTƏLƏRİ
+// 2. KÖMƏKÇİ FUNKSİYALAR, ULTRA LUA OBFUSCATOR VƏ DİZAYN XƏRİTƏLƏRİ
 // ============================================================================
 
 function generateId(prefix = 'id') {
@@ -221,7 +221,7 @@ function ultraObfuscateLuaCode(sourceCode, level = 3) {
   for (let i = 0; i < code.length; i++) {
     const b = code.charCodeAt(i) & 0xff;
     const sChar = saltStr.charCodeAt(i % saltStr.length) & 0xff;
-    const step1 = (b ^ ((seedA + (i * 7)) & 0xff)) & 0xff;
+    const step1 = (b ^ ((seedA + i * 7) & 0xff)) & 0xff;
     const step2 = (step1 + ((seedB + (i % 29)) & 0xff)) & 0xff;
     const step3 = (step2 ^ sChar) & 0xff;
     encoded.push(step3);
@@ -240,17 +240,26 @@ function ultraObfuscateLuaCode(sourceCode, level = 3) {
     `local _SA, _SB = ${seedA}, ${seedB}`,
     `local _SLT = "${saltStr}"`,
     `local _DAT = {${payload}}`,
+    'local function _BXOR(a, b)',
+    '  if bit32 and bit32.bxor then return bit32.bxor(a, b) end',
+    '  local r, p = 0, 1',
+    '  while a > 0 or b > 0 do',
+    '    if (a % 2) ~= (b % 2) then r = r + p end',
+    '    a = math.floor(a / 2); b = math.floor(b / 2); p = p * 2',
+    '  end',
+    '  return r',
+    'end',
     'local function _SADO_VM(d, sa, sb, slt)',
     '  if #_BAIT_A < 12 or #_BAIT_B ~= 16 then return "" end',
-    '  local buf = table.create and table.create(#d) or {}',
+    '  local buf = {}',
     '  local sl = #slt',
     '  for idx = 1, #d do',
     '    local sc = string.byte(slt, ((idx - 1) % sl) + 1)',
-    '    local v1 = (d[idx] ~ sc) & 255',
-    '    local v2 = (v1 - ((sb + ((idx - 1) % 29)) & 255)) % 256',
+    '    local v1 = _BXOR(d[idx], sc) % 256',
+    '    local v2 = (v1 - ((sb + ((idx - 1) % 29)) % 256)) % 256',
     '    if v2 < 0 then v2 = v2 + 256 end',
-    '    local v3 = (v2 ~ ((sa + ((idx - 1) * 7)) & 255)) & 255',
-    '    buf[idx] = string.char(v3)',
+    '    local v3 = _BXOR(v2, (sa + ((idx - 1) * 7)) % 256) % 256',
+    '    buf[#buf + 1] = string.char(v3)',
     '  end',
     '  return table.concat(buf)',
     'end',
@@ -258,13 +267,13 @@ function ultraObfuscateLuaCode(sourceCode, level = 3) {
     'if type(_LD) ~= "function" then return end',
     'local _SRC = _SADO_VM(_DAT, _SA, _SB, _SLT)',
     'if type(_SRC) == "string" and #_SRC > 0 then',
-    '  local _RUN, _ERR = _LD(_SRC)',
-    '  if _RUN then return _RUN() end',
+    '  local _RUN, _ERR = _LD(_SRC, "@sado_vm")',
+    '  if type(_RUN) == "function" then return _RUN() elseif _ERR then warn("[SADO PROTECT] " .. tostring(_ERR)) end',
     'end',
   ].join('\n');
 }
 
-function obfuscateLuaCode(sourceCode, level = 2) {
+function obfuscateLuaCode(sourceCode, level = 3) {
   const code = String(sourceCode || '');
   const xorKey = (crypto.randomBytes(1)[0] % 120) + 17;
   const bytes = [];
@@ -281,27 +290,51 @@ function obfuscateLuaCode(sourceCode, level = 2) {
     `-- [[ SADO PROTECT LUA OBFUSCATOR v${level}.0 ]] --`,
     `local _X = ${xorKey}`,
     `local _B = {${payload}}`,
+    'local function _BXOR(a, b)',
+    '  if bit32 and bit32.bxor then return bit32.bxor(a, b) end',
+    '  local r, p = 0, 1',
+    '  while a > 0 or b > 0 do',
+    '    if (a % 2) ~= (b % 2) then r = r + p end',
+    '    a = math.floor(a / 2); b = math.floor(b / 2); p = p * 2',
+    '  end',
+    '  return r',
+    'end',
     'local function _U(t, k)',
     '  local s = {}',
     '  for i = 1, #t do',
-    '    s[i] = string.char((t[i] ~ k) % 256)',
+    '    s[i] = string.char(_BXOR(t[i], k) % 256)',
     '  end',
     '  return table.concat(s)',
     'end',
     'local _FN = loadstring or load',
     'local _EX = _FN(_U(_B, _X))',
-    'if _EX then return _EX() end',
+    'if type(_EX) == "function" then return _EX() end',
   ].join('\n');
 }
 
 function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
   const safeKey = String(keyValue || 'YOUR_KEY_HERE').replace(/"/g, '\\"');
   const scriptToken = scriptObj.loaderToken || scriptObj.id;
+  const loaderUrl = `https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=`;
   return [
-    `script_key = "${safeKey}";`,
-    'pcall(function()',
-    `  loadstring(game:HttpGet("https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=" .. tostring(script_key)))()`,
-    'end)',
+    `script_key = "${safeKey}"`,
+    'local function _sadoFetch(url)',
+    '  local ok, res = pcall(function() return game:HttpGet(url) end)',
+    '  if ok and type(res) == "string" and #res > 0 then return res end',
+    '  local reqFn = (syn and syn.request) or (http and http.request) or http_request or request',
+    '  if type(reqFn) == "function" then',
+    '    local rOk, rData = pcall(function() return reqFn({ Url = url, Method = "GET" }) end)',
+    '    if rOk and type(rData) == "table" and type(rData.Body) == "string" then return rData.Body end',
+    '  end',
+    '  return nil',
+    'end',
+    `local _body = _sadoFetch("${loaderUrl}" .. tostring(script_key))`,
+    'if type(_body) == "string" and #_body > 0 then',
+    '  local fn, err = (loadstring or load)(_body)',
+    '  if type(fn) == "function" then return fn() else warn("[SADO PROTECT] " .. tostring(err)) end',
+    'else',
+    '  warn("[SADO PROTECT] Skript yüklənə bilmədi (Key və ya bağlantı yoxlanılmalıdır).")',
+    'end',
   ].join('\n');
 }
 
@@ -732,7 +765,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           (w) => w.discordUserId === userId && (!sc || !w.scriptId || w.scriptId === sc.id) && !isExpired(w.expiresAt)
         );
         const keyVal = wl ? wl.key : 'WHITELIST_KEY';
-        const snippet = sc ? buildLoaderSnippet(sc, keyVal) : `script_key = "${keyVal}";`;
+        const snippet = sc ? buildLoaderSnippet(sc, keyVal) : `script_key = "${keyVal}"`;
 
         const copyEmbed = new EmbedBuilder()
           .setColor(hexToDiscordInt(state.panelConfig.embedColor || '#5865F2'))
@@ -1164,7 +1197,7 @@ app.put('/api/scripts/:id', async (req, res) => {
     if (body.code !== undefined && String(body.code).trim()) {
       let nextCode = String(body.code);
       if (body.obfuscate) {
-        nextCode = obfuscateLuaCode(nextCode, Number(body.obfuscateLevel || 2));
+        nextCode = obfuscateLuaCode(nextCode, Number(body.obfuscateLevel || 3));
         sc.obfuscated = true;
       }
       sc.code = nextCode;
@@ -1915,7 +1948,7 @@ const DASHBOARD_HTML = [
   '          var box = document.getElementById("scriptsListContainer");',
   '          if (!latestScripts.length) { box.innerHTML = "<span class=\\"muted\\">Hələ skript yaradılmayıb.</span>"; return; }',
   '          box.innerHTML = latestScripts.map(function (sc) {',
-  '            return "<div class=\\"item-box\\" style=\\"flex-direction:column; align-items:stretch;\\"><div style=\\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">📜 " + escapeHtml(sc.name) + (sc.obfuscated ? " 🛡️" : "") + "</div><div class=\\"item-sub\\">" + escapeHtml(sc.fileName || "script.lua") + "</div></div><div class=\\"item-actions\\"><button class=\\"btn btn-cyan btn-sm\\" type=\\"button\\" onclick=\\"window.__updateScript(\'" + sc.id + "\')\\">✏️ Update</button><button class=\\"btn btn-danger btn-sm\\" type=\\"button\\" onclick=\\"window.__deleteScript(\'" + sc.id + "\')\\">🗑️ Sil</button></div></div><code class=\\"code-preview\\">script_key = \\"YOUR_KEY\\";\\nloadstring(game:HttpGet(\\"https://sado-protect.onrender.com/api/loader/" + encodeURIComponent(sc.loaderToken || sc.id) + "?key=\\" .. tostring(script_key)))()</code></div>";',
+  '            return "<div class=\\"item-box\\" style=\\"flex-direction:column; align-items:stretch;\\"><div style=\\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">📜 " + escapeHtml(sc.name) + (sc.obfuscated ? " 🛡️" : "") + "</div><div class=\\"item-sub\\">" + escapeHtml(sc.fileName || "script.lua") + "</div></div><div class=\\"item-actions\\"><button class=\\"btn btn-cyan btn-sm\\" type=\\"button\\" onclick=\\"window.__updateScript(\'" + sc.id + "\')\\">✏️ Update</button><button class=\\"btn btn-danger btn-sm\\" type=\\"button\\" onclick=\\"window.__deleteScript(\'" + sc.id + "\')\\">🗑️ Sil</button></div></div><code class=\\"code-preview\\">script_key = \\"YOUR_KEY\\"\\nloadstring(game:HttpGet(\\"https://sado-protect.onrender.com/api/loader/" + encodeURIComponent(sc.loaderToken || sc.id) + "?key=\\" .. tostring(script_key)))()</code></div>";',
   '          }).join("");',
   '        } catch (_err) {}',
   '      }',
@@ -1927,7 +1960,7 @@ const DASHBOARD_HTML = [
   '        var obf = document.getElementById("newScriptObfuscate").checked;',
   '        var r = await fetch("/api/scripts/" + encodeURIComponent(id), {',
   '          method: "PUT", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ name: nextName, code: nextCode, obfuscate: obf })',
+  '          body: JSON.stringify({ name: nextName, code: nextCode, obfuscate: obf, obfuscateLevel: 3 })',
   '        });',
   '        var j = await r.json();',
   '        showToast(j.message || "Yeniləndi");',
@@ -1984,7 +2017,7 @@ const DASHBOARD_HTML = [
   '        var fileName = (fileEl.files && fileEl.files[0]) ? fileEl.files[0].name : ((name || "script") + ".lua");',
   '        var r = await fetch("/api/scripts", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ name: name, fileName: fileName, code: code, obfuscate: obfuscate, obfuscateLevel: 2 })',
+  '          body: JSON.stringify({ name: name, fileName: fileName, code: code, obfuscate: obfuscate, obfuscateLevel: 3 })',
   '        });',
   '        var j = await r.json();',
   '        if (r.ok && j.ok) {',
@@ -2009,7 +2042,7 @@ const DASHBOARD_HTML = [
   '      });',
   '      document.getElementById("runObfBtn").addEventListener("click", async function () {',
   '        var code = document.getElementById("obfInputCode").value;',
-  '        var level = Number(document.getElementById("obfLevelSelect").value || 2);',
+  '        var level = Number(document.getElementById("obfLevelSelect").value || 3);',
   '        var r = await fetch("/api/obfuscate", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ code: code, level: level })',
@@ -2026,7 +2059,7 @@ const DASHBOARD_HTML = [
   '      document.getElementById("saveObfAsScriptBtn").addEventListener("click", async function () {',
   '        var obfCode = document.getElementById("obfOutputCode").value;',
   '        var rawCode = document.getElementById("obfInputCode").value;',
-  '        var level = Number(document.getElementById("obfLevelSelect").value || 2);',
+  '        var level = Number(document.getElementById("obfLevelSelect").value || 3);',
   '        var name = document.getElementById("obfSaveScriptName").value.trim() || "SADO Obfuscated Script";',
   '        var finalCode = obfCode.trim() ? obfCode : rawCode;',
   '        var r = await fetch("/api/scripts", {',
