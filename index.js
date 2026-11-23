@@ -578,23 +578,52 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isAutocomplete()) {
       if (interaction.commandName === 'panel' || interaction.commandName === 'whitelist') {
-        const focused = String(interaction.options.getFocused() || '').toLowerCase();
-        const choices = (state.scripts || [])
-          .filter(
-            (sc) =>
-              !focused ||
-              String(sc.name || '').toLowerCase().includes(focused) ||
-              String(sc.id || '').toLowerCase().includes(focused)
-          )
-          .slice(0, 25)
-          .map((sc) => ({
-            name: String(sc.name || 'Script').slice(0, 100),
-            value: String(sc.id),
-          }));
-        if (!choices.length) {
-          choices.push({ name: 'SADO HUB (Aktiv Skript)', value: 'default' });
+        try {
+          const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
+          const allScripts = Array.isArray(state.scripts) ? state.scripts : [];
+          const filtered = allScripts.filter((sc) => {
+            if (!focused) return true;
+            const n = String(sc && sc.name ? sc.name : '').toLowerCase();
+            const id = String(sc && sc.id ? sc.id : '').toLowerCase();
+            return n.includes(focused) || id.includes(focused);
+          });
+
+          let choices = filtered.slice(0, 25).map((sc) => {
+            const safeName = String(sc.name || 'Script').trim() || 'Script';
+            const safeVal = String(sc.id || safeName).slice(0, 100);
+            return {
+              name: safeName.slice(0, 100),
+              value: safeVal,
+            };
+          });
+
+          if (!choices.length && allScripts.length) {
+            choices = allScripts.slice(0, 25).map((sc) => {
+              const safeName = String(sc.name || 'Script').trim() || 'Script';
+              const safeVal = String(sc.id || safeName).slice(0, 100);
+              return {
+                name: safeName.slice(0, 100),
+                value: safeVal,
+              };
+            });
+          }
+
+          if (!choices.length) {
+            choices.push({ name: 'SADO HUB', value: 'default' });
+          }
+
+          if (!interaction.responded) {
+            await interaction.respond(choices);
+          }
+        } catch (_autoErr) {
+          try {
+            if (!interaction.responded) {
+              await interaction.respond([{ name: 'SADO HUB', value: 'default' }]);
+            }
+          } catch (_ignore) {
+            // Səssiz ötürülür
+          }
         }
-        await interaction.respond(choices);
       }
       return;
     }
