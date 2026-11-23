@@ -2663,9 +2663,7 @@ const server = http.createServer(async (req, res) => {
                 (w) => wsScriptIds.has(w.scriptId) && !w.revoked && !isExpired(w.expiresAt)
             );
             const botInviteUrl =
-                client && client.user
-                    ? `https://discord.com/oauth2/authorize?client_id=${client.user.id}&permissions=8&scope=bot%20applications.commands`
-                    : null;
+                'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
             const connectedGuild = resolveWorkspaceGuildDisplay(activeWorkspace);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(
