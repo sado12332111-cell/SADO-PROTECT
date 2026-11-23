@@ -712,8 +712,32 @@ client.on('interactionCreate', async interaction => {
           .setFooter({ text: 'SADO PROTECT • Executor Loader' })
           .setTimestamp();
 
+        const copyRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`sado_copy_loader:${sid}`)
+            .setLabel('📋 Skripti Kopyala')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
         await interaction.reply({
           embeds: [scriptPanelEmbed],
+          components: [copyRow],
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (action === 'sado_copy_loader') {
+        const sid = scriptId || 'default';
+        const keyRecord = state.keys.find(
+          k => k.redeemedBy === interaction.user.id && (!sid || sid === 'default' || k.scriptId === sid)
+        );
+        const userKeyVal = (keyRecord && keyRecord.key) || 'WHITELISTED';
+        const loaderUrl = `${PUBLIC_SITE_URL}/api/loader/${sid}?uid=${interaction.user.id}`;
+        const luaLoader = `script_key = "${userKeyVal}"\nloadstring(game:HttpGet("${loaderUrl}"))()`;
+
+        await interaction.reply({
+          content: luaLoader,
           ephemeral: true
         });
         return;
@@ -1441,6 +1465,14 @@ app.get('/', (req, res) => {
         <input type="text" id="cfgTitle" placeholder="SADO PROTECT • Script Panel" />
         <label>Panel Açıqlaması</label>
         <input type="text" id="cfgDescription" placeholder="Aşağıdakı düymələrdən istifadə edin..." />
+        <label>Redeem Key Düymə Mətni</label>
+        <input type="text" id="cfgRedeemLabel" placeholder="🔑 Redeem Key" />
+        <label>Get Script Düymə Mətni</label>
+        <input type="text" id="cfgGetScriptLabel" placeholder="📜 Get Script" />
+        <label>Reset HWID Düymə Mətni</label>
+        <input type="text" id="cfgResetHwidLabel" placeholder="🔄 Reset HWID" />
+        <label>Stats Düymə Mətni</label>
+        <input type="text" id="cfgStatsLabel" placeholder="📊 Stats" />
         <button class="btn btn-primary" id="savePanelCfgBtn">💾 Panel Dizaynını Yadda Saxla</button>
       </div>
     </section>
@@ -1645,6 +1677,10 @@ app.get('/', (req, res) => {
           document.getElementById('cfgEmbedColor').value = data.panelConfig.embedColor || '#5865F2';
           document.getElementById('cfgTitle').value = data.panelConfig.title || '';
           document.getElementById('cfgDescription').value = data.panelConfig.description || '';
+          document.getElementById('cfgRedeemLabel').value = data.panelConfig.redeemLabel || '🔑 Redeem Key';
+          document.getElementById('cfgGetScriptLabel').value = data.panelConfig.getScriptLabel || '📜 Get Script';
+          document.getElementById('cfgResetHwidLabel').value = data.panelConfig.resetHwidLabel || '🔄 Reset HWID';
+          document.getElementById('cfgStatsLabel').value = data.panelConfig.statsLabel || '📊 Stats';
         }
       }
 
@@ -1746,9 +1782,21 @@ app.get('/', (req, res) => {
       const embedColor = document.getElementById('cfgEmbedColor').value.trim() || '#5865F2';
       const title = document.getElementById('cfgTitle').value.trim();
       const description = document.getElementById('cfgDescription').value.trim();
+      const redeemLabel = document.getElementById('cfgRedeemLabel').value.trim() || '🔑 Redeem Key';
+      const getScriptLabel = document.getElementById('cfgGetScriptLabel').value.trim() || '📜 Get Script';
+      const resetHwidLabel = document.getElementById('cfgResetHwidLabel').value.trim() || '🔄 Reset HWID';
+      const statsLabel = document.getElementById('cfgStatsLabel').value.trim() || '📊 Stats';
       const r = await api('/api/panel-config', {
         method: 'POST',
-        body: JSON.stringify({ embedColor, title, description })
+        body: JSON.stringify({
+          embedColor,
+          title,
+          description,
+          redeemLabel,
+          getScriptLabel,
+          resetHwidLabel,
+          statsLabel
+        })
       });
       if (r.ok) {
         showToast('Panel dizaynı yadda saxlandı!');
