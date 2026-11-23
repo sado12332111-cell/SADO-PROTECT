@@ -2148,6 +2148,12 @@ function renderDashboardHtml() {
         <a class="btn green" id="botInviteLinkBtn" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:inline-block;">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>
         <a class="btn" id="oauthLoginLinkBtn" href="/auth/discord" style="text-decoration:none;display:inline-block;">🔗 Discord Hesabı &amp; Sunucuları Avtomatik Bağla</a>
       </div>
+      <div id="botTokenSetupBox" style="display:none;margin-top:14px;padding:12px;border-radius:10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);">
+        <div style="font-weight:600;font-size:13px;color:#fca5a5;">⚠️ Bot Offline-dır (Token təyin edilməyib)</div>
+        <div class="muted" style="margin-top:4px;">Botun işləməsi və <code>/panel</code> əmrində skriptlərin gəlməsi üçün Discord Bot Tokenini 1 dəfə daxil edin. Bot aktiv olan kimi bu bölmə avtomatik gizlənəcək (heç kim görməyəcək).</div>
+        <input id="oneTimeBotTokenInput" type="password" placeholder="Discord Bot Token daxil edin..." style="margin-top:8px;" />
+        <button class="btn green" id="saveOneTimeTokenBtn" type="button">🚀 Botu Aktiv Et</button>
+      </div>
       <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
       <select id="guildSelectDropdown">
         <option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option>
@@ -2397,11 +2403,35 @@ async function refreshAll() {
     oauthBtn.style.display = 'none';
   }
   const pill = document.getElementById('botStatusPill');
-  pill.textContent = data.botReady ? ('SADO PROTECT Aktiv') : 'Bot Qoşulur...';
+  pill.textContent = data.botReady ? ('SADO PROTECT Aktiv') : 'Bot Offline (Token Lazımdır)';
+  const tokenSetupBox = document.getElementById('botTokenSetupBox');
+  if (tokenSetupBox) {
+    tokenSetupBox.style.display = data.botReady ? 'none' : 'block';
+  }
 
   document.getElementById('statScripts').textContent = (data.scripts || []).length;
   document.getElementById('statKeys').textContent = data.keysCount || 0;
   document.getElementById('statWl').textContent = data.whitelistsCount || 0;
+
+  const recentKeysList = document.getElementById('recentKeysList');
+  if (recentKeysList) {
+    recentKeysList.innerHTML = (data.recentKeys || []).length
+      ? data.recentKeys.map((k) =>
+          '<div class="list-item"><div><b>' + k.code + '</b> • <span class="muted">' + (k.scriptName || '') + '</span></div>' +
+          '<div class="muted">' + (k.redeemedByName ? ('İstifadəçi: ' + k.redeemedByName) : 'İstifadə olunmayıb') + '</div></div>'
+        ).join('')
+      : '<div class="muted">Hələ key yaradılmayıb.</div>';
+  }
+
+  const wlList = document.getElementById('wlList');
+  if (wlList) {
+    wlList.innerHTML = (data.whitelists || []).length
+      ? data.whitelists.map((w) =>
+          '<div class="list-item"><div><b>' + (w.username || w.userId) + '</b> • <span class="muted">' + (w.scriptName || '') + '</span></div>' +
+          '<button class="btn red" style="margin-top:0;padding:6px 10px;" onclick="removeWl(\\'' + w.id + '\\')">Sil</button></div>'
+        ).join('')
+      : '<div class="muted">Aktiv whitelist yoxdur.</div>';
+  }
 
   fillPanelCfgForm(data.panelButtonConfig);
 
@@ -2544,19 +2574,19 @@ document.getElementById('obfSaveAsScriptBtn').onclick = async () => {
   const r = await api('/api/scripts', {
     method: 'POST',
     body: JSON.stringify({
-      name,
-      code: alreadyObf.trim() ? alreadyObf : rawCode,
-      obfuscate: !alreadyObf.trim(),
-      obfuscateLevel: level,
-      preObfuscated: Boolean(alreadyObf.trim())
-    })
-  });
+document.getElementById('saveOneTimeTokenBtn').onclick = async () => {
+  const token = document.getElementById('oneTimeBotTokenInput').value.trim();
+  if (!token) {
+    showToast('Bot token daxil edin.');
+    return;
+  }
+  const r = await api('/api/bot-token', { method: 'POST', body: JSON.stringify({ token }) });
   if (r.ok) {
-    document.getElementById('obfSaveScriptName').value = '';
-    showToast('Şifrələnmiş skript panelə əlavə olundu!');
+    document.getElementById('oneTimeBotTokenInput').value = '';
+    showToast('Bot aktivləşdirildi və /panel sinxronizasiya olundu!');
     refreshAll();
   } else {
-    showToast(r.message || 'Xəta baş verdi');
+    showToast(r.message || 'Token xətası');
   }
 };
 
@@ -2843,6 +2873,31 @@ const server = http.createServer(async (req, res) => {
             const obfuscated = obfuscateLuaSource(code, level);
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: true, obfuscated }));
+            return;
+        }
+
+        if (reqUrl.pathname === '/api/bot-token' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const token = String(body.token || '').trim();
+            if (!token || token.length < 30) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Düzgün Discord Bot Token daxil edin.' }));
+                return;
+            }
+            runtimeBotToken = token;
+            state.savedBotToken = token;
+            persistState();
+            try {
+                await startOrRestartBot();
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: true, message: 'Bot uğurla qoşuldu!' }));
+            } catch (loginErr) {
+                runtimeBotToken = '';
+                state.savedBotToken = '';
+                persistState();
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ ok: false, message: 'Bot token yanlışdır: ' + loginErr.message }));
+            }
             return;
         }
 
