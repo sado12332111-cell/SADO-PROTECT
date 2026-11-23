@@ -1803,6 +1803,15 @@ app.get('/', (req, res) => {
         method: 'POST',
         body: JSON.stringify({ guildId, discordUserId })
       });
+      if (r.ok) {
+        initialInputsLoaded = false;
+        showToast('Sunucu bağlandı: ' + r.guildName);
+        refreshAll();
+      } else {
+        showToast(r.message || 'Xəta');
+      }
+    };
+
     document.getElementById('cfgColorPicker').oninput = (e) => {
       document.getElementById('cfgEmbedColor').value = e.target.value.toUpperCase();
     };
