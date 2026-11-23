@@ -1,14 +1,3 @@
-/**
- * SADO PROTECT - Control Dashboard & Discord Bot (index.js)
- * Tam və müstəqil Node.js tətbiqi:
- * - Discord.js v14 botu (avtomatik qoşulma, reconnect və 7/24 watchdog/keep-alive)
- * - Express web serveri (Dashboard UI + REST API)
- * - Script idarəetməsi, Lua fayl yükləmə və Lua Obfuscator
- * - Key yaratma, Redeem, Stats, HWID Reset və Whitelist/Blacklist
- * - Join Discord, Sunucu/User ID bağlama və Panel Buton/Embed Dizaynı
- * - Get Script zamanı skriptin altında kopyalama düyməsi və paneli
- */
-
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
