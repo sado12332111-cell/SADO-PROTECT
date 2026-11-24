@@ -2144,9 +2144,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       wlScriptSelect.innerHTML = scriptOpts;
 
       const scriptsListEl = document.getElementById('scriptsList');
+      const loaderBaseOrigin = window.location.origin;
       const scriptsHtml = (data.scripts || [])
         .map((s) => {
-          const loaderCode = 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + location.origin + '/loader/' + s.loaderToken + '?ws=' + wsId + '"))()';
+          const loaderUrl = loaderBaseOrigin + '/loader/' + s.loaderToken + '?ws=' + wsId;
+          const loaderCode = 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
           const block = '<div class="script-item"><div class="script-head"><div><strong>📜 ' + s.name + '</strong><div class="brand-sub">' + s.name + '.lua</div></div>' +
             '<div><button type="button" class="btn btn-blue btn-sm" onclick="copyText(' + JSON.stringify(loaderCode) + ')">📋 Kopyala</button>' +
             '<button type="button" class="btn btn-red btn-sm" onclick="deleteScript(\'' + s.id + '\')">🗑️ Sil</button></div></div>' +
