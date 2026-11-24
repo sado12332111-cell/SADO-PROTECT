@@ -2414,16 +2414,24 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     const activatePage = (pageKey) => {
       const targetKey = String(pageKey || 'overview');
-      document.querySelectorAll('.page-panel').forEach((panel) => {
+      const panels = document.querySelectorAll('.page-panel');
+      for (let i = 0; i < panels.length; i++) {
+        const panel = panels[i];
         const match = panel.id === 'page-' + targetKey;
         panel.classList.toggle('active', match);
         panel.style.display = match ? 'grid' : 'none';
-      });
-      document.querySelectorAll('.menu-card-btn').forEach((btn) => {
+      }
+      const navBtns = document.querySelectorAll('.menu-card-btn');
+      for (let j = 0; j < navBtns.length; j++) {
+        const btn = navBtns[j];
         btn.classList.toggle('active', btn.getAttribute('data-page') === targetKey);
-      });
+      }
       setMenuVisible(false);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      try {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch (_e) {
+        window.scrollTo(0, 0);
+      }
     };
 
     window.__sadoSwitchPage = activatePage;
@@ -2682,9 +2690,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     document.getElementById('closeMenuBtn').addEventListener('click', () => setMenuVisible(false));
 
     document.querySelectorAll('.menu-card-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        activatePage(btn.getAttribute('data-page'));
-      });
+      const handleSelect = (ev) => {
+        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+        const pg = btn.getAttribute('data-page');
+        activatePage(pg);
+      };
+      btn.addEventListener('click', handleSelect);
+      btn.addEventListener('touchend', handleSelect, { passive: false });
+    });
     });
 
     document.getElementById('scFileInput').addEventListener('change', (ev) => {
