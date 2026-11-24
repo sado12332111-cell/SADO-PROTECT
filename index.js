@@ -31,6 +31,54 @@ const DEFAULT_PANEL_CHANNEL_ID = '1559499280732131348';
 const BOT_INVITE_URL =
   'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
 
+const DEFAULT_PANEL_DESIGN = Object.freeze({
+  title: 'SADO PROTECT — Script & Key Panel',
+  description: 'Aşağıdakı düymələrdən istifadə edərək scriptinizi, keyinizi və HWID əməliyyatlarınızı idarə edin.',
+  color: '#F59E0B',
+  footerText: 'SADO PROTECT Enterprise • Live Sync',
+  thumbnailUrl: '',
+  imageUrl: '',
+  buttonOrder: [
+    'get_script',
+    'get_key',
+    'redeem_key',
+    'reset_hwid',
+    'check_status'
+  ],
+  buttons: {
+    get_script: {
+      label: 'Get Script',
+      emoji: '📜',
+      style: 'Success',
+      enabled: true
+    },
+    get_key: {
+      label: 'Get Key',
+      emoji: '🔑',
+      style: 'Primary',
+      enabled: true
+    },
+    redeem_key: {
+      label: 'Redeem Key',
+      emoji: '🎟️',
+      style: 'Secondary',
+      enabled: true
+    },
+    reset_hwid: {
+      label: 'Reset HWID',
+      emoji: '♻️',
+      style: 'Danger',
+      enabled: true
+    },
+    check_status: {
+      label: 'Check Status',
+      emoji: '📊',
+      style: 'Secondary',
+      enabled: true
+    }
+  }
+});
+
 const resolveProtectedBotToken = (customToken = null) => {
   const explicit = String(customToken || '').trim();
   if (explicit && explicit !== '••••••••••') {
@@ -932,7 +980,7 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-app.post('/api/keys', async (req, res) => {
+app.post('/api/obfuscate', async (req, res) => {
   try {
     const body = req.body || {};
     if (typeof body.clientId === 'string') appState.db.botConfig.clientId = body.clientId.trim();
@@ -1034,7 +1082,7 @@ app.post('/api/obfuscate', (req, res) => {
   }
 });
 
-app.post('/api/keys', (req, res) => {
+app.post('/api/keys', async (req, res) => {
   try {
     const body = req.body || {};
     const prefix = String(body.prefix || 'SADO').trim();
@@ -1072,7 +1120,7 @@ app.post('/api/keys', (req, res) => {
   }
 });
 
-app.post('/api/whitelist', (req, res) => {
+app.post('/api/whitelist', async (req, res) => {
   try {
     const body = req.body || {};
     const discordId = String(body.discordId || '').trim();
@@ -1155,20 +1203,6 @@ app.delete('/api/whitelist/:discordId', async (req, res) => {
   }
 });
 
-app.delete('/api/whitelist/:discordId', (req, res) => {
-  try {
-    const targetId = String(req.params.discordId || '').trim();
-    appState.db.whitelist = appState.db.whitelist.filter(
-      (w) => String(w.discordId).trim() !== targetId
-    );
-    saveDatabase();
-    appendActivityLog('WHITELIST_DEL', `Whitelist-dən silindi: ${targetId}`);
-    return res.status(200).json({ ok: true, data: getDashboardSnapshot() });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
 app.post('/api/blacklist', async (req, res) => {
   try {
     const body = req.body || {};
@@ -1188,8 +1222,7 @@ app.post('/api/blacklist', async (req, res) => {
         addedAt: new Date().toISOString()
       });
       saveDatabase();
-      appendActivityLog('BLACKLIST_ADD', `Blacklist əlavə edildi: ${discordId} (${reason})`);
-    }
+    appendActivityLog('BLACKLIST_ADD', `Blacklist əlavə edildi: ${discordId} (${reason})`);
     return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -1205,20 +1238,6 @@ app.delete('/api/blacklist/:discordId', async (req, res) => {
     saveDatabase();
     appendActivityLog('BLACKLIST_DEL', `Blacklist-dən silindi: ${targetId}`);
     return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-app.delete('/api/blacklist/:discordId', (req, res) => {
-  try {
-    const targetId = String(req.params.discordId || '').trim();
-    appState.db.blacklist = appState.db.blacklist.filter(
-      (b) => String(b.discordId).trim() !== targetId
-    );
-    saveDatabase();
-    appendActivityLog('BLACKLIST_DEL', `Blacklist-dən silindi: ${targetId}`);
-    return res.status(200).json({ ok: true, data: getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1292,32 +1311,6 @@ app.post('/api/panel/sync', async (_req, res) => {
   try {
     const syncResult = await syncAllPublishedPanels();
     return res.status(200).json({ ok: true, syncResult, data: await getDashboardSnapshot() });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-app.post('/api/panel/publish', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const channelId = String(body.channelId || appState.db.botConfig.defaultChannelId || '').trim();
-    const replaceExisting = body.replaceExisting !== false;
-
-    const record = await publishPanelToChannel(channelId, replaceExisting);
-    return res.status(200).json({
-      ok: true,
-      panel: record,
-      data: getDashboardSnapshot()
-    });
-  } catch (err) {
-    return res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-app.post('/api/panel/sync', async (_req, res) => {
-  try {
-    const syncResult = await syncAllPublishedPanels();
-    return res.status(200).json({ ok: true, syncResult, data: getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
