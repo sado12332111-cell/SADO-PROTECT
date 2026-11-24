@@ -960,7 +960,7 @@ app.post('/api/bot/connect', async (req, res) => {
   }
 });
 
-app.post('/api/scripts', (req, res) => {
+app.post('/api/scripts', async (req, res) => {
   try {
     const body = req.body || {};
     const name = String(body.name || '').trim();
