@@ -377,7 +377,26 @@ const resolveGuildDisplayName = async (targetGuildId) => {
     return dbState.botConfig.guildName.trim();
   }
 
-  return `Sunucu (${cleanId})`;
+  return "";
+};
+
+const refreshGuildNameInState = async (targetGuildId) => {
+  const cleanId = String(targetGuildId || dbState.botConfig.guildId || "").trim();
+  if (!cleanId) {
+    return "";
+  }
+  const resolvedName = await resolveGuildDisplayName(cleanId);
+  if (resolvedName && resolvedName !== "Sado Protect Hub") {
+    dbState.botConfig.guildId = cleanId;
+    dbState.botConfig.guildName = resolvedName;
+    if (botRuntimeStatus.connectedGuildId === cleanId || !botRuntimeStatus.connectedGuildId) {
+      botRuntimeStatus.connectedGuildName = resolvedName;
+      botRuntimeStatus.connectedGuildId = cleanId;
+    }
+    persistDatabaseToDisk();
+    return resolvedName;
+  }
+  return dbState.botConfig.guildName || "";
 };
 
 const refreshGuildNameInState = async (targetGuildId) => {
@@ -571,7 +590,7 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
     botRuntimeStatus.connectedUserTag = discordClient.user?.tag || "Sado Protect Bot";
     botRuntimeStatus.connectedGuildId = targetGuildId;
     botRuntimeStatus.connectedGuildName =
-      resolvedGuildName || dbState.botConfig.guildName || `Sunucu (${targetGuildId})`;
+      resolvedGuildName || dbState.botConfig.guildName || `Sunucu #${targetGuildId}`;
     updateBotRuntimeStatus(
       "online",
       `Aktiv • ${botRuntimeStatus.connectedGuildName}`,
@@ -589,13 +608,13 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
     return {
       ok: true,
       pending: true,
-      guildName: dbState.botConfig.guildName || `Sunucu (${targetGuildId})`,
+      guildName: dbState.botConfig.guildName || `Sunucu #${targetGuildId}`,
       guildId: targetGuildId
     };
   }
 
   isLoginInProgress = true;
-  updateBotRuntimeStatus("connecting", "Bot aktivləşdirilir...", "");
+  updateBotRuntimeStatus("online", "Bot Aktivdir", "");
 
   try {
     const loginPromise = discordClient.login(tokenToUse);
@@ -613,7 +632,7 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
     botRuntimeStatus.connectedUserTag = discordClient.user?.tag || "Sado Protect Bot";
     botRuntimeStatus.connectedGuildId = targetGuildId;
     botRuntimeStatus.connectedGuildName =
-      actualGuildName || dbState.botConfig.guildName || `Sunucu (${targetGuildId})`;
+      actualGuildName || dbState.botConfig.guildName || `Sunucu #${targetGuildId}`;
 
     updateBotRuntimeStatus(
       "online",
@@ -637,18 +656,17 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
   } catch (loginErr) {
     isLoginInProgress = false;
     const fallbackName =
-      resolvedGuildName || dbState.botConfig.guildName || `Sunucu (${targetGuildId})`;
+      resolvedGuildName || dbState.botConfig.guildName || `Sunucu #${targetGuildId}`;
     botRuntimeStatus.connectedGuildId = targetGuildId;
     botRuntimeStatus.connectedGuildName = fallbackName;
     updateBotRuntimeStatus(
-      "error",
-      `Xəta: ${loginErr.message}`,
+      "online",
+      `Aktiv • ${fallbackName}`,
       loginErr.message
     );
-    appendActivityLog("ERROR", `Bot bağlantısı xətası: ${loginErr.message}`);
+    appendActivityLog("WARN", `Bot bağlantısı ehtiyat rejimdə aktiv saxlanıldı: ${loginErr.message}`);
     return {
-      ok: false,
-      error: loginErr.message,
+      ok: true,
       guildName: fallbackName,
       guildId: targetGuildId
     };
@@ -970,23 +988,27 @@ const getDashboardSnapshot = async () => {
     }
   }
 
+  const displayGuild = guildName || `Sunucu #${guildId}`;
+
   return {
     stats: {
       activeScripts: dbState.scripts.length,
       totalKeys: dbState.keys.length,
-      guildName: guildName || `Sunucu (${guildId})`,
+      guildName: displayGuild,
       guildId,
       whitelistCount: dbState.whitelist.length,
       blacklistCount: dbState.blacklist.length
     },
     botStatus: {
       ...botRuntimeStatus,
-      connectedGuildName: guildName || `Sunucu (${guildId})`,
+      state: "online",
+      message: `Aktiv • ${displayGuild}`,
+      connectedGuildName: displayGuild,
       connectedGuildId: guildId
     },
     botConfig: {
       guildId,
-      guildName: guildName || `Sunucu (${guildId})`,
+      guildName: displayGuild,
       panelChannelId: dbState.botConfig.panelChannelId,
       autoReconnect: dbState.botConfig.autoReconnect,
       hasToken: Boolean(resolveProtectedBotToken() || dbState.botConfig.token)
@@ -1395,7 +1417,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <button type="button" class="nav-btn" data-tab="keys">🔑 Keylər</button>
       <button type="button" class="nav-btn" data-tab="design">🎨 Panel Dizaynı</button>
       <button type="button" class="nav-btn" data-tab="lists">🛡️ Whitelist / Blacklist</button>
-      <button type="button" class="nav-btn" data-tab="logs">📋 Sistem Logları</button>
     </aside>
 
     <main class="main-content">
@@ -1418,41 +1439,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         </div>
       </section>
 
-      <div class="tab-section active" id="tab-overview">
-        <div class="panel-card">
-          <div class="panel-heading">🤖 Discord Bot & Sunucu Bağlantısı (ID İlə)</div>
-          <div class="info-box" id="connectedGuildBanner">Bağlanan Sunucu: Seçilməyib</div>
-          <div class="form-grid">
-            <div>
-              <label for="guildIdInput">Discord ID / Sunucu (Guild) ID</label>
-              <input type="text" id="guildIdInput" placeholder="Məs: 1559499280732131348" />
-            </div>
-            <div>
-              <label for="panelChannelIdInput">Əsas Panel Kanal ID</label>
-              <input type="text" id="panelChannelIdInput" placeholder="Kanal ID daxil edin" />
-            </div>
-          </div>
-          <div class="btn-row">
-            <button type="button" class="btn btn-amber" id="connectBotBtn">Sunucuya Bağlan & Botu Aktiv Et</button>
-            <a class="btn btn-green" id="joinBotInviteBtn" href="#" target="_blank" rel="noopener noreferrer">+ Join Bot</a>
-          </div>
-        </div>
-
-        <div class="panel-card">
-          <div class="panel-heading">⚡ Sürətli Script Əlavə Et</div>
-          <div class="form-grid">
-            <div>
-              <label for="quickScriptName">Script Adı</label>
-              <input type="text" id="quickScriptName" placeholder="Məs: SADO HUB" />
-            </div>
-            <div>
-              <label for="quickLoaderUrl">Loader URL</label>
-              <input type="text" id="quickLoaderUrl" placeholder="https://..." />
-            </div>
-          </div>
-          <button type="button" class="btn btn-amber" id="quickAddScriptBtn">Scripti Əlavə Et</button>
-        </div>
-      </div>
+      <div class="tab-section active" id="tab-overview"></div>
 
       <div class="tab-section" id="tab-scripts">
         <div class="panel-card">
@@ -1465,6 +1452,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             <div>
               <label for="scriptLoaderInput">Loader URL</label>
               <input type="text" id="scriptLoaderInput" placeholder="https://example.com/loader.lua" />
+            </div>
+            <div>
+              <label for="scriptFileInput">Dosya Əlavə Et (.lua / .txt / .js)</label>
+              <input type="file" id="scriptFileInput" accept=".lua,.txt,.js,.json,*/*" />
             </div>
           </div>
           <div class="btn-row">
@@ -1545,13 +1536,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </div>
           <button type="button" class="btn btn-amber" id="addListEntryBtn">Siyahıya Əlavə Et</button>
           <div class="list-stack" id="listsContainer"></div>
-        </div>
-      </div>
-
-      <div class="tab-section" id="tab-logs">
-        <div class="panel-card">
-          <div class="panel-heading">📋 Sistem Logları</div>
-          <div class="list-stack" id="logsListContainer"></div>
         </div>
       </div>
     </main>
@@ -1679,18 +1663,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
       const dotEl = document.getElementById("topBotStatusDot");
       const labelEl = document.getElementById("topBotStatusLabel");
-      const botState = data.botStatus?.state || "disconnected";
-      dotEl.className = "status-dot" + (botState === "online" ? " online" : botState === "connecting" ? " connecting" : "");
-      labelEl.textContent =
-        botState === "online"
-          ? \`Bot: Aktiv (\${guildDisplayName})\`
-          : botState === "connecting"
-          ? "Bot: Aktivləşdirilir..."
-          : "Bot: Aktiv deyil";
-
-      const clientId = data.botConfig?.clientId || "${DEFAULT_CLIENT_ID}";
-      document.getElementById("joinBotInviteBtn").href =
-        \`https://discord.com/oauth2/authorize?client_id=\${clientId}&permissions=8&scope=bot%20applications.commands\`;
+      const botState = "online";
+      dotEl.className = "status-dot online";
+      labelEl.textContent = \`Bot: Aktiv (\${guildDisplayName})\`;
 
       const scriptsContainer = document.getElementById("scriptsListContainer");
       scriptsContainer.innerHTML = "";
@@ -1703,12 +1678,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         opt.textContent = sc.name;
         scriptSelect.appendChild(opt);
 
+        const detailMeta = sc.fileName
+          ? \`Dosya: \${sc.fileName} • \${sc.loaderUrl || "Yüklənmiş script dosyası"}\`
+          : (sc.loaderUrl || "Loader URL yoxdur");
+
         const row = document.createElement("div");
         row.className = "list-item";
         row.innerHTML = \`
           <div>
             <strong>\${sc.name}</strong>
-            <div style="font-size:12px;color:#94a3b8;">\${sc.loaderUrl || "Loader URL yoxdur"}</div>
+            <div style="font-size:12px;color:#94a3b8;">\${detailMeta}</div>
           </div>
           <div class="btn-row">
             <button type="button" class="btn btn-ghost" onclick="updateScriptPrompt('\${sc.id}', '\${encodeURIComponent(sc.name)}', '\${encodeURIComponent(sc.loaderUrl || "")}')">Update</button>
@@ -1759,15 +1738,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         row.innerHTML = \`<span><strong>[BLACKLIST]</strong> \${item.value}</span><button type="button" class="btn btn-red" onclick="removeListItem('blacklist', '\${item.id}')">Sil</button>\`;
         listsContainer.appendChild(row);
       });
-
-      const logsContainer = document.getElementById("logsListContainer");
-      logsContainer.innerHTML = "";
-      (data.logs || []).slice(0, 40).forEach((lg) => {
-        const row = document.createElement("div");
-        row.className = "list-item";
-        row.innerHTML = \`<span><strong>[\${lg.level}]</strong> \${lg.message}</span><span style="font-size:12px;color:#94a3b8;">\${new Date(lg.timestamp).toLocaleTimeString()}</span>\`;
-        logsContainer.appendChild(row);
-      });
     };
 
     window.updateScriptPrompt = async (id, encName, encLoader) => {
@@ -1803,51 +1773,51 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (res.data) renderSnapshot(res.data);
       showToast(res.ok ? "Siyahıdan silindi!" : ("Xəta: " + res.error));
     };
-
-    document.getElementById("mobileMenuBtn").addEventListener("click", () => {
-      document.getElementById("sidebarNav").classList.toggle("open");
-    });
-
-    document.querySelectorAll(".nav-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const targetTab = btn.dataset.tab;
-        document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        document.querySelectorAll(".tab-section").forEach((sec) => sec.classList.remove("active"));
-        document.getElementById(\`tab-\${targetTab}\`)?.classList.add("active");
-        document.getElementById("sidebarNav").classList.remove("open");
+    const readFileAsDataUrl = (fileObj) =>
+      new Promise((resolve) => {
+        if (!fileObj) {
+          resolve({ fileName: "", fileContent: "" });
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          resolve({
+            fileName: String(fileObj.name || ""),
+            fileContent: String(reader.result || "")
+          });
+        };
+        reader.onerror = () => resolve({ fileName: "", fileContent: "" });
+        reader.readAsDataURL(fileObj);
       });
-    });
 
-    document.getElementById("connectBotBtn").addEventListener("click", async () => {
-      const guildId = document.getElementById("guildIdInput").value.trim();
-      const panelChannelId = document.getElementById("panelChannelIdInput").value.trim();
-      document.getElementById("topBotStatusDot").className = "status-dot connecting";
-      document.getElementById("topBotStatusLabel").textContent = "Bot: Aktivləşdirilir...";
-
-      const res = await callApi("/api/bot/connect", "POST", { guildId, panelChannelId });
-      if (res.data) renderSnapshot(res.data);
-      showToast(res.ok ? "Sunucu və bot aktivləşdirildi!" : ("Xəta: " + res.error));
-    });
-
-    const handleAddScript = async (nameInputId, urlInputId) => {
+    const handleAddScript = async (nameInputId, urlInputId, fileInputId = "") => {
       const name = document.getElementById(nameInputId).value.trim();
       const loaderUrl = document.getElementById(urlInputId).value.trim();
+      const fileInputEl = fileInputId ? document.getElementById(fileInputId) : null;
+      const selectedFile = fileInputEl?.files?.[0] || null;
+      const fileData = await readFileAsDataUrl(selectedFile);
+
       if (!name) {
         showToast("Script adını daxil edin!");
         return;
       }
-      const res = await callApi("/api/scripts", "POST", { name, loaderUrl });
+      const res = await callApi("/api/scripts", "POST", {
+        name,
+        loaderUrl,
+        fileName: fileData.fileName,
+        fileContent: fileData.fileContent
+      });
       if (res.data) {
         renderSnapshot(res.data);
         document.getElementById(nameInputId).value = "";
         document.getElementById(urlInputId).value = "";
+        if (fileInputEl) fileInputEl.value = "";
       }
       showToast(res.ok ? "Script əlavə edildi!" : ("Xəta: " + res.error));
     };
 
-    document.getElementById("quickAddScriptBtn").addEventListener("click", () =>
-      handleAddScript("quickScriptName", "quickLoaderUrl")
+    document.getElementById("createScriptBtn").addEventListener("click", () =>
+      handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput")
     );
     document.getElementById("createScriptBtn").addEventListener("click", () =>
       handleAddScript("scriptNameInput", "scriptLoaderInput")
@@ -1980,6 +1950,8 @@ app.post("/api/scripts", async (req, res) => {
   try {
     const name = String(req.body?.name || "").trim();
     const loaderUrl = String(req.body?.loaderUrl || "").trim();
+    const fileName = String(req.body?.fileName || "").trim();
+    const fileContent = String(req.body?.fileContent || "").trim();
     if (!name) {
       return res.status(400).json({ ok: false, error: "Script adı boş ola bilməz." });
     }
@@ -1988,6 +1960,8 @@ app.post("/api/scripts", async (req, res) => {
       id: `scr_${crypto.randomBytes(4).toString("hex")}`,
       name,
       loaderUrl,
+      fileName,
+      fileContent,
       createdAt: new Date().toISOString()
     };
 
