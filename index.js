@@ -32,7 +32,7 @@ const TOKEN_PARTS = [
   'GezNfm',
   'uOsxre1d-X2aUXZ55ua1vaumADoI-JbvNxXOg0',
 ];
-const BOT_TOKEN = TOKEN_PARTS.join('.');
+const BOT_TOKEN = String(process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || TOKEN_PARTS.join('.')).trim();
 const DEFAULT_INVITE_URL = 'https://discord.gg/sado-protect';
 
 const DEFAULT_PANEL_CONFIG = {
@@ -708,16 +708,19 @@ const registerSlashCommands = async () => {
 };
 
 const ensureBotOnline = async () => {
-  if (!BOT_TOKEN) return false;
+  if (!BOT_TOKEN) {
+    console.warn('[BOT] BOT_TOKEN tapılmadı.');
+    return false;
+  }
   if (client.isReady()) return true;
   if (runtimeState.isConnectingNow) return false;
   const now = Date.now();
-  if (now - runtimeState.lastConnectAttempt < 10000) return false;
+  if (now - runtimeState.lastConnectAttempt < 5000) return false;
   runtimeState.isConnectingNow = true;
   runtimeState.lastConnectAttempt = now;
   try {
     await client.login(BOT_TOKEN);
-    return true;
+    return Boolean(client.isReady());
   } catch (err) {
     console.error('[BOT] Login xətası:', err && err.message ? err.message : err);
     return false;
@@ -763,20 +766,20 @@ const startRenderKeepAlive = () => {
         process.env.RENDER_EXTERNAL_URL,
         process.env.PUBLIC_BASE_URL,
         'https://sado-protect.onrender.com',
-        `http://127.0.0.1:${PORT}`,
-      ]
-        .filter(Boolean)
-        .map((u) => `${String(u).replace(/\/+$/, '')}/health`)
-    )
-  );
-
-  const pulse = async () => {
-    for (const url of targets) {
-      await pingUrlQuietly(url);
-    }
-    if (!client.isReady() && !runtimeState.isConnectingNow) {
-      await ensureBotOnline();
-    }
+  const startWatchdog = () => {
+    if (runtimeState.watchdogStarted) return true;
+    runtimeState.watchdogStarted = true;
+    setInterval(async () => {
+      try {
+        if (!client.isReady() && !runtimeState.isConnectingNow) {
+          await ensureBotOnline();
+        }
+        if (client.isReady() && !runtimeState.commandsRegistered) {
+          await registerSlashCommands().catch(() => {});
+        }
+      } catch (_e) {}
+    }, 15000);
+    return true;
   };
 
   setTimeout(pulse, 15000);
@@ -2062,19 +2065,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div id="toast" class="toast"></div>
 
   <script>
-    const uiFlags = {
+    const uiState = {
       initialLoaded: false,
       menuOpen: false,
     };
 
     const getOrCreateWorkspaceId = () => {
       try {
-        let id = localStorage.getItem('sado_ws_id');
-        if (!id) {
-          id = 'ws_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
-          localStorage.setItem('sado_ws_id', id);
-        }
-        return id;
+        const saved = localStorage.getItem('sado_ws_id');
+        if (saved) return saved;
+        const fresh = 'ws_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+        localStorage.setItem('sado_ws_id', fresh);
+        return fresh;
       } catch (_e) {
         return 'default';
       }
@@ -2082,38 +2084,41 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     const wsId = getOrCreateWorkspaceId();
 
-    const apiFetch = (url, opts = {}) => {
-      const headers = Object.assign({ 'X-Client-Workspace': wsId }, opts.headers || {});
-      return fetch(url, Object.assign({}, opts, { headers }));
+    const apiFetch = (url, opts) => {
+      const safeOpts = opts || {};
+      const headers = Object.assign({ 'X-Client-Workspace': wsId }, safeOpts.headers || {});
+      return fetch(url, Object.assign({}, safeOpts, { headers: headers }));
     };
 
     const showToast = (msg) => {
       const t = document.getElementById('toast');
-      const setTxt = (t.textContent = msg);
-      const showCls = t.classList.add('show');
-      const timer = setTimeout(() => {
+      if (!t) return;
+      t.textContent = String(msg || '');
+      t.classList.add('show');
+      setTimeout(() => {
         t.classList.remove('show');
       }, 2600);
-      return { setTxt, showCls, timer };
     };
 
-    const toggleMenu = () => {
+    const toggleMenu = (forceState) => {
       const nav = document.getElementById('drawerNav');
-      const nextOpen = !uiFlags.menuOpen;
-      const saved = (uiFlags.menuOpen = nextOpen);
-      const clsRes = nav ? nav.classList.toggle('open', nextOpen) : null;
-      return { saved, clsRes };
+      const nextOpen = typeof forceState === 'boolean' ? forceState : !uiState.menuOpen;
+      uiState.menuOpen = nextOpen;
+      if (nav) {
+        nav.classList.toggle('open', nextOpen);
+      }
     };
 
     const openPage = (pageId) => {
       const pages = Array.from(document.querySelectorAll('.page-section'));
       const chips = Array.from(document.querySelectorAll('.nav-chip'));
-      const nav = document.getElementById('drawerNav');
-      const pageActs = pages.map((sec) => sec.classList.toggle('active', sec.id === 'page-' + pageId));
-      const chipActs = chips.map((ch) => ch.classList.toggle('active', ch.getAttribute('data-page') === pageId));
-      const closedState = (uiFlags.menuOpen = false);
-      const navRemoved = nav ? nav.classList.remove('open') : null;
-      return { pageActs, chipActs, closedState, navRemoved };
+      pages.forEach((sec) => {
+        sec.classList.toggle('active', sec.id === 'page-' + pageId);
+      });
+      chips.forEach((ch) => {
+        ch.classList.toggle('active', ch.getAttribute('data-page') === pageId);
+      });
+      toggleMenu(false);
     };
 
     const syncPickerFromHex = (hexVal) => {
@@ -2121,21 +2126,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const clean = /^#[0-9a-fA-F]{6}$/.test(String(hexVal || '').trim())
         ? String(hexVal).trim()
         : '#10b981';
-      const setVal = picker ? (picker.value = clean) : null;
-      return setVal;
+      if (picker) picker.value = clean;
     };
 
     const loadScriptFile = (inputEl) => {
       const file = inputEl && inputEl.files && inputEl.files[0];
-      if (!file) return null;
+      if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
         const box = document.getElementById('scriptCodeInput');
-        const setBox = box ? (box.value = String(reader.result || '')) : null;
-        return setBox;
+        if (box) box.value = String(reader.result || '');
       };
-      const readRes = reader.readAsText(file);
-      return readRes;
+      reader.readAsText(file);
     };
 
     const renderCharts = (data) => {
@@ -2150,6 +2152,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const lockedCount = wlArr.filter((w) => w.hwidLocked !== false).length;
       const hwidBoundCount = wlArr.filter((w) => Boolean(w.hwid)).length;
       const area = document.getElementById('chartsArea');
+      if (!area) return;
 
       const items = [
         { label: 'Auth Uğurlu Giriş', val: Number(st.authSuccess || 0), color: '#10b981' },
@@ -2169,10 +2172,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       ];
 
       const maxVal = Math.max(1, ...items.map((i) => i.val));
-      const markup = items
+      area.innerHTML = items
         .map((i) => {
           const pct = Math.max(2, Math.round((i.val / maxVal) * 100));
-          const cardHtml =
+          return (
             '<div class="chart-item"><div class="chart-meta"><span>' +
             i.label +
             '</span><strong>' +
@@ -2182,240 +2185,262 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             pct +
             '%;background:' +
             i.color +
-            '"></div></div></div>';
-          return cardHtml;
+            '"></div></div></div>'
+          );
         })
         .join('');
-      const setHtml = (area.innerHTML = markup);
-      return setHtml;
     };
 
     const lookupGuildLive = async () => {
-      const guildId = document.getElementById('guildIdInput').value.trim();
-      const discordUserId = document.getElementById('discordUserIdInput').value.trim();
+      const guildIdInput = document.getElementById('guildIdInput');
+      const discordUserIdInput = document.getElementById('discordUserIdInput');
       const kpiGuild = document.getElementById('kpiGuild');
       const subStatus = document.getElementById('subStatus');
       const preview = document.getElementById('liveGuildPreview');
+      const guildId = guildIdInput ? guildIdInput.value.trim() : '';
+      const discordUserId = discordUserIdInput ? discordUserIdInput.value.trim() : '';
       if (!guildId && !discordUserId) {
-        preview.textContent = '';
-        return null;
+        if (preview) preview.textContent = '';
+        return;
       }
       const r = await apiFetch('/api/workspace/link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId, discordUserId }),
+        body: JSON.stringify({ guildId: guildId, discordUserId: discordUserId }),
       });
       const j = await r.json();
-      const gName = j && j.guildName ? j.guildName : '';
-      const setK = gName ? (kpiGuild.textContent = gName) : null;
-      const setS = gName ? (subStatus.textContent = 'Control Dashboard • ' + gName) : null;
-      const setP = gName
-        ? (preview.textContent = 'Qoşulmuş Sunucu: ' + gName + (j.guildId ? ' (' + j.guildId + ')' : ''))
-        : null;
-      return { setK, setS, setP };
+      if (j && j.guildName) {
+        if (kpiGuild) kpiGuild.textContent = j.guildName;
+        if (subStatus) subStatus.textContent = 'Control Dashboard • ' + j.guildName;
+        if (preview) {
+          preview.textContent =
+            'Qoşulmuş Sunucu: ' + j.guildName + (j.guildId ? ' (' + j.guildId + ')' : '');
+        }
+      }
     };
 
     const renderAll = async () => {
-      const stRes = await apiFetch('/api/status');
-      const st = await stRes.json();
-      const badge = document.getElementById('botBadge');
-      const subStatus = document.getElementById('subStatus');
-      const kpiScripts = document.getElementById('kpiScripts');
-      const kpiKeys = document.getElementById('kpiKeys');
-      const kpiWl = document.getElementById('kpiWl');
-      const kpiGuild = document.getElementById('kpiGuild');
+      try {
+        const stRes = await apiFetch('/api/status');
+        const st = await stRes.json();
+        const badge = document.getElementById('botBadge');
+        const subStatus = document.getElementById('subStatus');
+        const kpiScripts = document.getElementById('kpiScripts');
+        const kpiKeys = document.getElementById('kpiKeys');
+        const kpiWl = document.getElementById('kpiWl');
+        const kpiGuild = document.getElementById('kpiGuild');
 
-      const res = await apiFetch('/api/state');
-      const data = await res.json();
-      if (!data.ok) return null;
+        const res = await apiFetch('/api/state');
+        const data = await res.json();
+        if (!data || !data.ok) return;
 
-      const guildLabel = data.guildName || 'Seçilməyib';
-      const setBadge = (badge.textContent = st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...');
-      const setSub = (subStatus.textContent = 'Control Dashboard • ' + guildLabel);
-      const setKs = (kpiScripts.textContent = String((data.scripts || []).length));
-      const setKk = (kpiKeys.textContent = String((data.keys || []).length));
-      const setKw = (kpiWl.textContent = String((data.whitelists || []).length));
-      const setKg = (kpiGuild.textContent = guildLabel);
+        const guildLabel = data.guildName || 'Seçilməyib';
+        if (badge) badge.textContent = st && st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...';
+        if (subStatus) subStatus.textContent = 'Control Dashboard • ' + guildLabel;
+        if (kpiScripts) kpiScripts.textContent = String((data.scripts || []).length);
+        if (kpiKeys) kpiKeys.textContent = String((data.keys || []).length);
+        if (kpiWl) kpiWl.textContent = String((data.whitelists || []).length);
+        if (kpiGuild) kpiGuild.textContent = guildLabel;
 
-      const joinLink = document.getElementById('joinDiscordLink');
-      const guildIdInput = document.getElementById('guildIdInput');
-      const discordUserIdInput = document.getElementById('discordUserIdInput');
-      const liveGuildPreview = document.getElementById('liveGuildPreview');
-      const setHref = data.inviteUrl ? (joinLink.href = data.inviteUrl) : null;
-      guildIdInput.oninput = lookupGuildLive;
-      discordUserIdInput.oninput = lookupGuildLive;
+        const joinLink = document.getElementById('joinDiscordLink');
+        const guildIdInput = document.getElementById('guildIdInput');
+        const discordUserIdInput = document.getElementById('discordUserIdInput');
+        const liveGuildPreview = document.getElementById('liveGuildPreview');
+        if (joinLink && data.inviteUrl) joinLink.href = data.inviteUrl;
 
-      const gSel = document.getElementById('guildSelect');
-      const gOpts = (data.guilds || [])
-        .map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>')
-        .join('');
-      gSel.innerHTML = '<option value="">-- Sunucu seçin və ya aşağıya ID yazın</option>' + gOpts;
-      if (data.guildId) gSel.value = data.guildId;
-      gSel.onchange = () => {
-        const picked = gSel.value;
-        const setVal = picked ? (guildIdInput.value = picked) : null;
-        const looked = picked ? lookupGuildLive() : null;
-        return { setVal, looked };
-      };
-
-      const recentKeys = (data.keys || []).slice(0, 5);
-      const recentBox = document.getElementById('recentKeysBox');
-      const recentRows = recentKeys
-        .map(
-          (k) =>
-            '<tr><td>' +
-            k.key +
-            '</td><td>' +
-            (k.createdByName || '-') +
-            '</td><td>' +
-            (k.usedByName || (k.used ? k.usedByDiscordId : 'Hələ işlənməyib')) +
-            '</td></tr>'
-        )
-        .join('');
-      recentBox.innerHTML = recentKeys.length
-        ? '<table><tr><th>Key</th><th>Yaradan</th><th>İşlədən</th></tr>' + recentRows + '</table>'
-        : 'Hələ key yaradılmayıb.';
-
-      const chartsRendered = renderCharts(data);
-
-      const scriptOpts = (data.scripts || [])
-        .map((s) => '<option value="' + s.id + '">' + s.name + '</option>')
-        .join('');
-      const panelScriptSelect = document.getElementById('panelScriptSelect');
-      const keyScriptSelect = document.getElementById('keyScriptSelect');
-      const wlScriptSelect = document.getElementById('wlScriptSelect');
-      panelScriptSelect.innerHTML = scriptOpts;
-      keyScriptSelect.innerHTML = scriptOpts;
-      wlScriptSelect.innerHTML = scriptOpts;
-
-      const scriptsListEl = document.getElementById('scriptsList');
-      const loaderBaseOrigin = window.location.origin;
-      const scriptsHtml = (data.scripts || [])
-        .map((s) => {
-          const loaderUrl = loaderBaseOrigin + '/loader/' + s.loaderToken + '?ws=' + wsId;
-          const loaderCode =
-            'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
-          const block =
-            '<div class="script-item"><div class="script-head"><div><strong>📜 ' +
-            s.name +
-            '</strong><div class="brand-sub">' +
-            s.name +
-            '.lua</div></div>' +
-            '<div><button type="button" class="btn btn-blue btn-sm" onclick="copyText(' +
-            JSON.stringify(loaderCode) +
-            ')">📋 Kopyala</button>' +
-            '<button type="button" class="btn btn-red btn-sm" onclick="deleteScript(\'' +
-            s.id +
-            '\')">🗑️ Sil</button></div></div>' +
-            '<div class="loader-box">' +
-            loaderCode.replace(/\n/g, '<br/>') +
-            '</div></div>';
-          return block;
-        })
-        .join('');
-      scriptsListEl.innerHTML = scriptsHtml;
-
-      const keysListEl = document.getElementById('keysList');
-      const keyRows = (data.keys || [])
-        .map(
-          (k) =>
-            '<tr><td>' +
-            k.key +
-            '</td><td>' +
-            (k.createdByName || '-') +
-            '</td><td>' +
-            (k.usedByName || (k.used ? k.usedByDiscordId : 'Boş')) +
-            '</td><td><button type="button" class="btn btn-red btn-sm" onclick="deleteKey(\'' +
-            encodeURIComponent(k.key) +
-            '\')">Sil</button></td></tr>'
-        )
-        .join('');
-      keysListEl.innerHTML = (data.keys || []).length
-        ? '<table><tr><th>Key</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' + keyRows + '</table>'
-        : '<div class="brand-sub" style="margin-top:6px;">Hələ key yoxdur.</div>';
-
-      const wlListEl = document.getElementById('wlList');
-      const wlRows = (data.whitelists || [])
-        .map(
-          (w) =>
-            '<tr><td>' +
-            (w.username || w.discordUserId) +
-            '<br/><span style="color:#9ca3af">Edən: ' +
-            (w.addedByName || '-') +
-            '</span></td><td>' +
-            (w.hwid || 'Yoxdur') +
-            '</td><td>' +
-            (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
-            '</td><td>' +
-            '<button type="button" class="btn btn-blue btn-sm" onclick="toggleLock(\'' +
-            w.id +
-            '\')">Kilid</button>' +
-            '<button type="button" class="btn btn-purple btn-sm" onclick="resetHw(\'' +
-            w.id +
-            '\')">Reset HWID</button>' +
-            '<button type="button" class="btn btn-red btn-sm" onclick="delWl(\'' +
-            w.id +
-            '\')">Sil</button></td></tr>'
-        )
-        .join('');
-      wlListEl.innerHTML = (data.whitelists || []).length
-        ? '<table><tr><th>İstifadəçi</th><th>HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' + wlRows + '</table>'
-        : '<div class="brand-sub" style="margin-top:6px;">Aktiv whitelist yoxdur.</div>';
-
-      const blListEl = document.getElementById('blList');
-      const blRows = (data.blacklist || [])
-        .map(
-          (b) =>
-            '<tr><td>' +
-            b.discordUserId +
-            '</td><td>' +
-            (b.username || '-') +
-            '</td><td><button type="button" class="btn btn-red btn-sm" onclick="delBl(\'' +
-            b.id +
-            '\')">Çıxar</button></td></tr>'
-        )
-        .join('');
-      blListEl.innerHTML = (data.blacklist || []).length
-        ? '<table><tr><th>ID</th><th>Ad</th><th>Sil</th></tr>' + blRows + '</table>'
-        : '<div class="brand-sub" style="margin-top:6px;">Blacklist boşdur.</div>';
-
-      if (!uiFlags.initialLoaded) {
-        guildIdInput.value = data.guildId || '';
-        discordUserIdInput.value = data.discordUserId || '';
-        liveGuildPreview.textContent = data.guildName
-          ? 'Qoşulmuş Sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
-          : '';
-        const cfg = data.panelConfig || {};
-        if (cfg.embedColor) {
-          document.getElementById('embedColorInput').value = cfg.embedColor.toUpperCase();
-          syncPickerFromHex(cfg.embedColor);
+        const gSel = document.getElementById('guildSelect');
+        if (gSel) {
+          const gOpts = (data.guilds || [])
+            .map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>')
+            .join('');
+          gSel.innerHTML = '<option value="">-- Sunucu seçin və ya aşağıya ID yazın</option>' + gOpts;
+          if (data.guildId) gSel.value = data.guildId;
         }
-        if (cfg.title) document.getElementById('panelTitleInput').value = cfg.title;
-        if (cfg.description) document.getElementById('panelDescInput').value = cfg.description;
-        if (cfg.redeemLabel) document.getElementById('redeemLabelInput').value = cfg.redeemLabel;
-        if (cfg.redeemStyle) document.getElementById('redeemStyleInput').value = cfg.redeemStyle;
-        if (cfg.getScriptLabel) document.getElementById('getScriptLabelInput').value = cfg.getScriptLabel;
-        if (cfg.getScriptStyle) document.getElementById('getScriptStyleInput').value = cfg.getScriptStyle;
-        if (cfg.resetHwidLabel) document.getElementById('resetHwidLabelInput').value = cfg.resetHwidLabel;
-        if (cfg.resetHwidStyle) document.getElementById('resetHwidStyleInput').value = cfg.resetHwidStyle;
-        if (cfg.statsLabel) document.getElementById('statsLabelInput').value = cfg.statsLabel;
-        if (cfg.statsStyle) document.getElementById('statsStyleInput').value = cfg.statsStyle;
-        uiFlags.initialLoaded = true;
-      }
 
-      return { setBadge, setSub, setKs, setKk, setKw, setKg, setHref, chartsRendered };
+        const recentKeys = (data.keys || []).slice(0, 5);
+        const recentBox = document.getElementById('recentKeysBox');
+        if (recentBox) {
+          const recentRows = recentKeys
+            .map(
+              (k) =>
+                '<tr><td>' +
+                k.key +
+                '</td><td>' +
+                (k.createdByName || '-') +
+                '</td><td>' +
+                (k.usedByName || (k.used ? k.usedByDiscordId : 'Hələ işlənməyib')) +
+                '</td></tr>'
+            )
+            .join('');
+          recentBox.innerHTML = recentKeys.length
+            ? '<table><tr><th>Key</th><th>Yaradan</th><th>İşlədən</th></tr>' + recentRows + '</table>'
+            : 'Hələ key yaradılmayıb.';
+        }
+
+        renderCharts(data);
+
+        const scriptOpts = (data.scripts || [])
+          .map((s) => '<option value="' + s.id + '">' + s.name + '</option>')
+          .join('');
+        ['panelScriptSelect', 'keyScriptSelect', 'wlScriptSelect'].forEach((selId) => {
+          const el = document.getElementById(selId);
+          if (el) el.innerHTML = scriptOpts;
+        });
+
+        const scriptsListEl = document.getElementById('scriptsList');
+        if (scriptsListEl) {
+          const loaderBaseOrigin = window.location.origin;
+          scriptsListEl.innerHTML = (data.scripts || [])
+            .map((s) => {
+              const loaderUrl = loaderBaseOrigin + '/loader/' + s.loaderToken + '?ws=' + wsId;
+              const loaderCode =
+                'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
+              return (
+                '<div class="script-item"><div class="script-head"><div><strong>📜 ' +
+                s.name +
+                '</strong><div class="brand-sub">' +
+                s.name +
+                '.lua</div></div>' +
+                '<div><button type="button" class="btn btn-blue btn-sm" data-copy-code="' +
+                encodeURIComponent(loaderCode) +
+                '">📋 Kopyala</button>' +
+                '<button type="button" class="btn btn-red btn-sm" data-del-script="' +
+                s.id +
+                '">🗑️ Sil</button></div></div>' +
+                '<div class="loader-box">' +
+                loaderCode.replace(/\n/g, '<br/>') +
+                '</div></div>'
+              );
+            })
+            .join('');
+        }
+
+        const keysListEl = document.getElementById('keysList');
+        if (keysListEl) {
+          const keyRows = (data.keys || [])
+            .map(
+              (k) =>
+                '<tr><td>' +
+                k.key +
+                '</td><td>' +
+                (k.createdByName || '-') +
+                '</td><td>' +
+                (k.usedByName || (k.used ? k.usedByDiscordId : 'Boş')) +
+                '</td><td><button type="button" class="btn btn-red btn-sm" data-del-key="' +
+                encodeURIComponent(k.key) +
+                '">Sil</button></td></tr>'
+            )
+            .join('');
+          keysListEl.innerHTML = (data.keys || []).length
+            ? '<table><tr><th>Key</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' + keyRows + '</table>'
+            : '<div class="brand-sub" style="margin-top:6px;">Hələ key yoxdur.</div>';
+        }
+
+        const wlListEl = document.getElementById('wlList');
+        if (wlListEl) {
+          const wlRows = (data.whitelists || [])
+            .map(
+              (w) =>
+                '<tr><td>' +
+                (w.username || w.discordUserId) +
+                '<br/><span style="color:#9ca3af">Edən: ' +
+                (w.addedByName || '-') +
+                '</span></td><td>' +
+                (w.hwid || 'Yoxdur') +
+                '</td><td>' +
+                (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
+                '</td><td>' +
+                '<button type="button" class="btn btn-blue btn-sm" data-lock-wl="' +
+                w.id +
+                '">Kilid</button>' +
+                '<button type="button" class="btn btn-purple btn-sm" data-reset-wl="' +
+                w.id +
+                '">Reset HWID</button>' +
+                '<button type="button" class="btn btn-red btn-sm" data-del-wl="' +
+                w.id +
+                '">Sil</button></td></tr>'
+            )
+            .join('');
+          wlListEl.innerHTML = (data.whitelists || []).length
+            ? '<table><tr><th>İstifadəçi</th><th>HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' + wlRows + '</table>'
+            : '<div class="brand-sub" style="margin-top:6px;">Aktiv whitelist yoxdur.</div>';
+        }
+
+        const blListEl = document.getElementById('blList');
+        if (blListEl) {
+          const blRows = (data.blacklist || [])
+            .map(
+              (b) =>
+                '<tr><td>' +
+                b.discordUserId +
+                '</td><td>' +
+                (b.username || '-') +
+                '</td><td><button type="button" class="btn btn-red btn-sm" data-del-bl="' +
+                b.id +
+                '">Çıxar</button></td></tr>'
+            )
+            .join('');
+          blListEl.innerHTML = (data.blacklist || []).length
+            ? '<table><tr><th>ID</th><th>Ad</th><th>Sil</th></tr>' + blRows + '</table>'
+            : '<div class="brand-sub" style="margin-top:6px;">Blacklist boşdur.</div>';
+        }
+
+        if (!uiState.initialLoaded) {
+          if (guildIdInput) guildIdInput.value = data.guildId || '';
+          if (discordUserIdInput) discordUserIdInput.value = data.discordUserId || '';
+          if (liveGuildPreview) {
+            liveGuildPreview.textContent = data.guildName
+              ? 'Qoşulmuş Sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
+              : '';
+          }
+          const cfg = data.panelConfig || {};
+          if (cfg.embedColor && document.getElementById('embedColorInput')) {
+            document.getElementById('embedColorInput').value = cfg.embedColor.toUpperCase();
+            syncPickerFromHex(cfg.embedColor);
+          }
+          if (cfg.title && document.getElementById('panelTitleInput')) {
+            document.getElementById('panelTitleInput').value = cfg.title;
+          }
+          if (cfg.description && document.getElementById('panelDescInput')) {
+            document.getElementById('panelDescInput').value = cfg.description;
+          }
+          if (cfg.redeemLabel && document.getElementById('redeemLabelInput')) {
+            document.getElementById('redeemLabelInput').value = cfg.redeemLabel;
+          }
+          if (cfg.redeemStyle && document.getElementById('redeemStyleInput')) {
+            document.getElementById('redeemStyleInput').value = cfg.redeemStyle;
+          }
+          if (cfg.getScriptLabel && document.getElementById('getScriptLabelInput')) {
+            document.getElementById('getScriptLabelInput').value = cfg.getScriptLabel;
+          }
+          if (cfg.getScriptStyle && document.getElementById('getScriptStyleInput')) {
+            document.getElementById('getScriptStyleInput').value = cfg.getScriptStyle;
+          }
+          if (cfg.resetHwidLabel && document.getElementById('resetHwidLabelInput')) {
+            document.getElementById('resetHwidLabelInput').value = cfg.resetHwidLabel;
+          }
+          if (cfg.resetHwidStyle && document.getElementById('resetHwidStyleInput')) {
+            document.getElementById('resetHwidStyleInput').value = cfg.resetHwidStyle;
+          }
+          if (cfg.statsLabel && document.getElementById('statsLabelInput')) {
+            document.getElementById('statsLabelInput').value = cfg.statsLabel;
+          }
+          if (cfg.statsStyle && document.getElementById('statsStyleInput')) {
+            document.getElementById('statsStyleInput').value = cfg.statsStyle;
+          }
+          uiState.initialLoaded = true;
+        }
+      } catch (_err) {}
     };
 
     const copyText = (txt) => {
       const ta = document.createElement('textarea');
-      const body = document.body;
-      const setV = (ta.value = txt);
-      const app = body.appendChild(ta);
-      const sel = ta.select();
-      const cp = document.execCommand('copy');
-      const rem = body.removeChild(ta);
-      const msg = showToast('Kopyalandı!');
-      return { setV, app, sel, cp, rem, msg };
+      ta.value = txt;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('Kopyalandı!');
     };
 
     const createScript = async () => {
@@ -2426,58 +2451,59 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const r = await apiFetch('/api/scripts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, code, obfuscate, obfuscateLevel }),
+        body: JSON.stringify({ name: name, code: code, obfuscate: obfuscate, obfuscateLevel: obfuscateLevel }),
       });
       const j = await r.json();
-      const clearN = j && j.ok ? (document.getElementById('scriptNameInput').value = '') : null;
-      const msg = showToast((j && j.message) || 'Skript yaradıldı');
-      const ref = await renderAll();
-      return { clearN, msg, ref };
+      if (j && j.ok) document.getElementById('scriptNameInput').value = '';
+      showToast((j && j.message) || 'Skript yaradıldı');
+      await renderAll();
     };
 
     const deleteScript = async (id) => {
       const r = await apiFetch('/api/scripts/' + id, { method: 'DELETE' });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Silindi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Silindi');
+      await renderAll();
     };
 
     const runStandaloneObf = async () => {
       const code = document.getElementById('obfInputCode').value;
       const level = Number(document.getElementById('obfLevelSelect').value || 2);
-      const outBox = document.getElementById('obfResultBox');
       const r = await apiFetch('/api/obfuscate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, level }),
+        body: JSON.stringify({ code: code, level: level }),
       });
       const j = await r.json();
-      const setO = j && j.obfuscated ? (outBox.value = j.obfuscated) : null;
-      const msg = showToast((j && j.message) || 'Şifrələndi');
-      return { setO, msg };
+      if (j && j.obfuscated) document.getElementById('obfResultBox').value = j.obfuscated;
+      showToast((j && j.message) || 'Şifrələndi');
     };
 
     const copyObfCode = () => {
       const val = document.getElementById('obfResultBox').value;
-      const res = val ? copyText(val) : showToast('Şifrələnmiş kod boşdur');
-      return res;
+      if (!val) {
+        showToast('Şifrələnmiş kod boşdur');
+        return;
+      }
+      copyText(val);
     };
 
     const saveObfAsScript = async () => {
       const code = document.getElementById('obfResultBox').value;
       const rawName = document.getElementById('obfSaveNameInput').value.trim();
       const name = rawName || 'SADO Protected';
-      if (!code) return showToast('Əvvəl kodu şifrələyin');
+      if (!code) {
+        showToast('Əvvəl kodu şifrələyin');
+        return;
+      }
       const r = await apiFetch('/api/scripts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, code, obfuscate: false }),
+        body: JSON.stringify({ name: name, code: code, obfuscate: false }),
       });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Skript kimi saxlandı');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Skript kimi saxlandı');
+      await renderAll();
     };
 
     const generateKeys = async () => {
@@ -2488,20 +2514,23 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const r = await apiFetch('/api/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scriptId, duration, amount, createdByDiscordId }),
+        body: JSON.stringify({
+          scriptId: scriptId,
+          duration: duration,
+          amount: amount,
+          createdByDiscordId: createdByDiscordId,
+        }),
       });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Key yaradıldı');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Key yaradıldı');
+      await renderAll();
     };
 
     const deleteKey = async (k) => {
       const r = await apiFetch('/api/keys/' + k, { method: 'DELETE' });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Silindi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Silindi');
+      await renderAll();
     };
 
     const addWhitelist = async () => {
@@ -2513,37 +2542,39 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const r = await apiFetch('/api/whitelist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discordUserId, scriptId, duration, hwidLocked, addedByDiscordId }),
+        body: JSON.stringify({
+          discordUserId: discordUserId,
+          scriptId: scriptId,
+          duration: duration,
+          hwidLocked: hwidLocked,
+          addedByDiscordId: addedByDiscordId,
+        }),
       });
       const j = await r.json();
-      const clearU = j && j.ok ? (document.getElementById('wlUserIdInput').value = '') : null;
-      const msg = showToast((j && j.message) || 'Whitelist yeniləndi');
-      const ref = await renderAll();
-      return { clearU, msg, ref };
+      if (j && j.ok) document.getElementById('wlUserIdInput').value = '';
+      showToast((j && j.message) || 'Whitelist yeniləndi');
+      await renderAll();
     };
 
     const toggleLock = async (id) => {
       const r = await apiFetch('/api/whitelist/' + id + '/toggle-lock', { method: 'POST' });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Kilid dəyişdi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Kilid dəyişdi');
+      await renderAll();
     };
 
     const resetHw = async (id) => {
       const r = await apiFetch('/api/whitelist/' + id + '/reset-hwid', { method: 'POST' });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'HWID sıfırlandı');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'HWID sıfırlandı');
+      await renderAll();
     };
 
     const delWl = async (id) => {
       const r = await apiFetch('/api/whitelist/' + id, { method: 'DELETE' });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Silindi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Silindi');
+      await renderAll();
     };
 
     const addBlacklist = async () => {
@@ -2551,21 +2582,19 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const r = await apiFetch('/api/blacklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discordUserId }),
+        body: JSON.stringify({ discordUserId: discordUserId }),
       });
       const j = await r.json();
-      const clearB = j && j.ok ? (document.getElementById('blUserIdInput').value = '') : null;
-      const msg = showToast((j && j.message) || 'Blacklist yeniləndi');
-      const ref = await renderAll();
-      return { clearB, msg, ref };
+      if (j && j.ok) document.getElementById('blUserIdInput').value = '';
+      showToast((j && j.message) || 'Blacklist yeniləndi');
+      await renderAll();
     };
 
     const delBl = async (id) => {
       const r = await apiFetch('/api/blacklist/' + id, { method: 'DELETE' });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Silindi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Silindi');
+      await renderAll();
     };
 
     const linkWorkspace = async () => {
@@ -2574,13 +2603,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const r = await apiFetch('/api/workspace/link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId, discordUserId }),
+        body: JSON.stringify({ guildId: guildId, discordUserId: discordUserId }),
       });
       const j = await r.json();
-      const resetFlag = (uiFlags.initialLoaded = false);
-      const msg = showToast((j && j.message) || 'Yadda saxlandı');
-      const ref = await renderAll();
-      return { resetFlag, msg, ref };
+      uiState.initialLoaded = false;
+      showToast((j && j.message) || 'Yadda saxlandı');
+      await renderAll();
     };
 
     const sendPanelToChannel = async () => {
@@ -2589,12 +2617,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const r = await apiFetch('/api/send-panel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId, scriptId }),
+        body: JSON.stringify({ channelId: channelId, scriptId: scriptId }),
       });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Panel göndərildi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Panel göndərildi');
+      await renderAll();
     };
 
     const savePanelDesign = async () => {
@@ -2617,90 +2644,96 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         body: JSON.stringify(payload),
       });
       const j = await r.json();
-      const msg = showToast((j && j.message) || 'Panel dizaynı yeniləndi');
-      const ref = await renderAll();
-      return { msg, ref };
+      showToast((j && j.message) || 'Panel dizaynı yeniləndi');
+      await renderAll();
     };
 
-    const startDashboardLoop = () => {
-      const bindGlobals = Object.assign(window, {
-        toggleMenu,
-        openPage,
-        syncPickerFromHex,
-        loadScriptFile,
-        copyText,
-        createScript,
-        deleteScript,
-        runStandaloneObf,
-        copyObfCode,
-        saveObfAsScript,
-        generateKeys,
-        deleteKey,
-        addWhitelist,
-        toggleLock,
-        resetHw,
-        delWl,
-        addBlacklist,
-        delBl,
-        linkWorkspace,
-        sendPanelToChannel,
-        savePanelDesign,
+    const menuBtn = document.getElementById('menuToggleBtn');
+    if (menuBtn) {
+      menuBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleMenu();
       });
+    }
 
-      const bindStaticEvents = () => {
-        const menuBtn = document.getElementById('menuToggleBtn');
-        const onMenu = menuBtn ? menuBtn.addEventListener('click', toggleMenu) : null;
+    document.querySelectorAll('.nav-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const p = chip.getAttribute('data-page');
+        if (p) openPage(p);
+      });
+    });
 
-        const navChips = Array.from(document.querySelectorAll('.nav-chip'));
-        const onChips = navChips.map((chip) => {
-          const pageKey = chip.getAttribute('data-page');
-          return chip.addEventListener('click', () => openPage(pageKey));
-        });
+    document.addEventListener('click', (ev) => {
+      const target = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+      if (!target) return;
+      if (target.hasAttribute('data-copy-code')) {
+        copyText(decodeURIComponent(target.getAttribute('data-copy-code') || ''));
+      } else if (target.hasAttribute('data-del-script')) {
+        deleteScript(target.getAttribute('data-del-script') || '');
+      } else if (target.hasAttribute('data-del-key')) {
+        deleteKey(target.getAttribute('data-del-key') || '');
+      } else if (target.hasAttribute('data-lock-wl')) {
+        toggleLock(target.getAttribute('data-lock-wl') || '');
+      } else if (target.hasAttribute('data-reset-wl')) {
+        resetHw(target.getAttribute('data-reset-wl') || '');
+      } else if (target.hasAttribute('data-del-wl')) {
+        delWl(target.getAttribute('data-del-wl') || '');
+      } else if (target.hasAttribute('data-del-bl')) {
+        delBl(target.getAttribute('data-del-bl') || '');
+      }
+    });
 
-        const picker = document.getElementById('embedColorPicker');
-        const hexInput = document.getElementById('embedColorInput');
-        const onPicker = picker
-          ? picker.addEventListener('input', () => {
-              hexInput.value = picker.value.toUpperCase();
-            })
-          : null;
-        const onHex = hexInput
-          ? hexInput.addEventListener('input', () => {
-              syncPickerFromHex(hexInput.value);
-            })
-          : null;
+    const pickerEl = document.getElementById('embedColorPicker');
+    const hexEl = document.getElementById('embedColorInput');
+    if (pickerEl && hexEl) {
+      pickerEl.addEventListener('input', () => {
+        hexEl.value = pickerEl.value.toUpperCase();
+      });
+      hexEl.addEventListener('input', () => {
+        syncPickerFromHex(hexEl.value);
+      });
+    }
 
-        const fileInput = document.getElementById('scriptFileInput');
-        const onFile = fileInput
-          ? fileInput.addEventListener('change', () => loadScriptFile(fileInput))
-          : null;
+    const fileEl = document.getElementById('scriptFileInput');
+    if (fileEl) {
+      fileEl.addEventListener('change', () => loadScriptFile(fileEl));
+    }
 
-        const bindings = [
-          ['createScriptBtn', createScript],
-          ['sendPanelBtn', sendPanelToChannel],
-          ['runObfBtn', runStandaloneObf],
-          ['copyObfBtn', copyObfCode],
-          ['saveObfBtn', saveObfAsScript],
-          ['genKeysBtn', generateKeys],
-          ['addWhitelistBtn', addWhitelist],
-          ['addBlacklistBtn', addBlacklist],
-          ['linkWorkspaceBtn', linkWorkspace],
-          ['savePanelDesignBtn', savePanelDesign],
-        ].map(([elId, fn]) => {
-          const el = document.getElementById(elId);
-          return el ? el.addEventListener('click', fn) : null;
-        });
+    const guildInputEl = document.getElementById('guildIdInput');
+    const discordInputEl = document.getElementById('discordUserIdInput');
+    const guildSelectEl = document.getElementById('guildSelect');
+    if (guildInputEl) guildInputEl.addEventListener('input', lookupGuildLive);
+    if (discordInputEl) discordInputEl.addEventListener('input', lookupGuildLive);
+    if (guildSelectEl) {
+      guildSelectEl.addEventListener('change', () => {
+        if (guildInputEl && guildSelectEl.value) {
+          guildInputEl.value = guildSelectEl.value;
+          lookupGuildLive();
+        }
+      });
+    }
 
-        return { onMenu, onChips, onPicker, onHex, onFile, bindings };
-      };
-
-      const bound = bindStaticEvents();
-      const first = renderAll();
-      const poll = setInterval(renderAll, 8000);
-      return { bindGlobals, bound, first, poll };
+    const actionMap = {
+      createScriptBtn: createScript,
+      sendPanelBtn: sendPanelToChannel,
+      runObfBtn: runStandaloneObf,
+      copyObfBtn: copyObfCode,
+      saveObfBtn: saveObfAsScript,
+      genKeysBtn: generateKeys,
+      addWhitelistBtn: addWhitelist,
+      addBlacklistBtn: addBlacklist,
+      linkWorkspaceBtn: linkWorkspace,
+      savePanelDesignBtn: savePanelDesign,
     };
 
-    const bootUi = startDashboardLoop();
+    Object.keys(actionMap).forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.addEventListener('click', actionMap[id]);
+    });
+
+    renderAll();
+    setInterval(renderAll, 8000);
   </script>
 </body>
 </html>`;
