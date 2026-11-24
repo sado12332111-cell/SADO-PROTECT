@@ -3009,7 +3009,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         state.currentPage = pageName;
         const sections = document.querySelectorAll('.section-view');
         sections.forEach((sec) => {
-          sec.classList.toggle('active', sec.id === `section-${pageName}`);
+          sec.classList.toggle('active', sec.id === ('section-' + pageName));
         });
 
         const navButtons = document.querySelectorAll('.nav-item-btn');
