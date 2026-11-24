@@ -1913,1778 +1913,703 @@ app.get('/api/loader/:scriptId', async (req, res) => {
   }
 });
 
-const DASHBOARD_HTML = `<!DOCTYPE html>
-<html lang="az">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>SADO PROTECT — Control Studio</title>
-  <style>
-    :root {
-      --bg-void: #05070d;
-      --bg-surface: #0b0f19;
-      --bg-elevated: #111827;
-      --bg-hover: #172033;
-      --border-subtle: rgba(255, 255, 255, 0.08);
-      --border-gold: rgba(245, 158, 11, 0.42);
-      --text-primary: #f8fafc;
-      --text-secondary: #94a3b8;
-      --accent-gold: #f59e0b;
-      --accent-gold-bright: #fbbf24;
-      --accent-teal: #14b8a6;
-      --accent-rose: #f43f5e;
-      --accent-indigo: #6366f1;
-    }
-
-    *, *::before, *::after {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      -webkit-tap-highlight-color: transparent;
-      -webkit-touch-callout: none;
-    }
-
-    html, body {
-      width: 100%;
-      min-height: 100vh;
-      background:
-        radial-gradient(circle at 8% 4%, rgba(245, 158, 11, 0.14), transparent 36%),
-        radial-gradient(circle at 92% 90%, rgba(20, 184, 166, 0.13), transparent 40%),
-        var(--bg-void);
-      color: var(--text-primary);
-      overflow-x: hidden;
-    }
-
-    @keyframes fadeSlideDown {
-      0% {
-        opacity: 0;
-        transform: translateY(-10px) scale(0.985);
-      }
-      100% {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
-
-    @keyframes fadeSlideUp {
-      0% {
-        opacity: 0;
-        transform: translateY(14px);
-      }
-      100% {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @keyframes pulseGlow {
-      0%, 100% {
-        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.25);
-      }
-      50% {
-        box-shadow: 0 0 22px 2px rgba(245, 158, 11, 0.18);
-      }
-    }
-
-    .app-container {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 14px 14px 60px;
-      display: grid;
-      gap: 16px;
-    }
-
-    .top-bar {
-      position: sticky;
-      top: 10px;
-      z-index: 500;
-      background: rgba(11, 15, 25, 0.92);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      border: 1px solid var(--border-gold);
-      border-radius: 22px;
-      padding: 12px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
-      animation: fadeSlideDown 0.35s cubic-bezier(0.22, 1, 0.36, 1);
-    }
-
-    .top-left {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-    }
-
-    .hamburger-btn {
-      width: 48px;
-      height: 48px;
-      border-radius: 15px;
-      border: 1px solid rgba(251, 191, 36, 0.55);
-      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-      color: #090d16;
-      font-size: 23px;
-      font-weight: 900;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      user-select: none;
-      touch-action: manipulation;
-      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), filter 0.18s ease;
-      animation: pulseGlow 2.8s infinite ease-in-out;
-    }
-
-    .hamburger-btn:hover {
-      filter: brightness(1.07);
-    }
-
-    .hamburger-btn:active {
-      transform: scale(0.92);
-    }
-
-    .brand-titles {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-    }
-
-    .brand-title {
-      font-size: 17px;
-      font-weight: 900;
-      letter-spacing: 0.7px;
-      color: var(--accent-gold-bright);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .brand-subtitle {
-      font-size: 12px;
-      color: var(--text-secondary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      margin-top: 2px;
-    }
-
-    .top-right {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-
-    .bot-badge {
-      padding: 8px 12px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 800;
-      background: rgba(20, 184, 166, 0.14);
-      color: #2dd4bf;
-      border: 1px solid rgba(20, 184, 166, 0.38);
-      white-space: nowrap;
-    }
-
-    .bot-badge.offline {
-      background: rgba(244, 63, 94, 0.15);
-      color: #fb7185;
-      border-color: rgba(244, 63, 94, 0.38);
-    }
-
-    .drawer-backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 9990;
-      background: rgba(3, 5, 10, 0.82);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      display: none;
-      align-items: flex-start;
-      justify-content: center;
-      padding: 18px 14px 28px;
-      overflow-y: auto;
-      opacity: 0;
-      transition: opacity 0.24s ease;
-    }
-
-    .drawer-backdrop.open {
-      display: flex;
-      opacity: 1;
-    }
-
-    .drawer-sheet {
-      width: 100%;
-      max-width: 540px;
-      background: linear-gradient(180deg, #0f1624 0%, #090d16 100%);
-      border: 1px solid var(--border-gold);
-      border-radius: 24px;
-      padding: 16px;
-      display: grid;
-      gap: 10px;
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.78);
-      transform: translateY(-14px) scale(0.97);
-      transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
-    }
-
-    .drawer-backdrop.open .drawer-sheet {
-      transform: translateY(0) scale(1);
-    }
-
-    .drawer-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-
-    .drawer-title {
-      font-size: 16px;
-      font-weight: 900;
-      color: var(--accent-gold-bright);
-    }
-
-    .drawer-close {
-      width: 40px;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid var(--border-subtle);
-      background: var(--bg-elevated);
-      color: var(--text-primary);
-      font-size: 18px;
-      font-weight: 900;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.16s ease, background 0.16s ease;
-    }
-
-    .drawer-close:active {
-      transform: scale(0.9);
-      background: rgba(244, 63, 94, 0.22);
-    }
-
-    .nav-item-btn {
-      width: 100%;
-      text-align: left;
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid var(--border-subtle);
-      background: var(--bg-elevated);
-      color: var(--text-primary);
-      font-size: 14px;
-      font-weight: 800;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      user-select: none;
-      touch-action: manipulation;
-      transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background 0.18s ease, border-color 0.18s ease;
-    }
-
-    .nav-item-btn:hover {
-      background: var(--bg-hover);
-      border-color: rgba(245, 158, 11, 0.35);
-    }
-
-    .nav-item-btn:active {
-      transform: scale(0.97);
-    }
-
-    .nav-item-btn.active {
-      background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
-      color: #090d16;
-      border-color: #fde68a;
-    }
-
-    .section-view {
-      display: none;
-      gap: 16px;
-    }
-
-    .section-view.active {
-      display: grid;
-      animation: fadeSlideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-    }
-
-    .bento-grid-4 {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 14px;
-    }
-
-    .bento-grid-2 {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-      gap: 14px;
-    }
-
-    .card {
-      background: linear-gradient(180deg, rgba(17, 24, 39, 0.92) 0%, rgba(11, 15, 25, 0.96) 100%);
-      border: 1px solid var(--border-subtle);
-      border-radius: 20px;
-      padding: 16px;
-      display: grid;
-      gap: 12px;
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-      transition: transform 0.2s ease, border-color 0.2s ease;
-    }
-
-    .card:hover {
-      border-color: rgba(245, 158, 11, 0.24);
-    }
-
-    .stat-label {
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .stat-value {
-      font-size: 28px;
-      font-weight: 900;
-      color: var(--text-primary);
-      word-break: break-word;
-    }
-
-    .stat-value.gold {
-      color: var(--accent-gold-bright);
-    }
-
-    .stat-value.teal {
-      color: #2dd4bf;
-    }
-
-    .card-heading {
-      font-size: 15px;
-      font-weight: 900;
-      color: var(--text-primary);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .field-group {
-      display: grid;
-      gap: 6px;
-    }
-
-    .field-label {
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--text-secondary);
-    }
-
-    .input-control,
-    .select-control,
-    .textarea-control {
-      width: 100%;
-      border-radius: 13px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: #070b13;
-      color: var(--text-primary);
-      padding: 11px 13px;
-      font-size: 13px;
-      outline: none;
-      transition: border-color 0.18s ease, box-shadow 0.18s ease;
-    }
-
-    .input-control:focus,
-    .select-control:focus,
-    .textarea-control:focus {
-      border-color: var(--accent-gold);
-      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
-    }
-
-    .textarea-control {
-      min-height: 150px;
-      resize: vertical;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      line-height: 1.45;
-    }
-
-    .code-box {
-      background: #05080f;
-      border: 1px solid rgba(245, 158, 11, 0.25);
-      border-radius: 14px;
-      padding: 12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      color: #fde68a;
-      white-space: pre-wrap;
-      word-break: break-all;
-      line-height: 1.45;
-    }
-
-    .btn {
-      border: none;
-      border-radius: 13px;
-      padding: 11px 15px;
-      font-size: 13px;
-      font-weight: 800;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      user-select: none;
-      touch-action: manipulation;
-      transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), filter 0.16s ease, opacity 0.16s ease;
-    }
-
-    .btn:hover {
-      filter: brightness(1.06);
-    }
-
-    .btn:active {
-      transform: scale(0.96);
-    }
-
-    .btn-gold {
-      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-      color: #090d16;
-    }
-
-    .btn-teal {
-      background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
-      color: #04100e;
-    }
-
-    .btn-danger {
-      background: rgba(244, 63, 94, 0.16);
-      color: #fda4af;
-      border: 1px solid rgba(244, 63, 94, 0.38);
-    }
-
-    .btn-ghost {
-      background: var(--bg-elevated);
-      color: var(--text-primary);
-      border: 1px solid var(--border-subtle);
-    }
-
-    .btn-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .switch-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 12px 14px;
-      border-radius: 14px;
-      background: rgba(7, 11, 19, 0.85);
-      border: 1px solid var(--border-subtle);
-    }
-
-    .list-stack {
-      display: grid;
-      gap: 10px;
-    }
-
-    .record-row {
-      background: rgba(7, 11, 19, 0.88);
-      border: 1px solid var(--border-subtle);
-      border-radius: 16px;
-      padding: 12px 14px;
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .user-chip {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-    }
-
-    .avatar-img {
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      object-fit: cover;
-      border: 1px solid rgba(245, 158, 11, 0.4);
-      background: #111827;
-      flex-shrink: 0;
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 800;
-      background: rgba(245, 158, 11, 0.14);
-      color: var(--accent-gold-bright);
-      border: 1px solid rgba(245, 158, 11, 0.3);
-    }
-
-    .pill.teal {
-      background: rgba(20, 184, 166, 0.14);
-      color: #2dd4bf;
-      border-color: rgba(20, 184, 166, 0.32);
-    }
-
-    .pill.rose {
-      background: rgba(244, 63, 94, 0.14);
-      color: #fda4af;
-      border-color: rgba(244, 63, 94, 0.32);
-    }
-
-    .toast-banner {
-      position: fixed;
-      bottom: 18px;
-      left: 50%;
-      transform: translateX(-50%) translateY(20px);
-      z-index: 10000;
-      background: #111827;
-      color: #f8fafc;
-      border: 1px solid var(--accent-gold);
-      border-radius: 15px;
-      padding: 11px 18px;
-      font-size: 13px;
-      font-weight: 800;
-      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.22s ease, transform 0.22s ease;
-      max-width: 92vw;
-      text-align: center;
-    }
-
-    .toast-banner.show {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-
-    .sub-tabs {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .sub-tab-btn {
-      padding: 10px 14px;
-      border-radius: 13px;
-      border: 1px solid var(--border-subtle);
-      background: var(--bg-elevated);
-      color: var(--text-secondary);
-      font-size: 13px;
-      font-weight: 800;
-      cursor: pointer;
-      transition: all 0.16s ease;
-    }
-
-    .sub-tab-btn.active {
-      background: var(--accent-gold);
-      color: #090d16;
-      border-color: #fde68a;
-    }
-  </style>
-</head>
-<body>
-  <div class="app-container">
-    <header class="top-bar">
-      <div class="top-left">
-        <button
-          id="menuOpenBtn"
-          type="button"
-          class="hamburger-btn"
-          aria-label="Menyu"
-          onclick="window.__spToggleMenu && window.__spToggleMenu(true)"
-        >☰</button>
-        <div class="brand-titles">
-          <div class="brand-title">SADO PROTECT</div>
-          <div id="headerGuildSub" class="brand-subtitle">Qoşulan Sunucu: Seçilməyib</div>
-        </div>
-      </div>
-      <div class="top-right">
-        <span id="headerBotBadge" class="bot-badge">Bot: Qoşulur...</span>
-      </div>
-    </header>
-
-    <div
-      id="drawerBackdrop"
-      class="drawer-backdrop"
-      role="dialog"
-      aria-modal="true"
-      onclick="if (event.target === this && window.__spToggleMenu) window.__spToggleMenu(false)"
-    >
-      <div class="drawer-sheet">
-        <div class="drawer-header">
-          <div class="drawer-title">SADO PROTECT • Bölmələr</div>
-          <button
-            id="menuCloseBtn"
-            type="button"
-            class="drawer-close"
-            aria-label="Bağla"
-            onclick="window.__spToggleMenu && window.__spToggleMenu(false)"
-          >✕</button>
-        </div>
-
-        <button
-          type="button"
-          class="nav-item-btn active"
-          data-page="overview"
-          onclick="window.__spNavigate && window.__spNavigate('overview')"
-        >
-          <span>1. Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</span>
-          <span>›</span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-item-btn"
-          data-page="scripts"
-          onclick="window.__spNavigate && window.__spNavigate('scripts')"
-        >
-          <span>2. Script Yaradılması &amp; Ultra Obfuscation</span>
-          <span>›</span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-item-btn"
-          data-page="access"
-          onclick="window.__spNavigate && window.__spNavigate('access')"
-        >
-          <span>3. Key, Whitelist &amp; Blacklist İdarəsi</span>
-          <span>›</span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-item-btn"
-          data-page="discord"
-          onclick="window.__spNavigate && window.__spNavigate('discord')"
-        >
-          <span>4. Discord Bot, Sunucu Bağlantısı &amp; Panel Dizayn</span>
-          <span>›</span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-item-btn"
-          data-page="panel_send"
-          onclick="window.__spNavigate && window.__spNavigate('panel_send')"
-        >
-          <span>5. Seçilən Script Panelini Kanala Göndər</span>
-          <span>›</span>
-        </button>
-      </div>
-    </div>
-
-    <section id="section-overview" class="section-view active">
-      <div class="bento-grid-4">
-        <div class="card">
-          <div class="stat-label">Skriptlər</div>
-          <div id="statScripts" class="stat-value gold">0</div>
-        </div>
-        <div class="card">
-          <div class="stat-label">Keylər</div>
-          <div id="statKeys" class="stat-value teal">0</div>
-        </div>
-        <div class="card">
-          <div class="stat-label">Whitelist</div>
-          <div id="statWhitelist" class="stat-value">0</div>
-        </div>
-        <div class="card">
-          <div class="stat-label">Blacklist</div>
-          <div id="statBlacklist" class="stat-value" style="color:#fda4af;">0</div>
-        </div>
-      </div>
-
-      <div class="bento-grid-2">
-        <div class="card">
-          <div class="card-heading">
-            <span>Qoşulan Sunucu &amp; 7/24 Bot</span>
-            <span id="overviewBotPill" class="pill teal">7/24 Aktiv</span>
-          </div>
-          <div id="overviewGuildBox" class="list-stack">
-            <div class="record-row">
-              <div>
-                <div style="font-weight:800;">Sunucu: <span id="overviewGuildName">Seçilməyib</span></div>
-                <div id="overviewGuildId" class="field-label">Sunucu ID: Təyin edilməyib</div>
-              </div>
-              <button
-                type="button"
-                class="btn btn-gold"
-                onclick="window.__spNavigate && window.__spNavigate('discord')"
-              >Sunucu Ayarla</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-heading">
-            <span>Sürətli Əməliyyatlar</span>
-          </div>
-          <div class="btn-row">
-            <button
-              type="button"
-              class="btn btn-gold"
-              onclick="window.__spNavigate && window.__spNavigate('scripts')"
-            >+ Yeni Script</button>
-            <button
-              type="button"
-              class="btn btn-teal"
-              onclick="window.__spNavigate && window.__spNavigate('access')"
-            >+ Key / Whitelist / Blacklist</button>
-            <button
-              type="button"
-              class="btn btn-ghost"
-              onclick="window.__spNavigate && window.__spNavigate('panel_send')"
-            >📤 Panel Göndər</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-heading">
-          <span>Son Key-lər (Yaradan &amp; İşlədən Profil)</span>
-        </div>
-        <div id="overviewRecentKeys" class="list-stack"></div>
-      </div>
-    </section>
-
-    <section id="section-scripts" class="section-view">
-      <div class="card">
-        <div class="card-heading">
-          <span>Yeni Script Yarat (Kod və ya .lua / .txt Fayl ilə)</span>
-        </div>
-
-        <div class="field-group">
-          <label class="field-label" for="scriptNameInput">Script Adı</label>
-          <input
-            id="scriptNameInput"
-            type="text"
-            class="input-control"
-            placeholder="Məsələn: Blox Fruits Ultra Hub"
-          />
-        </div>
-
-        <div class="field-group">
-          <label class="field-label" for="scriptFileInput">Dosya Yüklə (.lua / .txt)</label>
-          <input
-            id="scriptFileInput"
-            type="file"
-            accept=".lua,.txt,text/plain"
-            class="input-control"
-          />
-        </div>
-
-        <div class="field-group">
-          <label class="field-label" for="scriptCodeInput">Script Kodu</label>
-          <textarea
-            id="scriptCodeInput"
-            class="textarea-control"
-            placeholder="-- Lua script kodunu bura yazın və ya fayl seçin"
-          ></textarea>
-        </div>
-
-        <div class="switch-row">
-          <div>
-            <div style="font-size:13px;font-weight:800;">Ultra Obfuscation (Anti-Hook + VM Qoruma)</div>
-            <div class="field-label">Açanda script ultra şifrələnmiş VM qoruma ilə saxlanılır</div>
-          </div>
-          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:800;font-size:13px;">
-            <input id="scriptObfToggle" type="checkbox" checked style="width:20px;height:20px;accent-color:#f59e0b;" />
-            <span id="scriptObfLabel">AÇIQ</span>
-          </label>
-        </div>
-
-        <div class="btn-row">
-          <button id="createScriptBtn" type="button" class="btn btn-gold">Scripti Yarat &amp; Qoru</button>
-          <button id="clearScriptFormBtn" type="button" class="btn btn-ghost">Formu Təmizlə</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-heading">
-          <span>Mövcud Scriptlər</span>
-          <span id="existingScriptsCount" class="pill">0</span>
-        </div>
-        <div id="existingScriptsList" class="list-stack"></div>
-      </div>
-    </section>
-
-    <section id="section-access" class="section-view">
-      <div class="sub-tabs">
-        <button type="button" class="sub-tab-btn active" data-subtab="keys">🔑 Keylər</button>
-        <button type="button" class="sub-tab-btn" data-subtab="whitelist">✅ Whitelist</button>
-        <button type="button" class="sub-tab-btn" data-subtab="blacklist">⛔ Blacklist</button>
-        <button type="button" class="sub-tab-btn" data-subtab="hwid">♻️ HWID Reset</button>
-      </div>
-
-      <div id="subtab-keys" class="card">
-        <div class="card-heading">
-          <span>Yeni Key Yarat</span>
-        </div>
-        <div class="bento-grid-2">
-          <div class="field-group">
-            <label class="field-label" for="keyScriptSelect">Script Seçin</label>
-            <select id="keyScriptSelect" class="select-control"></select>
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="keyDurationSelect">Vaxt Seçimi</label>
-            <select id="keyDurationSelect" class="select-control">
-              <option value="lifetime">Lifetime (Sonsuz)</option>
-              <option value="1m">1 Month (30 Gün)</option>
-              <option value="7d">7 Day (7 Gün)</option>
-              <option value="3d">3 Day (3 Gün)</option>
-              <option value="24h">24 Hours (24 Saat)</option>
-              <option value="5h">5 Hours (5 Saat)</option>
-              <option value="1h">1 Hours (1 Saat)</option>
-              <option value="30m">30 Minutes (30 Dəqiqə)</option>
-            </select>
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="keyCreatorIdInput">Yaradan Discord ID (opsional)</label>
-            <input id="keyCreatorIdInput" type="text" class="input-control" placeholder="Discord User ID" />
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="keyUserIdInput">İşlədəcək / Bağlı Discord ID (opsional)</label>
-            <input id="keyUserIdInput" type="text" class="input-control" placeholder="Discord User ID" />
-          </div>
-        </div>
-        <div class="btn-row">
-          <button id="createKeyBtn" type="button" class="btn btn-gold">Key Yarat</button>
-        </div>
-        <div id="keysListBox" class="list-stack"></div>
-      </div>
-
-      <div id="subtab-whitelist" class="card" style="display:none;">
-        <div class="card-heading">
-          <span>Whitelist Əlavə Et</span>
-        </div>
-        <div class="bento-grid-2">
-          <div class="field-group">
-            <label class="field-label" for="wlDiscordIdInput">Discord ID</label>
-            <input id="wlDiscordIdInput" type="text" class="input-control" placeholder="Məsələn: 123456789012345678" />
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="wlDurationSelect">Whitelist Vaxtı</label>
-            <select id="wlDurationSelect" class="select-control">
-              <option value="lifetime">Lifetime (Sonsuz)</option>
-              <option value="1m">1 Month (30 Gün)</option>
-              <option value="7d">7 Day (7 Gün)</option>
-              <option value="3d">3 Day (3 Gün)</option>
-              <option value="24h">24 Hours (24 Saat)</option>
-              <option value="5h">5 Hours (5 Saat)</option>
-              <option value="1h">1 Hours (1 Saat)</option>
-              <option value="30m">30 Minutes (30 Dəqiqə)</option>
-            </select>
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="wlScriptSelect">Script (opsional)</label>
-            <select id="wlScriptSelect" class="select-control"></select>
-          </div>
-        </div>
-        <div class="btn-row">
-          <button id="addWhitelistBtn" type="button" class="btn btn-teal">Whitelist-ə Əlavə Et</button>
-        </div>
-        <div id="whitelistBox" class="list-stack"></div>
-      </div>
-
-      <div id="subtab-blacklist" class="card" style="display:none;">
-        <div class="card-heading">
-          <span>Blacklist Əlavə Et</span>
-        </div>
-        <div class="bento-grid-2">
-          <div class="field-group">
-            <label class="field-label" for="blDiscordIdInput">Discord ID</label>
-            <input id="blDiscordIdInput" type="text" class="input-control" placeholder="Discord User ID" />
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="blDurationSelect">Blacklist Vaxtı</label>
-            <select id="blDurationSelect" class="select-control">
-              <option value="lifetime">Lifetime (Sonsuz)</option>
-              <option value="1m">1 Month (30 Gün)</option>
-              <option value="7d">7 Day (7 Gün)</option>
-              <option value="3d">3 Day (3 Gün)</option>
-              <option value="24h">24 Hours (24 Saat)</option>
-              <option value="5h">5 Hours (5 Saat)</option>
-              <option value="1h">1 Hours (1 Saat)</option>
-              <option value="30m">30 Minutes (30 Dəqiqə)</option>
-            </select>
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="blReasonInput">Səbəb</label>
-            <input id="blReasonInput" type="text" class="input-control" placeholder="Məsələn: Key paylaşımı / Bypass" />
-          </div>
-        </div>
-        <div class="btn-row">
-          <button id="addBlacklistBtn" type="button" class="btn btn-danger">Blacklist-ə Sal</button>
-        </div>
-        <div id="blacklistBox" class="list-stack"></div>
-      </div>
-
-      <div id="subtab-hwid" class="card" style="display:none;">
-        <div class="card-heading">
-          <span>HWID Reset (İlk Cihaza Bağlanma &amp; Başqasına Kick)</span>
-        </div>
-        <p class="field-label">
-          Reset etdikdən sonra scripti ilk işlədən cihaz/telefon HWID-ə bağlanır. Reset edilmədən başqa cihazda işlədiləndə sistem avtomatik Kick atır.
-        </p>
-        <div class="bento-grid-2">
-          <div class="field-group">
-            <label class="field-label" for="hwidTargetInput">Key Kodu və ya Discord ID</label>
-            <input id="hwidTargetInput" type="text" class="input-control" placeholder="SADO-... və ya Discord ID" />
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="hwidScriptSelect">Script Seçimi (opsional)</label>
-            <select id="hwidScriptSelect" class="select-control"></select>
-          </div>
-        </div>
-        <div class="btn-row">
-          <button id="resetHwidBtn" type="button" class="btn btn-gold">HWID Sıfırla</button>
-        </div>
-      </div>
-    </section>
-
-    <section id="section-discord" class="section-view">
-      <div class="bento-grid-2">
-        <div class="card">
-          <div class="card-heading">
-            <span>1) Join Discord &amp; 7/24 Bot Status</span>
-            <span id="discordTabBotStatus" class="pill teal">7/24 Aktiv</span>
-          </div>
-          <p class="field-label">
-            Bot 7/24 aktiv saxlanılır. Aşağıdakı düymə ilə botu sunucunuza dəvət edə bilərsiniz.
-          </p>
-          <div class="btn-row">
-            <a id="joinDiscordBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-gold">
-              Join Discord (Botu Dəvət Et)
-            </a>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-heading">
-            <span>2) Sunucu ID Bağlantısı</span>
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="guildIdInput">Discord Sunucu ID</label>
-            <input
-              id="guildIdInput"
-              type="text"
-              class="input-control"
-              placeholder="Sunucu ID yazın (məs: 123456789012345678)"
-            />
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="guildInviteInput">Xüsusi Dəvət Linki (opsional)</label>
-            <input
-              id="guildInviteInput"
-              type="text"
-              class="input-control"
-              placeholder="https://discord.gg/..."
-            />
-          </div>
-          <div class="record-row">
-            <div>
-              <div class="field-label">Tapılan Sunucu Adı</div>
-              <div id="resolvedGuildNameText" style="font-size:15px;font-weight:900;color:#fbbf24;">Seçilməyib</div>
-            </div>
-            <button id="saveGuildConfigBtn" type="button" class="btn btn-teal">Sunucunu Bağla</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-heading">
-          <span>3) Panel Dizayn (Ad, Emoji, Rəng, Sıra &amp; Canlı Panel)</span>
-        </div>
-
-        <div class="bento-grid-2">
-          <div class="field-group">
-            <label class="field-label" for="panelTitleInput">Panel Başlığı</label>
-            <input id="panelTitleInput" type="text" class="input-control" />
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="panelColorInput">Embed Rəngi (HEX)</label>
-            <input id="panelColorInput" type="color" class="input-control" style="height:44px;padding:4px;" />
-          </div>
-        </div>
-
-        <div class="field-group">
-          <label class="field-label" for="panelDescInput">Panel Təsviri</label>
-          <textarea id="panelDescInput" class="textarea-control" style="min-height:85px;"></textarea>
-        </div>
-
-        <div class="field-group">
-          <div class="field-label">Panel Butonları (Ad, Emoji, Rəng, Aktivlik və Sıra — Yuxarı/Aşağı)</div>
-          <div id="panelButtonsEditor" class="list-stack"></div>
-        </div>
-
-        <div class="btn-row">
-          <button id="savePanelDesignBtn" type="button" class="btn btn-gold">Panel Dizaynını Yadda Saxla</button>
-        </div>
-      </div>
-    </section>
-
-    <section id="section-panel_send" class="section-view">
-      <div class="card">
-        <div class="card-heading">
-          <span>Mövcud Script Seç və Discord Kanalına Panel Göndər</span>
-        </div>
-
-        <div class="bento-grid-2">
-          <div class="field-group">
-            <label class="field-label" for="sendPanelScriptSelect">Mövcud Scriptlər</label>
-            <select id="sendPanelScriptSelect" class="select-control"></select>
-          </div>
-          <div class="field-group">
-            <label class="field-label" for="sendPanelChannelInput">Discord Kanal ID</label>
-            <input
-              id="sendPanelChannelInput"
-              type="text"
-              class="input-control"
-              placeholder="Panel göndəriləcək kanalın ID-si"
-            />
-          </div>
-        </div>
-
-        <div id="selectedScriptPreviewBox" class="code-box">Script seçin...</div>
-
-        <div class="btn-row">
-          <button id="sendPanelNowBtn" type="button" class="btn btn-gold">📤 Kanalа Panel Göndər</button>
-        </div>
-      </div>
-    </section>
-  </div>
-
-  <div id="toastBanner" class="toast-banner"></div>
-
-  <script>
-    (function () {
-      const state = {
-        currentPage: 'overview',
-        data: null,
-        panelButtonsDraft: []
-      };
-
-      const showToast = (msg) => {
-        const toast = document.getElementById('toastBanner');
-        if (!toast) return;
-        toast.textContent = String(msg || '');
-        toast.classList.add('show');
-        clearTimeout(window.__spToastTimer);
-        window.__spToastTimer = setTimeout(() => {
-          toast.classList.remove('show');
-        }, 2800);
-      };
-
-      const toggleMenu = (forceOpen) => {
-        const backdrop = document.getElementById('drawerBackdrop');
-        if (!backdrop) return;
-        const shouldOpen =
-          typeof forceOpen === 'boolean' ? forceOpen : !backdrop.classList.contains('open');
-        if (shouldOpen) {
-          backdrop.classList.add('open');
-        } else {
-          backdrop.classList.remove('open');
-        }
-      };
-
-      const navigateToPage = (pageName) => {
-        state.currentPage = pageName;
-        const sections = document.querySelectorAll('.section-view');
-        sections.forEach((sec) => {
-          sec.classList.toggle('active', sec.id === ('section-' + pageName));
-        });
-
-        const navButtons = document.querySelectorAll('.nav-item-btn');
-        navButtons.forEach((btn) => {
-          btn.classList.toggle('active', btn.getAttribute('data-page') === pageName);
-        });
-
-        toggleMenu(false);
-        if (pageName === 'panel_send') {
-          updatePanelSendPreview();
-        }
-      };
-
-      window.__spToggleMenu = toggleMenu;
-      window.__spNavigate = navigateToPage;
-
-      const apiRequest = async (url, options = {}) => {
-        const res = await fetch(url, {
-          headers: { 'Content-Type': 'application/json' },
-          ...options
-        });
-        const json = await res.json();
-        if (!res.ok || !json.ok) {
-          throw new Error(json.error || 'Sorğu uğursuz oldu.');
-        }
-        return json;
-      };
-
-      const populateScriptSelects = (scripts) => {
-        const selectIds = [
-          'keyScriptSelect',
-          'wlScriptSelect',
-          'hwidScriptSelect',
-          'sendPanelScriptSelect'
-        ];
-        selectIds.forEach((id) => {
-          const el = document.getElementById(id);
-          if (!el) return;
-          const prevVal = el.value;
-          const allowAll = id === 'wlScriptSelect' || id === 'hwidScriptSelect';
-          const optionsHtml = [];
-          if (allowAll) {
-            optionsHtml.push('<option value="">Bütün Scriptlər</option>');
-          }
-          (scripts || []).forEach((s) => {
-            optionsHtml.push('<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + '</option>');
-          });
-          if (optionsHtml.length === 0) {
-            optionsHtml.push('<option value="">Script yoxdur</option>');
-          }
-          el.innerHTML = optionsHtml.join('');
-          if (prevVal && Array.from(el.options).some((o) => o.value === prevVal)) {
-            el.value = prevVal;
-          }
-        });
-      };
-
-      const escapeHtml = (str) => {
-        return String(str || '')
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;');
-      };
-
-      const renderPanelButtonsEditor = (buttons) => {
-        state.panelButtonsDraft = (buttons || []).map((b) => ({ ...b }));
-        const box = document.getElementById('panelButtonsEditor');
-        if (!box) return;
-
-        box.innerHTML = state.panelButtonsDraft
-          .map((btn, idx) => {
-            return (
-              '<div class="record-row">' +
-              '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:1;">' +
-              '<span class="pill">#' + (idx + 1) + '</span>' +
-              '<input type="text" class="input-control" style="width:76px;" value="' +
-              escapeHtml(btn.emoji) +
-              '" placeholder="Emoji" onchange="window.__spEditBtn(' +
-              idx +
-              ', \'emoji\', this.value)" />' +
-              '<input type="text" class="input-control" style="width:170px;" value="' +
-              escapeHtml(btn.label) +
-              '" placeholder="Buton adı" onchange="window.__spEditBtn(' +
-              idx +
-              ', \'label\', this.value)" />' +
-              '<select class="select-control" style="width:130px;" onchange="window.__spEditBtn(' +
-              idx +
-              ', \'style\', this.value)">' +
-              '<option value="Primary"' + (btn.style === 'Primary' ? ' selected' : '') + '>Mavi (Primary)</option>' +
-              '<option value="Success"' + (btn.style === 'Success' ? ' selected' : '') + '>Yaşıl (Success)</option>' +
-              '<option value="Danger"' + (btn.style === 'Danger' ? ' selected' : '') + '>Qırmızı (Danger)</option>' +
-              '<option value="Secondary"' + (btn.style === 'Secondary' ? ' selected' : '') + '>Boz (Secondary)</option>' +
-              '</select>' +
-              '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;">' +
-              '<input type="checkbox"' +
-              (btn.enabled !== false ? ' checked' : '') +
-              ' onchange="window.__spEditBtn(' +
-              idx +
-              ', \'enabled\', this.checked)" /> Aktiv</label>' +
-              '</div>' +
-              '<div class="btn-row">' +
-              '<button type="button" class="btn btn-ghost" onclick="window.__spMoveBtn(' + idx + ', -1)">↑</button>' +
-              '<button type="button" class="btn btn-ghost" onclick="window.__spMoveBtn(' + idx + ', 1)">↓</button>' +
-              '</div></div>'
-            );
-          })
-          .join('');
-      };
-
-      window.__spEditBtn = (index, field, val) => {
-        if (!state.panelButtonsDraft[index]) return;
-        state.panelButtonsDraft[index][field] = val;
-      };
-
-      window.__spMoveBtn = (index, delta) => {
-        const nextIdx = index + delta;
-        if (nextIdx < 0 || nextIdx >= state.panelButtonsDraft.length) return;
-        const copy = [...state.panelButtonsDraft];
-        const temp = copy[index];
-        copy[index] = copy[nextIdx];
-        copy[nextIdx] = temp;
-        renderPanelButtonsEditor(copy);
-      };
-
-      const updatePanelSendPreview = () => {
-        const preview = document.getElementById('selectedScriptPreviewBox');
-        const sel = document.getElementById('sendPanelScriptSelect');
-        if (!preview || !sel || !state.data) return;
-        const found = (state.data.scripts || []).find((s) => s.id === sel.value);
-        if (!found || !found.bundle) {
-          preview.textContent = 'Mövcud script seçin...';
-          return;
-        }
-        preview.textContent =
-          `--- 1) SCRIPT KEY ---\n${found.bundle.scriptKeySection}\n\n` +
-          `--- 2) LOADSTRING SCRIPT ---\n${found.bundle.loadstringSection}`;
-      };
-
-      const renderDashboard = (data) => {
-        state.data = data;
-
-        const guildName = data.guildConfig?.guildName || 'Seçilməyib';
-        const guildId = data.guildConfig?.guildId || '';
-
-        const headerGuildSub = document.getElementById('headerGuildSub');
-        if (headerGuildSub) {
-          headerGuildSub.textContent = 'Qoşulan Sunucu: ' + guildName;
-        }
-
-        const badge = document.getElementById('headerBotBadge');
-        if (badge) {
-          badge.textContent = 'Bot: ' + (data.bot?.status || 'Aktiv');
-          badge.classList.toggle('offline', !data.bot?.online);
-        }
-
-        const statScripts = document.getElementById('statScripts');
-        const statKeys = document.getElementById('statKeys');
-        const statWhitelist = document.getElementById('statWhitelist');
-        const statBlacklist = document.getElementById('statBlacklist');
-        if (statScripts) statScripts.textContent = String(data.counts?.scripts ?? 0);
-        if (statKeys) statKeys.textContent = String(data.counts?.keys ?? 0);
-        if (statWhitelist) statWhitelist.textContent = String(data.counts?.whitelist ?? 0);
-        if (statBlacklist) statBlacklist.textContent = String(data.counts?.blacklist ?? 0);
-
-        const ovGuildName = document.getElementById('overviewGuildName');
-        const ovGuildId = document.getElementById('overviewGuildId');
-        if (ovGuildName) ovGuildName.textContent = guildName;
-        if (ovGuildId) ovGuildId.textContent = 'Sunucu ID: ' + (guildId || 'Təyin edilməyib');
-
-        const recentKeysBox = document.getElementById('overviewRecentKeys');
-        if (recentKeysBox) {
-          const keys = data.keys || [];
-          if (keys.length === 0) {
-            recentKeysBox.innerHTML = '<div class="field-label">Hələ key yaradılmayıb.</div>';
-          } else {
-            recentKeysBox.innerHTML = keys
-              .slice(0, 8)
-              .map((k) => {
-                const whoProf = k.usedByProfile || k.creatorProfile || {};
-                const creatorName = k.creatorProfile?.globalName || k.createdByTag || 'Dashboard';
-                const usedByName = k.usedByProfile?.globalName || k.usedByTag || 'Hələ işlədilməyib';
-                const timeLabel = k.remainingLabel || k.durationLabel || 'Lifetime';
-                return (
-                  '<div class="record-row">' +
-                  '<div class="user-chip">' +
-                  '<img class="avatar-img" src="' + escapeHtml(whoProf.avatarUrl || '') + '" alt="avatar" />' +
-                  '<div>' +
-                  '<div style="font-weight:800;font-size:13px;">' + escapeHtml(k.code) + '</div>' +
-                  '<div class="field-label">Yaradan: ' +
-                  escapeHtml(creatorName) +
-                  ' • İşlədən: ' +
-                  escapeHtml(usedByName) +
-                  ' • Vaxt: ' +
-                  escapeHtml(timeLabel) +
-                  '</div></div></div>' +
-                  '<span class="pill ' + (k.expired ? 'rose' : 'teal') + '">' +
-                  escapeHtml(k.durationLabel || 'Lifetime') +
-                  '</span></div>'
-                );
-              })
-              .join('');
-          }
-        }
-
-        populateScriptSelects(data.scripts || []);
-
-        const existingScriptsCount = document.getElementById('existingScriptsCount');
-        if (existingScriptsCount) existingScriptsCount.textContent = String((data.scripts || []).length);
-
-        const existingScriptsList = document.getElementById('existingScriptsList');
-        if (existingScriptsList) {
-          const scripts = data.scripts || [];
-          if (scripts.length === 0) {
-            existingScriptsList.innerHTML = '<div class="field-label">Hələ heç bir script yaradılmayıb.</div>';
-          } else {
-            existingScriptsList.innerHTML = scripts
-              .map((s) => {
-                const bundle = s.bundle || {};
-                const bundleStr = (bundle.scriptKeySection || '') + '\n' + (bundle.loadstringSection || '');
-                return (
-                  '<div class="card" style="background:#080c15;">' +
-                  '<div class="card-heading">' +
-                  '<span>📜 ' + escapeHtml(s.name) + '</span>' +
-                  '<span class="pill ' + (s.obfuscationEnabled ? 'teal' : 'rose') + '">' +
-                  'Obfuscation: ' + (s.obfuscationEnabled ? 'AÇIQ (ULTRA)' : 'BAĞLI') +
-                  '</span></div>' +
-                  '<div class="code-box">' + escapeHtml(bundleStr) + '</div>' +
-                  '<div class="btn-row">' +
-                  '<button type="button" class="btn btn-gold" onclick="window.__spCopyText(' +
-                  escapeHtml(JSON.stringify(bundleStr)) +
-                  ')">Get Script Kopyala</button>' +
-                  '<button type="button" class="btn btn-teal" onclick="window.__spToggleScriptObf(\'' +
-                  escapeHtml(s.id) +
-                  '\', ' +
-                  (!s.obfuscationEnabled) +
-                  ')">Obfuscation ' + (s.obfuscationEnabled ? 'Bağla' : 'Aç') + '</button>' +
-                  '<button type="button" class="btn btn-danger" onclick="window.__spDeleteScript(\'' +
-                  escapeHtml(s.id) +
-                  '\')">Sil</button>' +
-                  '</div></div>'
-                );
-              })
-              .join('');
-          }
-        }
-
-        const keysListBox = document.getElementById('keysListBox');
-        if (keysListBox) {
-          const keys = data.keys || [];
-          keysListBox.innerHTML =
-            keys.length === 0
-              ? '<div class="field-label">Key siyahısı boşdur.</div>'
-              : keys
-                  .map((k) => {
-                    const prof = k.usedByProfile || k.creatorProfile || {};
-                    const profName = prof.globalName || prof.username || 'Dashboard';
-                    return (
-                      '<div class="record-row">' +
-                      '<div class="user-chip">' +
-                      '<img class="avatar-img" src="' + escapeHtml(prof.avatarUrl || '') + '" alt="avatar" />' +
-                      '<div>' +
-                      '<div style="font-weight:900;font-size:13px;color:#fbbf24;">' + escapeHtml(k.code) + '</div>' +
-                      '<div class="field-label">Script: ' +
-                      escapeHtml(k.scriptName || '-') +
-                      ' • Vaxt: ' +
-                      escapeHtml(k.durationLabel) +
-                      ' (' +
-                      escapeHtml(k.remainingLabel) +
-                      ') • Profil: ' +
-                      escapeHtml(profName) +
-                      '</div></div></div>' +
-                      '<button type="button" class="btn btn-danger" onclick="window.__spDeleteKey(\'' +
-                      escapeHtml(k.id) +
-                      '\')">Sil</button></div>'
-                    );
-                  })
-                  .join('');
-        }
-
-        const whitelistBox = document.getElementById('whitelistBox');
-        if (whitelistBox) {
-          const wl = data.whitelist || [];
-          whitelistBox.innerHTML =
-            wl.length === 0
-              ? '<div class="field-label">Whitelist boşdur.</div>'
-              : wl
-                  .map((w) => {
-                    const prof = w.profile || {};
-                    const labelName = prof.globalName || w.discordTag || w.discordId;
-                    return (
-                      '<div class="record-row">' +
-                      '<div class="user-chip">' +
-                      '<img class="avatar-img" src="' + escapeHtml(prof.avatarUrl || '') + '" alt="avatar" />' +
-                      '<div>' +
-                      '<div style="font-weight:800;font-size:13px;">' + escapeHtml(labelName) + '</div>' +
-                      '<div class="field-label">ID: ' +
-                      escapeHtml(w.discordId) +
-                      ' • Vaxt: ' +
-                      escapeHtml(w.durationLabel) +
-                      ' (' +
-                      escapeHtml(w.remainingLabel) +
-                      ')</div></div></div>' +
-                      '<button type="button" class="btn btn-danger" onclick="window.__spRemoveWhitelist(\'' +
-                      escapeHtml(w.discordId) +
-                      '\')">Çıxar</button></div>'
-                    );
-                  })
-                  .join('');
-        }
-
-        const blacklistBox = document.getElementById('blacklistBox');
-        if (blacklistBox) {
-          const bl = data.blacklist || [];
-          blacklistBox.innerHTML =
-            bl.length === 0
-              ? '<div class="field-label">Blacklist boşdur.</div>'
-              : bl
-                  .map((b) => {
-                    const prof = b.profile || {};
-                    const blName = prof.globalName || b.discordTag || b.discordId;
-                    return (
-                      '<div class="record-row">' +
-                      '<div class="user-chip">' +
-                      '<img class="avatar-img" src="' + escapeHtml(prof.avatarUrl || '') + '" alt="avatar" />' +
-                      '<div>' +
-                      '<div style="font-weight:800;font-size:13px;color:#fda4af;">' + escapeHtml(blName) + '</div>' +
-                      '<div class="field-label">ID: ' +
-                      escapeHtml(b.discordId) +
-                      ' • Səbəb: ' +
-                      escapeHtml(b.reason) +
-                      ' • Vaxt: ' +
-                      escapeHtml(b.durationLabel) +
-                      '</div></div></div>' +
-                      '<button type="button" class="btn btn-danger" onclick="window.__spRemoveBlacklist(\'' +
-                      escapeHtml(b.discordId) +
-                      '\')">Sil</button></div>'
-                    );
-                  })
-                  .join('');
-        }
-
-        const joinBtn = document.getElementById('joinDiscordBtn');
-        if (joinBtn && data.bot?.inviteUrl) {
-          joinBtn.href = data.bot.inviteUrl;
-        }
-
-        const guildIdInput = document.getElementById('guildIdInput');
-        const guildInviteInput = document.getElementById('guildInviteInput');
-        const resolvedGuildNameText = document.getElementById('resolvedGuildNameText');
-        const sendPanelChannelInput = document.getElementById('sendPanelChannelInput');
-
-        if (guildIdInput && document.activeElement !== guildIdInput) {
-          guildIdInput.value = guildId;
-        }
-        if (guildInviteInput && document.activeElement !== guildInviteInput) {
-          guildInviteInput.value = data.guildConfig?.discordInvite || '';
-        }
-        if (resolvedGuildNameText) {
-          resolvedGuildNameText.textContent = guildName;
-        }
-        if (sendPanelChannelInput && document.activeElement !== sendPanelChannelInput) {
-          sendPanelChannelInput.value = data.guildConfig?.panelChannelId || '';
-        }
-
-        const panelTitleInput = document.getElementById('panelTitleInput');
-        const panelColorInput = document.getElementById('panelColorInput');
-        const panelDescInput = document.getElementById('panelDescInput');
-
-        if (panelTitleInput && document.activeElement !== panelTitleInput) {
-          panelTitleInput.value = data.panelDesign?.title || '';
-        }
-        if (panelColorInput && document.activeElement !== panelColorInput) {
-          panelColorInput.value = data.panelDesign?.colorHex || '#f59e0b';
-        }
-        if (panelDescInput && document.activeElement !== panelDescInput) {
-          panelDescInput.value = data.panelDesign?.description || '';
-        }
-
-        renderPanelButtonsEditor(data.panelDesign?.buttons || []);
-        updatePanelSendPreview();
-      };
-
-      const refreshOverview = async (silent = false) => {
-        try {
-          const json = await apiRequest('/api/overview');
-          renderDashboard(json);
-        } catch (err) {
-          if (!silent) {
-            showToast(`Yenilənmə xətası: ${err.message}`);
-          }
-        }
-      };
-
-      window.__spCopyText = async (txt) => {
-        try {
-          await navigator.clipboard.writeText(String(txt || ''));
-          showToast('Kopyalandı!');
-        } catch (_e) {
-          showToast('Kopyalama mümkün olmadı.');
-        }
-      };
-
-      window.__spToggleScriptObf = async (scriptId, nextEnabled) => {
-        try {
-          await apiRequest(`/api/scripts/${encodeURIComponent(scriptId)}/obfuscation`, {
-            method: 'PATCH',
-            body: JSON.stringify({ obfuscationEnabled: Boolean(nextEnabled) })
-          });
-          showToast(`Obfuscation ${nextEnabled ? 'açıldı' : 'bağlandı'}.`);
-          await refreshOverview(true);
-        } catch (err) {
-          showToast(err.message);
-        }
-      };
-
-      window.__spDeleteScript = async (scriptId) => {
-        try {
-          await apiRequest(`/api/scripts/${encodeURIComponent(scriptId)}`, { method: 'DELETE' });
-          showToast('Script silindi.');
-          await refreshOverview(true);
-        } catch (err) {
-          showToast(err.message);
-        }
-      };
-
-      window.__spDeleteKey = async (keyId) => {
-        try {
-          await apiRequest(`/api/keys/${encodeURIComponent(keyId)}`, { method: 'DELETE' });
-          showToast('Key silindi.');
-          await refreshOverview(true);
-        } catch (err) {
-          showToast(err.message);
-        }
-      };
-
-      window.__spRemoveWhitelist = async (discordId) => {
-        try {
-          await apiRequest(`/api/whitelist/${encodeURIComponent(discordId)}`, { method: 'DELETE' });
-          showToast('Whitelist-dən çıxarıldı.');
-          await refreshOverview(true);
-        } catch (err) {
-          showToast(err.message);
-        }
-      };
-
-      window.__spRemoveBlacklist = async (discordId) => {
-        try {
-          await apiRequest(`/api/blacklist/${encodeURIComponent(discordId)}`, { method: 'DELETE' });
-          showToast('Blacklist-dən silindi.');
-          await refreshOverview(true);
-        } catch (err) {
-          showToast(err.message);
-        }
-      };
-
-      document.addEventListener('DOMContentLoaded', () => {
-        const fileInput = document.getElementById('scriptFileInput');
-        const codeInput = document.getElementById('scriptCodeInput');
-        const nameInput = document.getElementById('scriptNameInput');
-        const obfToggle = document.getElementById('scriptObfToggle');
-        const obfLabel = document.getElementById('scriptObfLabel');
-
-        if (obfToggle && obfLabel) {
-          obfToggle.addEventListener('change', () => {
-            obfLabel.textContent = obfToggle.checked ? 'AÇIQ' : 'BAĞLI';
-          });
-        }
-
-        if (fileInput && codeInput) {
-          fileInput.addEventListener('change', (e) => {
-            const file = e.target.files && e.target.files[0];
-            if (!file) return;
-            if (nameInput && !nameInput.value.trim()) {
-              nameInput.value = file.name.replace(/\.(lua|txt)$/i, '');
-            }
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              codeInput.value = String(ev.target?.result || '');
-              showToast(`Fayl yükləndi: ${file.name}`);
-            };
-            reader.readAsText(file);
-          });
-        }
-
-        const createScriptBtn = document.getElementById('createScriptBtn');
-        if (createScriptBtn) {
-          createScriptBtn.addEventListener('click', async () => {
-            try {
-              const name = String(nameInput?.value || '').trim();
-              const code = String(codeInput?.value || '').trim();
-              const obfuscationEnabled = Boolean(obfToggle?.checked);
-              await apiRequest('/api/scripts', {
-                method: 'POST',
-                body: JSON.stringify({ name, code, obfuscationEnabled })
-              });
-              showToast('Script uğurla yaradıldı!');
-              if (nameInput) nameInput.value = '';
-              if (codeInput) codeInput.value = '';
-              if (fileInput) fileInput.value = '';
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const clearScriptFormBtn = document.getElementById('clearScriptFormBtn');
-        if (clearScriptFormBtn) {
-          clearScriptFormBtn.addEventListener('click', () => {
-            if (nameInput) nameInput.value = '';
-            if (codeInput) codeInput.value = '';
-            if (fileInput) fileInput.value = '';
-          });
-        }
-
-        document.querySelectorAll('.sub-tab-btn').forEach((tabBtn) => {
-          tabBtn.addEventListener('click', () => {
-            const subKey = tabBtn.getAttribute('data-subtab');
-            document.querySelectorAll('.sub-tab-btn').forEach((b) => b.classList.remove('active'));
-            tabBtn.classList.add('active');
-            ['keys', 'whitelist', 'blacklist', 'hwid'].forEach((k) => {
-              const el = document.getElementById(`subtab-${k}`);
-              if (el) el.style.display = k === subKey ? 'grid' : 'none';
-            });
-          });
-        });
-
-        const createKeyBtn = document.getElementById('createKeyBtn');
-        if (createKeyBtn) {
-          createKeyBtn.addEventListener('click', async () => {
-            try {
-              const scriptId = document.getElementById('keyScriptSelect')?.value || '';
-              const durationKey = document.getElementById('keyDurationSelect')?.value || 'lifetime';
-              const creatorDiscordId = document.getElementById('keyCreatorIdInput')?.value || '';
-              const discordId = document.getElementById('keyUserIdInput')?.value || '';
-              await apiRequest('/api/keys', {
-                method: 'POST',
-                body: JSON.stringify({ scriptId, durationKey, creatorDiscordId, discordId })
-              });
-              showToast('Yeni Key yaradıldı!');
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const addWhitelistBtn = document.getElementById('addWhitelistBtn');
-        if (addWhitelistBtn) {
-          addWhitelistBtn.addEventListener('click', async () => {
-            try {
-              const discordId = document.getElementById('wlDiscordIdInput')?.value || '';
-              const durationKey = document.getElementById('wlDurationSelect')?.value || 'lifetime';
-              const scriptId = document.getElementById('wlScriptSelect')?.value || '';
-              await apiRequest('/api/whitelist', {
-                method: 'POST',
-                body: JSON.stringify({ discordId, durationKey, scriptId })
-              });
-              showToast('Whitelist-ə əlavə edildi!');
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const addBlacklistBtn = document.getElementById('addBlacklistBtn');
-        if (addBlacklistBtn) {
-          addBlacklistBtn.addEventListener('click', async () => {
-            try {
-              const discordId = document.getElementById('blDiscordIdInput')?.value || '';
-              const durationKey = document.getElementById('blDurationSelect')?.value || 'lifetime';
-              const reason = document.getElementById('blReasonInput')?.value || 'Qayda pozuntusu';
-              await apiRequest('/api/blacklist', {
-                method: 'POST',
-                body: JSON.stringify({ discordId, durationKey, reason })
-              });
-              showToast('Blacklist-ə əlavə edildi!');
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const resetHwidBtn = document.getElementById('resetHwidBtn');
-        if (resetHwidBtn) {
-          resetHwidBtn.addEventListener('click', async () => {
-            try {
-              const target = document.getElementById('hwidTargetInput')?.value || '';
-              const scriptId = document.getElementById('hwidScriptSelect')?.value || '';
-              const res = await apiRequest('/api/hwid/reset', {
-                method: 'POST',
-                body: JSON.stringify({ target, scriptId })
-              });
-              showToast(`HWID sıfırlandı (${res.resetCount} qeyd).`);
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const saveGuildConfigBtn = document.getElementById('saveGuildConfigBtn');
-        if (saveGuildConfigBtn) {
-          saveGuildConfigBtn.addEventListener('click', async () => {
-            try {
-              const guildId = document.getElementById('guildIdInput')?.value || '';
-              const discordInvite = document.getElementById('guildInviteInput')?.value || '';
-              await apiRequest('/api/discord/config', {
-                method: 'POST',
-                body: JSON.stringify({ guildId, discordInvite })
-              });
-              showToast('Sunucu bağlantısı yeniləndi!');
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const savePanelDesignBtn = document.getElementById('savePanelDesignBtn');
-        if (savePanelDesignBtn) {
-          savePanelDesignBtn.addEventListener('click', async () => {
-            try {
-              const title = document.getElementById('panelTitleInput')?.value || '';
-              const colorHex = document.getElementById('panelColorInput')?.value || '#f59e0b';
-              const description = document.getElementById('panelDescInput')?.value || '';
-              await apiRequest('/api/panel/design', {
-                method: 'POST',
-                body: JSON.stringify({
-                  title,
-                  colorHex,
-                  description,
-                  buttons: state.panelButtonsDraft
-                })
-              });
-              showToast('Panel dizaynı yadda saxlandı!');
-              await refreshOverview(true);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        const sendPanelScriptSelect = document.getElementById('sendPanelScriptSelect');
-        if (sendPanelScriptSelect) {
-          sendPanelScriptSelect.addEventListener('change', updatePanelSendPreview);
-        }
-
-        const sendPanelNowBtn = document.getElementById('sendPanelNowBtn');
-        if (sendPanelNowBtn) {
-          sendPanelNowBtn.addEventListener('click', async () => {
-            try {
-              const scriptId = document.getElementById('sendPanelScriptSelect')?.value || '';
-              const channelId = document.getElementById('sendPanelChannelInput')?.value || '';
-              const res = await apiRequest('/api/panel/send', {
-                method: 'POST',
-                body: JSON.stringify({ scriptId, channelId })
-              });
-              showToast(`Panel göndərildi: ${res.result?.scriptName || 'Script'}`);
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        }
-
-        refreshOverview(false);
-        setInterval(() => refreshOverview(true), 8000);
-      });
-    })();
-  </script>
-</body>
-</html>`;
+const DASHBOARD_HTML = [
+  '<!DOCTYPE html>',
+  '<html lang="az">',
+  '<head>',
+  '  <meta charset="UTF-8" />',
+  '  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />',
+  '  <title>SADO PROTECT — Control Studio</title>',
+  '  <style>',
+  '    :root {',
+  '      --bg-void: #05070d;',
+  '      --bg-surface: #0b0f19;',
+  '      --bg-elevated: #111827;',
+  '      --bg-hover: #172033;',
+  '      --border-subtle: rgba(255, 255, 255, 0.08);',
+  '      --border-gold: rgba(245, 158, 11, 0.42);',
+  '      --text-primary: #f8fafc;',
+  '      --text-secondary: #94a3b8;',
+  '      --accent-gold: #f59e0b;',
+  '      --accent-gold-bright: #fbbf24;',
+  '      --accent-teal: #14b8a6;',
+  '      --accent-rose: #f43f5e;',
+  '    }',
+  '    *, *::before, *::after {',
+  '      box-sizing: border-box;',
+  '      margin: 0;',
+  '      padding: 0;',
+  '      font-family: Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;',
+  '      -webkit-tap-highlight-color: transparent;',
+  '      -webkit-touch-callout: none;',
+  '    }',
+  '    html, body {',
+  '      width: 100%;',
+  '      min-height: 100vh;',
+  '      background: radial-gradient(circle at 8% 4%, rgba(245, 158, 11, 0.14), transparent 36%), radial-gradient(circle at 92% 90%, rgba(20, 184, 166, 0.13), transparent 40%), var(--bg-void);',
+  '      color: var(--text-primary);',
+  '      overflow-x: hidden;',
+  '    }',
+  '    @keyframes fadeSlideDown {',
+  '      0% { opacity: 0; transform: translateY(-10px) scale(0.985); }',
+  '      100% { opacity: 1; transform: translateY(0) scale(1); }',
+  '    }',
+  '    @keyframes fadeSlideUp {',
+  '      0% { opacity: 0; transform: translateY(14px); }',
+  '      100% { opacity: 1; transform: translateY(0); }',
+  '    }',
+  '    @keyframes pulseGlow {',
+  '      0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.25); }',
+  '      50% { box-shadow: 0 0 22px 2px rgba(245, 158, 11, 0.18); }',
+  '    }',
+  '    .app-container {',
+  '      max-width: 1180px;',
+  '      margin: 0 auto;',
+  '      padding: 14px 14px 60px;',
+  '      display: grid;',
+  '      gap: 16px;',
+  '    }',
+  '    .top-bar {',
+  '      position: sticky;',
+  '      top: 10px;',
+  '      z-index: 500;',
+  '      background: rgba(11, 15, 25, 0.92);',
+  '      backdrop-filter: blur(14px);',
+  '      -webkit-backdrop-filter: blur(14px);',
+  '      border: 1px solid var(--border-gold);',
+  '      border-radius: 22px;',
+  '      padding: 12px 14px;',
+  '      display: flex;',
+  '      align-items: center;',
+  '      justify-content: space-between;',
+  '      gap: 12px;',
+  '      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);',
+  '      animation: fadeSlideDown 0.35s cubic-bezier(0.22, 1, 0.36, 1);',
+  '    }',
+  '    .top-left { display: flex; align-items: center; gap: 12px; min-width: 0; }',
+  '    .hamburger-btn {',
+  '      width: 48px;',
+  '      height: 48px;',
+  '      border-radius: 15px;',
+  '      border: 1px solid rgba(251, 191, 36, 0.55);',
+  '      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);',
+  '      color: #090d16;',
+  '      font-size: 23px;',
+  '      font-weight: 900;',
+  '      display: inline-flex;',
+  '      align-items: center;',
+  '      justify-content: center;',
+  '      cursor: pointer;',
+  '      user-select: none;',
+  '      touch-action: manipulation;',
+  '      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), filter 0.18s ease;',
+  '      animation: pulseGlow 2.8s infinite ease-in-out;',
+  '    }',
+  '    .hamburger-btn:hover { filter: brightness(1.07); }',
+  '    .hamburger-btn:active { transform: scale(0.92); }',
+  '    .brand-titles { display: flex; flex-direction: column; min-width: 0; }',
+  '    .brand-title { font-size: 17px; font-weight: 900; letter-spacing: 0.7px; color: var(--accent-gold-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
+  '    .brand-subtitle { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }',
+  '    .top-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }',
+  '    .bot-badge { padding: 8px 12px; border-radius: 999px; font-size: 12px; font-weight: 800; background: rgba(20, 184, 166, 0.14); color: #2dd4bf; border: 1px solid rgba(20, 184, 166, 0.38); white-space: nowrap; }',
+  '    .bot-badge.offline { background: rgba(244, 63, 94, 0.15); color: #fb7185; border-color: rgba(244, 63, 94, 0.38); }',
+  '    .drawer-backdrop {',
+  '      position: fixed;',
+  '      inset: 0;',
+  '      z-index: 9990;',
+  '      background: rgba(3, 5, 10, 0.82);',
+  '      backdrop-filter: blur(8px);',
+  '      -webkit-backdrop-filter: blur(8px);',
+  '      display: none;',
+  '      align-items: flex-start;',
+  '      justify-content: center;',
+  '      padding: 18px 14px 28px;',
+  '      overflow-y: auto;',
+  '      opacity: 0;',
+  '      transition: opacity 0.24s ease;',
+  '    }',
+  '    .drawer-backdrop.open { display: flex; opacity: 1; }',
+  '    .drawer-sheet {',
+  '      width: 100%;',
+  '      max-width: 540px;',
+  '      background: linear-gradient(180deg, #0f1624 0%, #090d16 100%);',
+  '      border: 1px solid var(--border-gold);',
+  '      border-radius: 24px;',
+  '      padding: 16px;',
+  '      display: grid;',
+  '      gap: 10px;',
+  '      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.78);',
+  '      transform: translateY(-14px) scale(0.97);',
+  '      transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);',
+  '    }',
+  '    .drawer-backdrop.open .drawer-sheet { transform: translateY(0) scale(1); }',
+  '    .drawer-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle); }',
+  '    .drawer-title { font-size: 16px; font-weight: 900; color: var(--accent-gold-bright); }',
+  '    .drawer-close { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-primary); font-size: 18px; font-weight: 900; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: transform 0.16s ease, background 0.16s ease; }',
+  '    .drawer-close:active { transform: scale(0.9); background: rgba(244, 63, 94, 0.22); }',
+  '    .nav-item-btn { width: 100%; text-align: left; padding: 14px 16px; border-radius: 16px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-primary); font-size: 14px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; user-select: none; touch-action: manipulation; transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background 0.18s ease, border-color 0.18s ease; }',
+  '    .nav-item-btn:hover { background: var(--bg-hover); border-color: rgba(245, 158, 11, 0.35); }',
+  '    .nav-item-btn:active { transform: scale(0.97); }',
+  '    .nav-item-btn.active { background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: #090d16; border-color: #fde68a; }',
+  '    .section-view { display: none; gap: 16px; }',
+  '    .section-view.active { display: grid; animation: fadeSlideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1); }',
+  '    .bento-grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }',
+  '    .bento-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }',
+  '    .card { background: linear-gradient(180deg, rgba(17, 24, 39, 0.92) 0%, rgba(11, 15, 25, 0.96) 100%); border: 1px solid var(--border-subtle); border-radius: 20px; padding: 16px; display: grid; gap: 12px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35); transition: transform 0.2s ease, border-color 0.2s ease; }',
+  '    .card:hover { border-color: rgba(245, 158, 11, 0.24); }',
+  '    .stat-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }',
+  '    .stat-value { font-size: 28px; font-weight: 900; color: var(--text-primary); word-break: break-word; }',
+  '    .stat-value.gold { color: var(--accent-gold-bright); }',
+  '    .stat-value.teal { color: #2dd4bf; }',
+  '    .card-heading { font-size: 15px; font-weight: 900; color: var(--text-primary); display: flex; align-items: center; justify-content: space-between; gap: 8px; }',
+  '    .field-group { display: grid; gap: 6px; }',
+  '    .field-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); }',
+  '    .input-control, .select-control, .textarea-control { width: 100%; border-radius: 13px; border: 1px solid rgba(255, 255, 255, 0.12); background: #070b13; color: var(--text-primary); padding: 11px 13px; font-size: 13px; outline: none; transition: border-color 0.18s ease, box-shadow 0.18s ease; }',
+  '    .input-control:focus, .select-control:focus, .textarea-control:focus { border-color: var(--accent-gold); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15); }',
+  '    .textarea-control { min-height: 150px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.45; }',
+  '    .code-box { background: #05080f; border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 14px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #fde68a; white-space: pre-wrap; word-break: break-all; line-height: 1.45; }',
+  '    .btn { border: none; border-radius: 13px; padding: 11px 15px; font-size: 13px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px; user-select: none; touch-action: manipulation; transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), filter 0.16s ease, opacity 0.16s ease; text-decoration: none; }',
+  '    .btn:hover { filter: brightness(1.06); }',
+  '    .btn:active { transform: scale(0.96); }',
+  '    .btn-gold { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #090d16; }',
+  '    .btn-teal { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); color: #04100e; }',
+  '    .btn-danger { background: rgba(244, 63, 94, 0.16); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.38); }',
+  '    .btn-ghost { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); }',
+  '    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }',
+  '    .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 14px; background: rgba(7, 11, 19, 0.85); border: 1px solid var(--border-subtle); }',
+  '    .list-stack { display: grid; gap: 10px; }',
+  '    .record-row { background: rgba(7, 11, 19, 0.88); border: 1px solid var(--border-subtle); border-radius: 16px; padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }',
+  '    .user-chip { display: flex; align-items: center; gap: 10px; min-width: 0; }',
+  '    .avatar-img { width: 38px; height: 38px; border-radius: 12px; object-fit: cover; border: 1px solid rgba(245, 158, 11, 0.4); background: #111827; flex-shrink: 0; }',
+  '    .pill { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; background: rgba(245, 158, 11, 0.14); color: var(--accent-gold-bright); border: 1px solid rgba(245, 158, 11, 0.3); }',
+  '    .pill.teal { background: rgba(20, 184, 166, 0.14); color: #2dd4bf; border-color: rgba(20, 184, 166, 0.32); }',
+  '    .pill.rose { background: rgba(244, 63, 94, 0.14); color: #fda4af; border-color: rgba(244, 63, 94, 0.32); }',
+  '    .toast-banner { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px); z-index: 10000; background: #111827; color: #f8fafc; border: 1px solid var(--accent-gold); border-radius: 15px; padding: 11px 18px; font-size: 13px; font-weight: 800; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65); opacity: 0; pointer-events: none; transition: opacity 0.22s ease, transform 0.22s ease; max-width: 92vw; text-align: center; }',
+  '    .toast-banner.show { opacity: 1; transform: translateX(-50%) translateY(0); }',
+  '    .sub-tabs { display: flex; flex-wrap: wrap; gap: 8px; }',
+  '    .sub-tab-btn { padding: 10px 14px; border-radius: 13px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-secondary); font-size: 13px; font-weight: 800; cursor: pointer; transition: all 0.16s ease; }',
+  '    .sub-tab-btn.active { background: var(--accent-gold); color: #090d16; border-color: #fde68a; }',
+  '  </style>',
+  '</head>',
+  '<body>',
+  '  <div class="app-container">',
+  '    <header class="top-bar">',
+  '      <div class="top-left">',
+  '        <button id="menuOpenBtn" type="button" class="hamburger-btn" aria-label="Menyu" onclick="window.__spToggleMenu && window.__spToggleMenu(true)">☰</button>',
+  '        <div class="brand-titles">',
+  '          <div class="brand-title">SADO PROTECT</div>',
+  '          <div id="headerGuildSub" class="brand-subtitle">Qoşulan Sunucu: Seçilməyib</div>',
+  '        </div>',
+  '      </div>',
+  '      <div class="top-right">',
+  '        <span id="headerBotBadge" class="bot-badge">Bot: Qoşulur...</span>',
+  '      </div>',
+  '    </header>',
+  '    <div id="drawerBackdrop" class="drawer-backdrop" role="dialog" aria-modal="true" onclick="if (event.target === this && window.__spToggleMenu) window.__spToggleMenu(false)">',
+  '      <div class="drawer-sheet">',
+  '        <div class="drawer-header">',
+  '          <div class="drawer-title">SADO PROTECT • Bölmələr</div>',
+  '          <button id="menuCloseBtn" type="button" class="drawer-close" aria-label="Bağla" onclick="window.__spToggleMenu && window.__spToggleMenu(false)">✕</button>',
+  '        </div>',
+  '        <button type="button" class="nav-item-btn active" data-page="overview" onclick="window.__spNavigate && window.__spNavigate(\'overview\')"><span>1. Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</span><span>›</span></button>',
+  '        <button type="button" class="nav-item-btn" data-page="scripts" onclick="window.__spNavigate && window.__spNavigate(\'scripts\')"><span>2. Script Yaradılması &amp; Ultra Obfuscation</span><span>›</span></button>',
+  '        <button type="button" class="nav-item-btn" data-page="access" onclick="window.__spNavigate && window.__spNavigate(\'access\')"><span>3. Key, Whitelist &amp; Blacklist İdarəsi</span><span>›</span></button>',
+  '        <button type="button" class="nav-item-btn" data-page="discord" onclick="window.__spNavigate && window.__spNavigate(\'discord\')"><span>4. Discord Bot, Sunucu Bağlantısı &amp; Panel Dizayn</span><span>›</span></button>',
+  '        <button type="button" class="nav-item-btn" data-page="panel_send" onclick="window.__spNavigate && window.__spNavigate(\'panel_send\')"><span>5. Seçilən Script Panelini Kanala Göndər</span><span>›</span></button>',
+  '      </div>',
+  '    </div>',
+  '    <section id="section-overview" class="section-view active">',
+  '      <div class="bento-grid-4">',
+  '        <div class="card"><div class="stat-label">Skriptlər</div><div id="statScripts" class="stat-value gold">0</div></div>',
+  '        <div class="card"><div class="stat-label">Keylər</div><div id="statKeys" class="stat-value teal">0</div></div>',
+  '        <div class="card"><div class="stat-label">Whitelist</div><div id="statWhitelist" class="stat-value">0</div></div>',
+  '        <div class="card"><div class="stat-label">Blacklist</div><div id="statBlacklist" class="stat-value" style="color:#fda4af;">0</div></div>',
+  '      </div>',
+  '      <div class="bento-grid-2">',
+  '        <div class="card">',
+  '          <div class="card-heading"><span>Qoşulan Sunucu &amp; 7/24 Bot</span><span id="overviewBotPill" class="pill teal">7/24 Aktiv</span></div>',
+  '          <div id="overviewGuildBox" class="list-stack">',
+  '            <div class="record-row">',
+  '              <div>',
+  '                <div style="font-weight:800;">Sunucu: <span id="overviewGuildName">Seçilməyib</span></div>',
+  '                <div id="overviewGuildId" class="field-label">Sunucu ID: Təyin edilməyib</div>',
+  '              </div>',
+  '              <button type="button" class="btn btn-gold" onclick="window.__spNavigate && window.__spNavigate(\'discord\')">Sunucu Ayarla</button>',
+  '            </div>',
+  '          </div>',
+  '        </div>',
+  '        <div class="card">',
+  '          <div class="card-heading"><span>Sürətli Əməliyyatlar</span></div>',
+  '          <div class="btn-row">',
+  '            <button type="button" class="btn btn-gold" onclick="window.__spNavigate && window.__spNavigate(\'scripts\')">+ Yeni Script</button>',
+  '            <button type="button" class="btn btn-teal" onclick="window.__spNavigate && window.__spNavigate(\'access\')">+ Key / Whitelist / Blacklist</button>',
+  '            <button type="button" class="btn btn-ghost" onclick="window.__spNavigate && window.__spNavigate(\'panel_send\')">📤 Panel Göndər</button>',
+  '          </div>',
+  '        </div>',
+  '      </div>',
+  '      <div class="card">',
+  '        <div class="card-heading"><span>Son Key-lər (Yaradan &amp; İşlədən Profil)</span></div>',
+  '        <div id="overviewRecentKeys" class="list-stack"></div>',
+  '      </div>',
+  '    </section>',
+  '    <section id="section-scripts" class="section-view">',
+  '      <div class="card">',
+  '        <div class="card-heading"><span>Yeni Script Yarat (Kod və ya .lua / .txt Fayl ilə)</span></div>',
+  '        <div class="field-group"><label class="field-label" for="scriptNameInput">Script Adı</label><input id="scriptNameInput" type="text" class="input-control" placeholder="Məsələn: Blox Fruits Ultra Hub" /></div>',
+  '        <div class="field-group"><label class="field-label" for="scriptFileInput">Dosya Yüklə (.lua / .txt)</label><input id="scriptFileInput" type="file" accept=".lua,.txt,text/plain" class="input-control" /></div>',
+  '        <div class="field-group"><label class="field-label" for="scriptCodeInput">Script Kodu</label><textarea id="scriptCodeInput" class="textarea-control" placeholder="-- Lua script kodunu bura yazın və ya fayl seçin"></textarea></div>',
+  '        <div class="switch-row">',
+  '          <div><div style="font-size:13px;font-weight:800;">Ultra Obfuscation (Anti-Hook + VM Qoruma)</div><div class="field-label">Açanda script ultra şifrələnmiş VM qoruma ilə saxlanılır</div></div>',
+  '          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:800;font-size:13px;"><input id="scriptObfToggle" type="checkbox" checked style="width:20px;height:20px;accent-color:#f59e0b;" /><span id="scriptObfLabel">AÇIQ</span></label>',
+  '        </div>',
+  '        <div class="btn-row"><button id="createScriptBtn" type="button" class="btn btn-gold">Scripti Yarat &amp; Qoru</button><button id="clearScriptFormBtn" type="button" class="btn btn-ghost">Formu Təmizlə</button></div>',
+  '      </div>',
+  '      <div class="card"><div class="card-heading"><span>Mövcud Scriptlər</span><span id="existingScriptsCount" class="pill">0</span></div><div id="existingScriptsList" class="list-stack"></div></div>',
+  '    </section>',
+  '    <section id="section-access" class="section-view">',
+  '      <div class="sub-tabs">',
+  '        <button type="button" class="sub-tab-btn active" data-subtab="keys">🔑 Keylər</button>',
+  '        <button type="button" class="sub-tab-btn" data-subtab="whitelist">✅ Whitelist</button>',
+  '        <button type="button" class="sub-tab-btn" data-subtab="blacklist">⛔ Blacklist</button>',
+  '        <button type="button" class="sub-tab-btn" data-subtab="hwid">♻️ HWID Reset</button>',
+  '      </div>',
+  '      <div id="subtab-keys" class="card">',
+  '        <div class="card-heading"><span>Yeni Key Yarat</span></div>',
+  '        <div class="bento-grid-2">',
+  '          <div class="field-group"><label class="field-label" for="keyScriptSelect">Script Seçin</label><select id="keyScriptSelect" class="select-control"></select></div>',
+  '          <div class="field-group"><label class="field-label" for="keyDurationSelect">Vaxt Seçimi</label><select id="keyDurationSelect" class="select-control"><option value="lifetime">Lifetime (Sonsuz)</option><option value="1m">1 Month (30 Gün)</option><option value="7d">7 Day (7 Gün)</option><option value="3d">3 Day (3 Gün)</option><option value="24h">24 Hours (24 Saat)</option><option value="5h">5 Hours (5 Saat)</option><option value="1h">1 Hours (1 Saat)</option><option value="30m">30 Minutes (30 Dəqiqə)</option></select></div>',
+  '          <div class="field-group"><label class="field-label" for="keyCreatorIdInput">Yaradan Discord ID (opsional)</label><input id="keyCreatorIdInput" type="text" class="input-control" placeholder="Discord User ID" /></div>',
+  '          <div class="field-group"><label class="field-label" for="keyUserIdInput">İşlədəcək / Bağlı Discord ID (opsional)</label><input id="keyUserIdInput" type="text" class="input-control" placeholder="Discord User ID" /></div>',
+  '        </div>',
+  '        <div class="btn-row"><button id="createKeyBtn" type="button" class="btn btn-gold">Key Yarat</button></div>',
+  '        <div id="keysListBox" class="list-stack"></div>',
+  '      </div>',
+  '      <div id="subtab-whitelist" class="card" style="display:none;">',
+  '        <div class="card-heading"><span>Whitelist Əlavə Et</span></div>',
+  '        <div class="bento-grid-2">',
+  '          <div class="field-group"><label class="field-label" for="wlDiscordIdInput">Discord ID</label><input id="wlDiscordIdInput" type="text" class="input-control" placeholder="Məsələn: 123456789012345678" /></div>',
+  '          <div class="field-group"><label class="field-label" for="wlDurationSelect">Whitelist Vaxtı</label><select id="wlDurationSelect" class="select-control"><option value="lifetime">Lifetime (Sonsuz)</option><option value="1m">1 Month (30 Gün)</option><option value="7d">7 Day (7 Gün)</option><option value="3d">3 Day (3 Gün)</option><option value="24h">24 Hours (24 Saat)</option><option value="5h">5 Hours (5 Saat)</option><option value="1h">1 Hours (1 Saat)</option><option value="30m">30 Minutes (30 Dəqiqə)</option></select></div>',
+  '          <div class="field-group"><label class="field-label" for="wlScriptSelect">Script (opsional)</label><select id="wlScriptSelect" class="select-control"></select></div>',
+  '        </div>',
+  '        <div class="btn-row"><button id="addWhitelistBtn" type="button" class="btn btn-teal">Whitelist-ə Əlavə Et</button></div>',
+  '        <div id="whitelistBox" class="list-stack"></div>',
+  '      </div>',
+  '      <div id="subtab-blacklist" class="card" style="display:none;">',
+  '        <div class="card-heading"><span>Blacklist Əlavə Et</span></div>',
+  '        <div class="bento-grid-2">',
+  '          <div class="field-group"><label class="field-label" for="blDiscordIdInput">Discord ID</label><input id="blDiscordIdInput" type="text" class="input-control" placeholder="Discord User ID" /></div>',
+  '          <div class="field-group"><label class="field-label" for="blDurationSelect">Blacklist Vaxtı</label><select id="blDurationSelect" class="select-control"><option value="lifetime">Lifetime (Sonsuz)</option><option value="1m">1 Month (30 Gün)</option><option value="7d">7 Day (7 Gün)</option><option value="3d">3 Day (3 Gün)</option><option value="24h">24 Hours (24 Saat)</option><option value="5h">5 Hours (5 Saat)</option><option value="1h">1 Hours (1 Saat)</option><option value="30m">30 Minutes (30 Dəqiqə)</option></select></div>',
+  '          <div class="field-group"><label class="field-label" for="blReasonInput">Səbəb</label><input id="blReasonInput" type="text" class="input-control" placeholder="Məsələn: Key paylaşımı / Bypass" /></div>',
+  '        </div>',
+  '        <div class="btn-row"><button id="addBlacklistBtn" type="button" class="btn btn-danger">Blacklist-ə Sal</button></div>',
+  '        <div id="blacklistBox" class="list-stack"></div>',
+  '      </div>',
+  '      <div id="subtab-hwid" class="card" style="display:none;">',
+  '        <div class="card-heading"><span>HWID Reset (İlk Cihaza Bağlanma &amp; Başqasına Kick)</span></div>',
+  '        <p class="field-label">Reset etdikdən sonra scripti ilk işlədən cihaz/telefon HWID-ə bağlanır. Reset edilmədən başqa cihazda işlədiləndə sistem avtomatik Kick atır.</p>',
+  '        <div class="bento-grid-2">',
+  '          <div class="field-group"><label class="field-label" for="hwidTargetInput">Key Kodu və ya Discord ID</label><input id="hwidTargetInput" type="text" class="input-control" placeholder="SADO-... və ya Discord ID" /></div>',
+  '          <div class="field-group"><label class="field-label" for="hwidScriptSelect">Script Seçimi (opsional)</label><select id="hwidScriptSelect" class="select-control"></select></div>',
+  '        </div>',
+  '        <div class="btn-row"><button id="resetHwidBtn" type="button" class="btn btn-gold">HWID Sıfırla</button></div>',
+  '      </div>',
+  '    </section>',
+  '    <section id="section-discord" class="section-view">',
+  '      <div class="bento-grid-2">',
+  '        <div class="card">',
+  '          <div class="card-heading"><span>1) Join Discord &amp; 7/24 Bot Status</span><span id="discordTabBotStatus" class="pill teal">7/24 Aktiv</span></div>',
+  '          <p class="field-label">Bot 7/24 aktiv saxlanılır. Aşağıdakı düymə ilə botu sunucunuza dəvət edə bilərsiniz.</p>',
+  '          <div class="btn-row"><a id="joinDiscordBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-gold">Join Discord (Botu Dəvət Et)</a></div>',
+  '        </div>',
+  '        <div class="card">',
+  '          <div class="card-heading"><span>2) Sunucu ID Bağlantısı</span></div>',
+  '          <div class="field-group"><label class="field-label" for="guildIdInput">Discord Sunucu ID</label><input id="guildIdInput" type="text" class="input-control" placeholder="Sunucu ID yazın (məs: 123456789012345678)" /></div>',
+  '          <div class="field-group"><label class="field-label" for="guildInviteInput">Xüsusi Dəvət Linki (opsional)</label><input id="guildInviteInput" type="text" class="input-control" placeholder="https://discord.gg/..." /></div>',
+  '          <div class="record-row"><div><div class="field-label">Tapılan Sunucu Adı</div><div id="resolvedGuildNameText" style="font-size:15px;font-weight:900;color:#fbbf24;">Seçilməyib</div></div><button id="saveGuildConfigBtn" type="button" class="btn btn-teal">Sunucunu Bağla</button></div>',
+  '        </div>',
+  '      </div>',
+  '      <div class="card">',
+  '        <div class="card-heading"><span>3) Panel Dizayn (Ad, Emoji, Rəng, Sıra &amp; Canlı Panel)</span></div>',
+  '        <div class="bento-grid-2">',
+  '          <div class="field-group"><label class="field-label" for="panelTitleInput">Panel Başlığı</label><input id="panelTitleInput" type="text" class="input-control" /></div>',
+  '          <div class="field-group"><label class="field-label" for="panelColorInput">Embed Rəngi (HEX)</label><input id="panelColorInput" type="color" class="input-control" style="height:44px;padding:4px;" /></div>',
+  '        </div>',
+  '        <div class="field-group"><label class="field-label" for="panelDescInput">Panel Təsviri</label><textarea id="panelDescInput" class="textarea-control" style="min-height:85px;"></textarea></div>',
+  '        <div class="field-group"><div class="field-label">Panel Butonları (Ad, Emoji, Rəng, Aktivlik və Sıra — Yuxarı/Aşağı)</div><div id="panelButtonsEditor" class="list-stack"></div></div>',
+  '        <div class="btn-row"><button id="savePanelDesignBtn" type="button" class="btn btn-gold">Panel Dizaynını Yadda Saxla</button></div>',
+  '      </div>',
+  '    </section>',
+  '    <section id="section-panel_send" class="section-view">',
+  '      <div class="card">',
+  '        <div class="card-heading"><span>Mövcud Script Seç və Discord Kanalına Panel Göndər</span></div>',
+  '        <div class="bento-grid-2">',
+  '          <div class="field-group"><label class="field-label" for="sendPanelScriptSelect">Mövcud Scriptlər</label><select id="sendPanelScriptSelect" class="select-control"></select></div>',
+  '          <div class="field-group"><label class="field-label" for="sendPanelChannelInput">Discord Kanal ID</label><input id="sendPanelChannelInput" type="text" class="input-control" placeholder="Panel göndəriləcək kanalın ID-si" /></div>',
+  '        </div>',
+  '        <div id="selectedScriptPreviewBox" class="code-box">Script seçin...</div>',
+  '        <div class="btn-row"><button id="sendPanelNowBtn" type="button" class="btn btn-gold">📤 Kanalа Panel Göndər</button></div>',
+  '      </div>',
+  '    </section>',
+  '  </div>',
+  '  <div id="toastBanner" class="toast-banner"></div>',
+  '  <script>',
+  '    (function () {',
+  '      const state = { currentPage: "overview", data: null, panelButtonsDraft: [] };',
+  '      const showToast = (msg) => {',
+  '        const toast = document.getElementById("toastBanner");',
+  '        if (!toast) return;',
+  '        toast.textContent = String(msg || "");',
+  '        toast.classList.add("show");',
+  '        clearTimeout(window.__spToastTimer);',
+  '        window.__spToastTimer = setTimeout(() => { toast.classList.remove("show"); }, 2800);',
+  '      };',
+  '      const toggleMenu = (forceOpen) => {',
+  '        const backdrop = document.getElementById("drawerBackdrop");',
+  '        if (!backdrop) return;',
+  '        const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : !backdrop.classList.contains("open");',
+  '        if (shouldOpen) { backdrop.classList.add("open"); } else { backdrop.classList.remove("open"); }',
+  '      };',
+  '      const navigateToPage = (pageName) => {',
+  '        state.currentPage = pageName;',
+  '        document.querySelectorAll(".section-view").forEach((sec) => { sec.classList.toggle("active", sec.id === ("section-" + pageName)); });',
+  '        document.querySelectorAll(".nav-item-btn").forEach((btn) => { btn.classList.toggle("active", btn.getAttribute("data-page") === pageName); });',
+  '        toggleMenu(false);',
+  '        if (pageName === "panel_send") { updatePanelSendPreview(); }',
+  '      };',
+  '      window.__spToggleMenu = toggleMenu;',
+  '      window.__spNavigate = navigateToPage;',
+  '      const apiRequest = async (url, options = {}) => {',
+  '        const res = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });',
+  '        const json = await res.json();',
+  '        if (!res.ok || !json.ok) { throw new Error(json.error || "Sorğu uğursuz oldu."); }',
+  '        return json;',
+  '      };',
+  '      const escapeHtml = (str) => String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");',
+  '      const populateScriptSelects = (scripts) => {',
+  '        ["keyScriptSelect", "wlScriptSelect", "hwidScriptSelect", "sendPanelScriptSelect"].forEach((id) => {',
+  '          const el = document.getElementById(id);',
+  '          if (!el) return;',
+  '          const prevVal = el.value;',
+  '          const allowAll = id === "wlScriptSelect" || id === "hwidScriptSelect";',
+  '          const optionsHtml = [];',
+  '          if (allowAll) { optionsHtml.push("<option value=\\"\\">Bütün Scriptlər</option>"); }',
+  '          (scripts || []).forEach((s) => { optionsHtml.push("<option value=\\"" + escapeHtml(s.id) + "\\">" + escapeHtml(s.name) + "</option>"); });',
+  '          if (optionsHtml.length === 0) { optionsHtml.push("<option value=\\"\\">Script yoxdur</option>"); }',
+  '          el.innerHTML = optionsHtml.join("");',
+  '          if (prevVal && Array.from(el.options).some((o) => o.value === prevVal)) { el.value = prevVal; }',
+  '        });',
+  '      };',
+  '      const renderPanelButtonsEditor = (buttons) => {',
+  '        state.panelButtonsDraft = (buttons || []).map((b) => ({ ...b }));',
+  '        const box = document.getElementById("panelButtonsEditor");',
+  '        if (!box) return;',
+  '        box.innerHTML = state.panelButtonsDraft.map((btn, idx) => {',
+  '          return "<div class=\\"record-row\\"><div style=\\"display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:1;\\"><span class=\\"pill\\">#" + (idx + 1) + "</span><input type=\\"text\\" class=\\"input-control\\" style=\\"width:76px;\\" value=\\"" + escapeHtml(btn.emoji) + "\\" placeholder=\\"Emoji\\" onchange=\\"window.__spEditBtn(" + idx + ", \'emoji\', this.value)\\" /><input type=\\"text\\" class=\\"input-control\\" style=\\"width:170px;\\" value=\\"" + escapeHtml(btn.label) + "\\" placeholder=\\"Buton adı\\" onchange=\\"window.__spEditBtn(" + idx + ", \'label\', this.value)\\" /><select class=\\"select-control\\" style=\\"width:130px;\\" onchange=\\"window.__spEditBtn(" + idx + ", \'style\', this.value)\\"><option value=\\"Primary\\"" + (btn.style === "Primary" ? " selected" : "") + ">Mavi (Primary)</option><option value=\\"Success\\"" + (btn.style === "Success" ? " selected" : "") + ">Yaşıl (Success)</option><option value=\\"Danger\\"" + (btn.style === "Danger" ? " selected" : "") + ">Qırmızı (Danger)</option><option value=\\"Secondary\\"" + (btn.style === "Secondary" ? " selected" : "") + ">Boz (Secondary)</option></select><label style=\\"display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;\\"><input type=\\"checkbox\\"" + (btn.enabled !== false ? " checked" : "") + " onchange=\\"window.__spEditBtn(" + idx + ", \'enabled\', this.checked)\\" /> Aktiv</label></div><div class=\\"btn-row\\"><button type=\\"button\\" class=\\"btn btn-ghost\\" onclick=\\"window.__spMoveBtn(" + idx + ", -1)\\">↑</button><button type=\\"button\\" class=\\"btn btn-ghost\\" onclick=\\"window.__spMoveBtn(" + idx + ", 1)\\">↓</button></div></div>";',
+  '        }).join("");',
+  '      };',
+  '      window.__spEditBtn = (index, field, val) => { if (state.panelButtonsDraft[index]) state.panelButtonsDraft[index][field] = val; };',
+  '      window.__spMoveBtn = (index, delta) => {',
+  '        const nextIdx = index + delta;',
+  '        if (nextIdx < 0 || nextIdx >= state.panelButtonsDraft.length) return;',
+  '        const copy = [...state.panelButtonsDraft];',
+  '        const temp = copy[index];',
+  '        copy[index] = copy[nextIdx];',
+  '        copy[nextIdx] = temp;',
+  '        renderPanelButtonsEditor(copy);',
+  '      };',
+  '      const updatePanelSendPreview = () => {',
+  '        const preview = document.getElementById("selectedScriptPreviewBox");',
+  '        const sel = document.getElementById("sendPanelScriptSelect");',
+  '        if (!preview || !sel || !state.data) return;',
+  '        const found = (state.data.scripts || []).find((s) => s.id === sel.value);',
+  '        if (!found || !found.bundle) { preview.textContent = "Mövcud script seçin..."; return; }',
+  '        preview.textContent = "--- 1) SCRIPT KEY ---\\n" + found.bundle.scriptKeySection + "\\n\\n--- 2) LOADSTRING SCRIPT ---\\n" + found.bundle.loadstringSection;',
+  '      };',
+  '      const renderDashboard = (data) => {',
+  '        state.data = data;',
+  '        const guildName = data.guildConfig?.guildName || "Seçilməyib";',
+  '        const guildId = data.guildConfig?.guildId || "";',
+  '        const headerGuildSub = document.getElementById("headerGuildSub");',
+  '        if (headerGuildSub) headerGuildSub.textContent = "Qoşulan Sunucu: " + guildName;',
+  '        const badge = document.getElementById("headerBotBadge");',
+  '        if (badge) { badge.textContent = "Bot: " + (data.bot?.status || "Aktiv"); badge.classList.toggle("offline", !data.bot?.online); }',
+  '        const statScripts = document.getElementById("statScripts");',
+  '        const statKeys = document.getElementById("statKeys");',
+  '        const statWhitelist = document.getElementById("statWhitelist");',
+  '        const statBlacklist = document.getElementById("statBlacklist");',
+  '        if (statScripts) statScripts.textContent = String(data.counts?.scripts ?? 0);',
+  '        if (statKeys) statKeys.textContent = String(data.counts?.keys ?? 0);',
+  '        if (statWhitelist) statWhitelist.textContent = String(data.counts?.whitelist ?? 0);',
+  '        if (statBlacklist) statBlacklist.textContent = String(data.counts?.blacklist ?? 0);',
+  '        const ovGuildName = document.getElementById("overviewGuildName");',
+  '        const ovGuildId = document.getElementById("overviewGuildId");',
+  '        if (ovGuildName) ovGuildName.textContent = guildName;',
+  '        if (ovGuildId) ovGuildId.textContent = "Sunucu ID: " + (guildId || "Təyin edilməyib");',
+  '        const recentKeysBox = document.getElementById("overviewRecentKeys");',
+  '        if (recentKeysBox) {',
+  '          const keys = data.keys || [];',
+  '          recentKeysBox.innerHTML = keys.length === 0 ? "<div class=\\"field-label\\">Hələ key yaradılmayıb.</div>" : keys.slice(0, 8).map((k) => {',
+  '            const whoProf = k.usedByProfile || k.creatorProfile || {};',
+  '            const creatorName = k.creatorProfile?.globalName || k.createdByTag || "Dashboard";',
+  '            const usedByName = k.usedByProfile?.globalName || k.usedByTag || "Hələ işlədilməyib";',
+  '            const timeLabel = k.remainingLabel || k.durationLabel || "Lifetime";',
+  '            return "<div class=\\"record-row\\"><div class=\\"user-chip\\"><img class=\\"avatar-img\\" src=\\"" + escapeHtml(whoProf.avatarUrl || "") + "\\" alt=\\"avatar\\" /><div><div style=\\"font-weight:800;font-size:13px;\\">" + escapeHtml(k.code) + "</div><div class=\\"field-label\\">Yaradan: " + escapeHtml(creatorName) + " • İşlədən: " + escapeHtml(usedByName) + " • Vaxt: " + escapeHtml(timeLabel) + "</div></div></div><span class=\\"pill " + (k.expired ? "rose" : "teal") + "\\">" + escapeHtml(k.durationLabel || "Lifetime") + "</span></div>";',
+  '          }).join("");',
+  '        }',
+  '        populateScriptSelects(data.scripts || []);',
+  '        const existingScriptsCount = document.getElementById("existingScriptsCount");',
+  '        if (existingScriptsCount) existingScriptsCount.textContent = String((data.scripts || []).length);',
+  '        const existingScriptsList = document.getElementById("existingScriptsList");',
+  '        if (existingScriptsList) {',
+  '          const scripts = data.scripts || [];',
+  '          existingScriptsList.innerHTML = scripts.length === 0 ? "<div class=\\"field-label\\">Hələ heç bir script yaradılmayıb.</div>" : scripts.map((s) => {',
+  '            const bundle = s.bundle || {};',
+  '            const bundleStr = (bundle.scriptKeySection || "") + "\\n" + (bundle.loadstringSection || "");',
+  '            return "<div class=\\"card\\" style=\\"background:#080c15;\\"><div class=\\"card-heading\\"><span>📜 " + escapeHtml(s.name) + "</span><span class=\\"pill " + (s.obfuscationEnabled ? "teal" : "rose") + "\\">Obfuscation: " + (s.obfuscationEnabled ? "AÇIQ (ULTRA)" : "BAĞLI") + "</span></div><div class=\\"code-box\\">" + escapeHtml(bundleStr) + "</div><div class=\\"btn-row\\"><button type=\\"button\\" class=\\"btn btn-gold\\" onclick=\\"window.__spCopyText(" + escapeHtml(JSON.stringify(bundleStr)) + ")\\">Get Script Kopyala</button><button type=\\"button\\" class=\\"btn btn-teal\\" onclick=\\"window.__spToggleScriptObf(\'" + escapeHtml(s.id) + "\', " + (!s.obfuscationEnabled) + ")\\">Obfuscation " + (s.obfuscationEnabled ? "Bağla" : "Aç") + "</button><button type=\\"button\\" class=\\"btn btn-danger\\" onclick=\\"window.__spDeleteScript(\'" + escapeHtml(s.id) + "\')\\">Sil</button></div></div>";',
+  '          }).join("");',
+  '        }',
+  '        const keysListBox = document.getElementById("keysListBox");',
+  '        if (keysListBox) {',
+  '          const keys = data.keys || [];',
+  '          keysListBox.innerHTML = keys.length === 0 ? "<div class=\\"field-label\\">Key siyahısı boşdur.</div>" : keys.map((k) => {',
+  '            const prof = k.usedByProfile || k.creatorProfile || {};',
+  '            const profName = prof.globalName || prof.username || "Dashboard";',
+  '            return "<div class=\\"record-row\\"><div class=\\"user-chip\\"><img class=\\"avatar-img\\" src=\\"" + escapeHtml(prof.avatarUrl || "") + "\\" alt=\\"avatar\\" /><div><div style=\\"font-weight:900;font-size:13px;color:#fbbf24;\\">" + escapeHtml(k.code) + "</div><div class=\\"field-label\\">Script: " + escapeHtml(k.scriptName || "-") + " • Vaxt: " + escapeHtml(k.durationLabel) + " (" + escapeHtml(k.remainingLabel) + ") • Profil: " + escapeHtml(profName) + "</div></div></div><button type=\\"button\\" class=\\"btn btn-danger\\" onclick=\\"window.__spDeleteKey(\'" + escapeHtml(k.id) + "\')\\">Sil</button></div>";',
+  '          }).join("");',
+  '        }',
+  '        const whitelistBox = document.getElementById("whitelistBox");',
+  '        if (whitelistBox) {',
+  '          const wl = data.whitelist || [];',
+  '          whitelistBox.innerHTML = wl.length === 0 ? "<div class=\\"field-label\\">Whitelist boşdur.</div>" : wl.map((w) => {',
+  '            const prof = w.profile || {};',
+  '            const labelName = prof.globalName || w.discordTag || w.discordId;',
+  '            return "<div class=\\"record-row\\"><div class=\\"user-chip\\"><img class=\\"avatar-img\\" src=\\"" + escapeHtml(prof.avatarUrl || "") + "\\" alt=\\"avatar\\" /><div><div style=\\"font-weight:800;font-size:13px;\\">" + escapeHtml(labelName) + "</div><div class=\\"field-label\\">ID: " + escapeHtml(w.discordId) + " • Vaxt: " + escapeHtml(w.durationLabel) + " (" + escapeHtml(w.remainingLabel) + ")</div></div></div><button type=\\"button\\" class=\\"btn btn-danger\\" onclick=\\"window.__spRemoveWhitelist(\'" + escapeHtml(w.discordId) + "\')\\">Çıxar</button></div>";',
+  '          }).join("");',
+  '        }',
+  '        const blacklistBox = document.getElementById("blacklistBox");',
+  '        if (blacklistBox) {',
+  '          const bl = data.blacklist || [];',
+  '          blacklistBox.innerHTML = bl.length === 0 ? "<div class=\\"field-label\\">Blacklist boşdur.</div>" : bl.map((b) => {',
+  '            const prof = b.profile || {};',
+  '            const blName = prof.globalName || b.discordTag || b.discordId;',
+  '            return "<div class=\\"record-row\\"><div class=\\"user-chip\\"><img class=\\"avatar-img\\" src=\\"" + escapeHtml(prof.avatarUrl || "") + "\\" alt=\\"avatar\\" /><div><div style=\\"font-weight:800;font-size:13px;color:#fda4af;\\">" + escapeHtml(blName) + "</div><div class=\\"field-label\\">ID: " + escapeHtml(b.discordId) + " • Səbəb: " + escapeHtml(b.reason) + " • Vaxt: " + escapeHtml(b.durationLabel) + "</div></div></div><button type=\\"button\\" class=\\"btn btn-danger\\" onclick=\\"window.__spRemoveBlacklist(\'" + escapeHtml(b.discordId) + "\')\\">Sil</button></div>";',
+  '          }).join("");',
+  '        }',
+  '        const joinBtn = document.getElementById("joinDiscordBtn");',
+  '        if (joinBtn && data.bot?.inviteUrl) { joinBtn.href = data.bot.inviteUrl; }',
+  '        const guildIdInput = document.getElementById("guildIdInput");',
+  '        const guildInviteInput = document.getElementById("guildInviteInput");',
+  '        const resolvedGuildNameText = document.getElementById("resolvedGuildNameText");',
+  '        const sendPanelChannelInput = document.getElementById("sendPanelChannelInput");',
+  '        if (guildIdInput && document.activeElement !== guildIdInput) { guildIdInput.value = guildId; }',
+  '        if (guildInviteInput && document.activeElement !== guildInviteInput) { guildInviteInput.value = data.guildConfig?.discordInvite || ""; }',
+  '        if (resolvedGuildNameText) { resolvedGuildNameText.textContent = guildName; }',
+  '        if (sendPanelChannelInput && document.activeElement !== sendPanelChannelInput) { sendPanelChannelInput.value = data.guildConfig?.panelChannelId || ""; }',
+  '        const panelTitleInput = document.getElementById("panelTitleInput");',
+  '        const panelColorInput = document.getElementById("panelColorInput");',
+  '        const panelDescInput = document.getElementById("panelDescInput");',
+  '        if (panelTitleInput && document.activeElement !== panelTitleInput) { panelTitleInput.value = data.panelDesign?.title || ""; }',
+  '        if (panelColorInput && document.activeElement !== panelColorInput) { panelColorInput.value = data.panelDesign?.colorHex || "#f59e0b"; }',
+  '        if (panelDescInput && document.activeElement !== panelDescInput) { panelDescInput.value = data.panelDesign?.description || ""; }',
+  '        renderPanelButtonsEditor(data.panelDesign?.buttons || []);',
+  '        updatePanelSendPreview();',
+  '      };',
+  '      const refreshOverview = async (silent = false) => {',
+  '        try {',
+  '          const json = await apiRequest("/api/overview");',
+  '          renderDashboard(json);',
+  '        } catch (err) {',
+  '          if (!silent) showToast("Yenilənmə xətası: " + err.message);',
+  '        }',
+  '      };',
+  '      window.__spCopyText = async (txt) => {',
+  '        try { await navigator.clipboard.writeText(String(txt || "")); showToast("Kopyalandı!"); } catch (_e) { showToast("Kopyalama mümkün olmadı."); }',
+  '      };',
+  '      window.__spToggleScriptObf = async (scriptId, nextEnabled) => {',
+  '        try {',
+  '          await apiRequest("/api/scripts/" + encodeURIComponent(scriptId) + "/obfuscation", { method: "PATCH", body: JSON.stringify({ obfuscationEnabled: Boolean(nextEnabled) }) });',
+  '          showToast("Obfuscation " + (nextEnabled ? "açıldı" : "bağlandı") + ".");',
+  '          await refreshOverview(true);',
+  '        } catch (err) { showToast(err.message); }',
+  '      };',
+  '      window.__spDeleteScript = async (scriptId) => {',
+  '        try {',
+  '          await apiRequest("/api/scripts/" + encodeURIComponent(scriptId), { method: "DELETE" });',
+  '          showToast("Script silindi.");',
+  '          await refreshOverview(true);',
+  '        } catch (err) { showToast(err.message); }',
+  '      };',
+  '      window.__spDeleteKey = async (keyId) => {',
+  '        try {',
+  '          await apiRequest("/api/keys/" + encodeURIComponent(keyId), { method: "DELETE" });',
+  '          showToast("Key silindi.");',
+  '          await refreshOverview(true);',
+  '        } catch (err) { showToast(err.message); }',
+  '      };',
+  '      window.__spRemoveWhitelist = async (discordId) => {',
+  '        try {',
+  '          await apiRequest("/api/whitelist/" + encodeURIComponent(discordId), { method: "DELETE" });',
+  '          showToast("Whitelist-dən çıxarıldı.");',
+  '          await refreshOverview(true);',
+  '        } catch (err) { showToast(err.message); }',
+  '      };',
+  '      window.__spRemoveBlacklist = async (discordId) => {',
+  '        try {',
+  '          await apiRequest("/api/blacklist/" + encodeURIComponent(discordId), { method: "DELETE" });',
+  '          showToast("Blacklist-dən silindi.");',
+  '          await refreshOverview(true);',
+  '        } catch (err) { showToast(err.message); }',
+  '      };',
+  '      document.addEventListener("DOMContentLoaded", () => {',
+  '        const fileInput = document.getElementById("scriptFileInput");',
+  '        const codeInput = document.getElementById("scriptCodeInput");',
+  '        const nameInput = document.getElementById("scriptNameInput");',
+  '        const obfToggle = document.getElementById("scriptObfToggle");',
+  '        const obfLabel = document.getElementById("scriptObfLabel");',
+  '        if (obfToggle && obfLabel) { obfToggle.addEventListener("change", () => { obfLabel.textContent = obfToggle.checked ? "AÇIQ" : "BAĞLI"; }); }',
+  '        if (fileInput && codeInput) {',
+  '          fileInput.addEventListener("change", (e) => {',
+  '            const file = e.target.files && e.target.files[0];',
+  '            if (!file) return;',
+  '            if (nameInput && !nameInput.value.trim()) { nameInput.value = file.name.replace(/\\.(lua|txt)$/i, ""); }',
+  '            const reader = new FileReader();',
+  '            reader.onload = (ev) => { codeInput.value = String(ev.target?.result || ""); showToast("Fayl yükləndi: " + file.name); };',
+  '            reader.readAsText(file);',
+  '          });',
+  '        }',
+  '        const createScriptBtn = document.getElementById("createScriptBtn");',
+  '        if (createScriptBtn) {',
+  '          createScriptBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const name = String(nameInput?.value || "").trim();',
+  '              const code = String(codeInput?.value || "").trim();',
+  '              const obfuscationEnabled = Boolean(obfToggle?.checked);',
+  '              await apiRequest("/api/scripts", { method: "POST", body: JSON.stringify({ name, code, obfuscationEnabled }) });',
+  '              showToast("Script uğurla yaradıldı!");',
+  '              if (nameInput) nameInput.value = "";',
+  '              if (codeInput) codeInput.value = "";',
+  '              if (fileInput) fileInput.value = "";',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const clearScriptFormBtn = document.getElementById("clearScriptFormBtn");',
+  '        if (clearScriptFormBtn) {',
+  '          clearScriptFormBtn.addEventListener("click", () => {',
+  '            if (nameInput) nameInput.value = "";',
+  '            if (codeInput) codeInput.value = "";',
+  '            if (fileInput) fileInput.value = "";',
+  '          });',
+  '        }',
+  '        document.querySelectorAll(".sub-tab-btn").forEach((tabBtn) => {',
+  '          tabBtn.addEventListener("click", () => {',
+  '            const subKey = tabBtn.getAttribute("data-subtab");',
+  '            document.querySelectorAll(".sub-tab-btn").forEach((b) => b.classList.remove("active"));',
+  '            tabBtn.classList.add("active");',
+  '            ["keys", "whitelist", "blacklist", "hwid"].forEach((k) => {',
+  '              const el = document.getElementById("subtab-" + k);',
+  '              if (el) el.style.display = k === subKey ? "grid" : "none";',
+  '            });',
+  '          });',
+  '        });',
+  '        const createKeyBtn = document.getElementById("createKeyBtn");',
+  '        if (createKeyBtn) {',
+  '          createKeyBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const scriptId = document.getElementById("keyScriptSelect")?.value || "";',
+  '              const durationKey = document.getElementById("keyDurationSelect")?.value || "lifetime";',
+  '              const creatorDiscordId = document.getElementById("keyCreatorIdInput")?.value || "";',
+  '              const discordId = document.getElementById("keyUserIdInput")?.value || "";',
+  '              await apiRequest("/api/keys", { method: "POST", body: JSON.stringify({ scriptId, durationKey, creatorDiscordId, discordId }) });',
+  '              showToast("Yeni Key yaradıldı!");',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const addWhitelistBtn = document.getElementById("addWhitelistBtn");',
+  '        if (addWhitelistBtn) {',
+  '          addWhitelistBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const discordId = document.getElementById("wlDiscordIdInput")?.value || "";',
+  '              const durationKey = document.getElementById("wlDurationSelect")?.value || "lifetime";',
+  '              const scriptId = document.getElementById("wlScriptSelect")?.value || "";',
+  '              await apiRequest("/api/whitelist", { method: "POST", body: JSON.stringify({ discordId, durationKey, scriptId }) });',
+  '              showToast("Whitelist-ə əlavə edildi!");',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const addBlacklistBtn = document.getElementById("addBlacklistBtn");',
+  '        if (addBlacklistBtn) {',
+  '          addBlacklistBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const discordId = document.getElementById("blDiscordIdInput")?.value || "";',
+  '              const durationKey = document.getElementById("blDurationSelect")?.value || "lifetime";',
+  '              const reason = document.getElementById("blReasonInput")?.value || "Qayda pozuntusu";',
+  '              await apiRequest("/api/blacklist", { method: "POST", body: JSON.stringify({ discordId, durationKey, reason }) });',
+  '              showToast("Blacklist-ə əlavə edildi!");',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const resetHwidBtn = document.getElementById("resetHwidBtn");',
+  '        if (resetHwidBtn) {',
+  '          resetHwidBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const target = document.getElementById("hwidTargetInput")?.value || "";',
+  '              const scriptId = document.getElementById("hwidScriptSelect")?.value || "";',
+  '              const res = await apiRequest("/api/hwid/reset", { method: "POST", body: JSON.stringify({ target, scriptId }) });',
+  '              showToast("HWID sıfırlandı (" + res.resetCount + " qeyd).");',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const saveGuildConfigBtn = document.getElementById("saveGuildConfigBtn");',
+  '        if (saveGuildConfigBtn) {',
+  '          saveGuildConfigBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const guildId = document.getElementById("guildIdInput")?.value || "";',
+  '              const discordInvite = document.getElementById("guildInviteInput")?.value || "";',
+  '              await apiRequest("/api/discord/config", { method: "POST", body: JSON.stringify({ guildId, discordInvite }) });',
+  '              showToast("Sunucu bağlantısı yeniləndi!");',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const savePanelDesignBtn = document.getElementById("savePanelDesignBtn");',
+  '        if (savePanelDesignBtn) {',
+  '          savePanelDesignBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const title = document.getElementById("panelTitleInput")?.value || "";',
+  '              const colorHex = document.getElementById("panelColorInput")?.value || "#f59e0b";',
+  '              const description = document.getElementById("panelDescInput")?.value || "";',
+  '              await apiRequest("/api/panel/design", { method: "POST", body: JSON.stringify({ title, colorHex, description, buttons: state.panelButtonsDraft }) });',
+  '              showToast("Panel dizaynı yadda saxlandı!");',
+  '              await refreshOverview(true);',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        const sendPanelScriptSelect = document.getElementById("sendPanelScriptSelect");',
+  '        if (sendPanelScriptSelect) { sendPanelScriptSelect.addEventListener("change", updatePanelSendPreview); }',
+  '        const sendPanelNowBtn = document.getElementById("sendPanelNowBtn");',
+  '        if (sendPanelNowBtn) {',
+  '          sendPanelNowBtn.addEventListener("click", async () => {',
+  '            try {',
+  '              const scriptId = document.getElementById("sendPanelScriptSelect")?.value || "";',
+  '              const channelId = document.getElementById("sendPanelChannelInput")?.value || "";',
+  '              const res = await apiRequest("/api/panel/send", { method: "POST", body: JSON.stringify({ scriptId, channelId }) });',
+  '              showToast("Panel göndərildi: " + (res.result?.scriptName || "Script"));',
+  '            } catch (err) { showToast(err.message); }',
+  '          });',
+  '        }',
+  '        refreshOverview(false);',
+  '        setInterval(() => refreshOverview(true), 8000);',
+  '      });',
+  '    })();',
+  '  </script>',
+  '</body>',
+  '</html>'
+].join('\n');
 
 app.get('/', (_req, res) => {
   res.status(200).type('html').send(DASHBOARD_HTML);
