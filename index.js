@@ -766,20 +766,19 @@ const startRenderKeepAlive = () => {
         process.env.RENDER_EXTERNAL_URL,
         process.env.PUBLIC_BASE_URL,
         'https://sado-protect.onrender.com',
-  const startWatchdog = () => {
-    if (runtimeState.watchdogStarted) return true;
-    runtimeState.watchdogStarted = true;
-    setInterval(async () => {
-      try {
-        if (!client.isReady() && !runtimeState.isConnectingNow) {
-          await ensureBotOnline();
-        }
-        if (client.isReady() && !runtimeState.commandsRegistered) {
-          await registerSlashCommands().catch(() => {});
-        }
-      } catch (_e) {}
-    }, 15000);
-    return true;
+        `http://127.0.0.1:${PORT}/health`,
+      ]
+        .filter(Boolean)
+        .map((u) => String(u).trim())
+    )
+  );
+  const pulse = async () => {
+    try {
+      for (const base of targets) {
+        const healthUrl = base.endsWith('/health') ? base : `${base.replace(/\/+$/, '')}/health`;
+        await pingUrlQuietly(healthUrl);
+      }
+    } catch (_e) {}
   };
 
   setTimeout(pulse, 15000);
@@ -799,7 +798,7 @@ const startWatchdog = () => {
         await registerSlashCommands().catch(() => {});
       }
     } catch (_e) {}
-  }, 30000);
+  }, 15000);
   return true;
 };
 
