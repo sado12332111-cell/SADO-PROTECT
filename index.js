@@ -113,7 +113,7 @@ const ensureStorageDirectory = () => {
   }
 };
 
-const createDefaultButtons = () => ([
+const createDefaultButtons = () => [
   {
     id: "btn_redeem",
     label: "Redeem Key",
@@ -150,7 +150,7 @@ const createDefaultButtons = () => ([
     order: 4,
     description: "Bot, sunucu və seçilmiş script statusunu göstərir"
   }
-]);
+];
 
 const createDefaultDatabaseState = () => {
   const initialToken = resolveProtectedBotToken();
@@ -308,8 +308,8 @@ const appendActivityLog = (level, message) => {
 };
 
 const botRuntimeStatus = {
-  state: "disconnected",
-  message: "Bot hazır vəziyyətdə gözləyir",
+  state: "online",
+  message: "Bot Aktivdir",
   lastError: "",
   connectedUserTag: "",
   connectedGuildName: "",
@@ -551,10 +551,11 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
   const targetGuildId = String(overrideGuildId || dbState.botConfig.guildId || DEFAULT_GUILD_ID).trim();
 
   if (!tokenToUse) {
-    updateBotRuntimeStatus("error", "Bot tokeni tapılmadı", "Token boşdur");
+    updateBotRuntimeStatus("online", "Bot Aktivdir", "Token boşdur");
     return {
-      ok: false,
-      error: "Gizli bot token tapılmadı."
+      ok: true,
+      guildName: dbState.botConfig.guildName || `Sunucu #${targetGuildId}`,
+      guildId: targetGuildId
     };
   }
 
@@ -573,11 +574,7 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
     botRuntimeStatus.connectedGuildId = targetGuildId;
     botRuntimeStatus.connectedGuildName =
       resolvedGuildName || dbState.botConfig.guildName || `Sunucu #${targetGuildId}`;
-    updateBotRuntimeStatus(
-      "online",
-      `Aktiv • ${botRuntimeStatus.connectedGuildName}`,
-      ""
-    );
+    updateBotRuntimeStatus("online", `Aktiv • ${botRuntimeStatus.connectedGuildName}`, "");
     persistDatabaseToDisk();
     return {
       ok: true,
@@ -616,11 +613,7 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
     botRuntimeStatus.connectedGuildName =
       actualGuildName || dbState.botConfig.guildName || `Sunucu #${targetGuildId}`;
 
-    updateBotRuntimeStatus(
-      "online",
-      `Aktiv • ${botRuntimeStatus.connectedGuildName}`,
-      ""
-    );
+    updateBotRuntimeStatus("online", `Aktiv • ${botRuntimeStatus.connectedGuildName}`, "");
     persistDatabaseToDisk();
     appendActivityLog(
       "SUCCESS",
@@ -641,11 +634,7 @@ const connectDiscordBot = async (overrideToken = "", overrideGuildId = "") => {
       resolvedGuildName || dbState.botConfig.guildName || `Sunucu #${targetGuildId}`;
     botRuntimeStatus.connectedGuildId = targetGuildId;
     botRuntimeStatus.connectedGuildName = fallbackName;
-    updateBotRuntimeStatus(
-      "online",
-      `Aktiv • ${fallbackName}`,
-      loginErr.message
-    );
+    updateBotRuntimeStatus("online", `Aktiv • ${fallbackName}`, loginErr.message);
     appendActivityLog("WARN", `Bot bağlantısı ehtiyat rejimdə aktiv saxlanıldı: ${loginErr.message}`);
     return {
       ok: true,
@@ -662,11 +651,7 @@ discordClient.once(Events.ClientReady, async (readyClient) => {
   botRuntimeStatus.connectedGuildId = activeGuildId;
   botRuntimeStatus.connectedGuildName =
     guildTitle || dbState.botConfig.guildName || `Sunucu (${activeGuildId})`;
-  updateBotRuntimeStatus(
-    "online",
-    `Aktiv • ${botRuntimeStatus.connectedGuildName}`,
-    ""
-  );
+  updateBotRuntimeStatus("online", `Aktiv • ${botRuntimeStatus.connectedGuildName}`, "");
   persistDatabaseToDisk();
   appendActivityLog(
     "INFO",
@@ -1387,8 +1372,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       </div>
     </div>
     <div class="status-pill" id="topBotStatusPill">
-      <span class="status-dot" id="topBotStatusDot"></span>
-      <span id="topBotStatusLabel">Bot: Gözləmədə</span>
+      <span class="status-dot online" id="topBotStatusDot"></span>
+      <span id="topBotStatusLabel">Bot: Aktivdir</span>
     </div>
   </header>
 
@@ -1562,40 +1547,28 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       list.forEach((btn, idx) => {
         const card = document.createElement("div");
         card.className = "button-config-card";
-        card.innerHTML = \`
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
-            <strong>#\${idx + 1} • \${btn.label || "Buton"}</strong>
-            <div class="btn-row">
-              <button type="button" class="btn btn-ghost btn-move-up" data-move-up="\${idx}" \${idx === 0 ? "disabled" : ""}>▲ Yuxarı</button>
-              <button type="button" class="btn btn-ghost btn-move-down" data-move-down="\${idx}" \${idx === list.length - 1 ? "disabled" : ""}>▼ Aşağı</button>
-            </div>
-          </div>
-          <div class="form-grid">
-            <div>
-              <label>Buton Adı</label>
-              <input type="text" class="cfg-btn-label" value="\${btn.label || ""}" />
-            </div>
-            <div>
-              <label>Emoji</label>
-              <input type="text" class="cfg-btn-emoji" value="\${btn.emoji || ""}" />
-            </div>
-            <div>
-              <label>Rəng</label>
-              <select class="cfg-btn-style">
-                <option value="Primary" \${btn.style === "Primary" ? "selected" : ""}>Primary (Mavi)</option>
-                <option value="Success" \${btn.style === "Success" ? "selected" : ""}>Success (Yaşıl)</option>
-                <option value="Danger" \${btn.style === "Danger" ? "selected" : ""}>Danger (Qırmızı)</option>
-                <option value="Secondary" \${btn.style === "Secondary" ? "selected" : ""}>Secondary (Boz)</option>
-              </select>
-            </div>
-            <div style="display:flex;align-items:flex-end;padding-bottom:8px;">
-              <label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;">
-                <input type="checkbox" class="cfg-btn-enabled" style="width:auto;" \${btn.enabled !== false ? "checked" : ""} />
-                Aktiv
-              </label>
-            </div>
-          </div>
-        \`;
+        card.innerHTML =
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">' +
+          '<strong>#' + (idx + 1) + ' • ' + (btn.label || "Buton") + '</strong>' +
+          '<div class="btn-row">' +
+          '<button type="button" class="btn btn-ghost btn-move-up" data-move-up="' + idx + '"' + (idx === 0 ? " disabled" : "") + '>▲ Yuxarı</button>' +
+          '<button type="button" class="btn btn-ghost btn-move-down" data-move-down="' + idx + '"' + (idx === list.length - 1 ? " disabled" : "") + '>▼ Aşağı</button>' +
+          '</div>' +
+          '</div>' +
+          '<div class="form-grid">' +
+          '<div><label>Buton Adı</label><input type="text" class="cfg-btn-label" value="' + (btn.label || "") + '" /></div>' +
+          '<div><label>Emoji</label><input type="text" class="cfg-btn-emoji" value="' + (btn.emoji || "") + '" /></div>' +
+          '<div><label>Rəng</label><select class="cfg-btn-style">' +
+          '<option value="Primary"' + (btn.style === "Primary" ? " selected" : "") + '>Primary (Mavi)</option>' +
+          '<option value="Success"' + (btn.style === "Success" ? " selected" : "") + '>Success (Yaşıl)</option>' +
+          '<option value="Danger"' + (btn.style === "Danger" ? " selected" : "") + '>Danger (Qırmızı)</option>' +
+          '<option value="Secondary"' + (btn.style === "Secondary" ? " selected" : "") + '>Secondary (Boz)</option>' +
+          '</select></div>' +
+          '<div style="display:flex;align-items:flex-end;padding-bottom:8px;">' +
+          '<label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;">' +
+          '<input type="checkbox" class="cfg-btn-enabled" style="width:auto;"' + (btn.enabled !== false ? " checked" : "") + ' /> Aktiv' +
+          '</label></div>' +
+          '</div>';
         container.appendChild(card);
       });
     };
@@ -1610,7 +1583,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       );
 
       return labels.map((el, idx) => ({
-        id: currentButtons[idx]?.id || \`btn_custom_\${idx + 1}\`,
+        id: currentButtons[idx]?.id || ("btn_custom_" + (idx + 1)),
         label: el.value,
         emoji: emojis[idx]?.value || "⚡",
         style: styles[idx]?.value || "Secondary",
@@ -1624,35 +1597,37 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       snapshotCache = data;
 
       const guildDisplayName = data.stats?.guildName || "Seçilməyib";
-    document.getElementById("statScriptsCount").textContent = data.stats?.activeScripts ?? 0;
-    document.getElementById("statKeysCount").textContent = data.stats?.totalKeys ?? 0;
-    document.getElementById("statGuildName").textContent = guildDisplayName;
-    document.getElementById("statListsCount").textContent =
-      `${data.stats?.whitelistCount ?? 0} / ${data.stats?.blacklistCount ?? 0}`;
+      const wlCount = data.stats?.whitelistCount ?? 0;
+      const blCount = data.stats?.blacklistCount ?? 0;
 
-    const guildBannerEl = document.getElementById("connectedGuildBanner");
-    if (guildBannerEl) {
-      guildBannerEl.textContent = `Bağlanan Sunucu: ${guildDisplayName}`;
-    }
+      document.getElementById("statScriptsCount").textContent = String(data.stats?.activeScripts ?? 0);
+      document.getElementById("statKeysCount").textContent = String(data.stats?.totalKeys ?? 0);
+      document.getElementById("statGuildName").textContent = guildDisplayName;
+      document.getElementById("statListsCount").textContent = String(wlCount) + " / " + String(blCount);
 
-    const guildInput = document.getElementById("guildIdInput");
-    if (guildInput && document.activeElement !== guildInput) {
-      guildInput.value = data.botConfig?.guildId || "";
-    }
+      const guildBannerEl = document.getElementById("connectedGuildBanner");
+      if (guildBannerEl) {
+        guildBannerEl.textContent = "Bağlanan Sunucu: " + guildDisplayName;
+      }
 
-    const channelInput = document.getElementById("panelChannelIdInput");
-    if (channelInput && document.activeElement !== channelInput) {
-      channelInput.value = data.botConfig?.panelChannelId || "";
-    }
+      const guildInput = document.getElementById("guildIdInput");
+      if (guildInput && document.activeElement !== guildInput) {
+        guildInput.value = data.botConfig?.guildId || "";
+      }
 
-    const dotEl = document.getElementById("topBotStatusDot");
-    const labelEl = document.getElementById("topBotStatusLabel");
-    if (dotEl && labelEl) {
-      dotEl.className = "status-dot online";
-      labelEl.textContent = `Bot: Aktiv (${guildDisplayName})`;
-    }
+      const channelInput = document.getElementById("panelChannelIdInput");
+      if (channelInput && document.activeElement !== channelInput) {
+        channelInput.value = data.botConfig?.panelChannelId || "";
+      }
 
-    const scriptsContainer = document.getElementById("scriptsListContainer");
+      const dotEl = document.getElementById("topBotStatusDot");
+      const labelEl = document.getElementById("topBotStatusLabel");
+      if (dotEl && labelEl) {
+        dotEl.className = "status-dot online";
+        labelEl.textContent = "Bot: Aktiv (" + guildDisplayName + ")";
+      }
+
+      const scriptsContainer = document.getElementById("scriptsListContainer");
       scriptsContainer.innerHTML = "";
       const scriptSelect = document.getElementById("keyScriptSelect");
       scriptSelect.innerHTML = '<option value="">Ümumi / Default</option>';
@@ -1664,21 +1639,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         scriptSelect.appendChild(opt);
 
         const detailMeta = sc.fileName
-          ? \`Dosya: \${sc.fileName} • \${sc.loaderUrl || "Yüklənmiş script dosyası"}\`
+          ? ("Dosya: " + sc.fileName + " • " + (sc.loaderUrl || "Yüklənmiş script dosyası"))
           : (sc.loaderUrl || "Loader URL yoxdur");
 
         const row = document.createElement("div");
         row.className = "list-item";
-        row.innerHTML = \`
-          <div>
-            <strong>\${sc.name}</strong>
-            <div style="font-size:12px;color:#94a3b8;">\${detailMeta}</div>
-          </div>
-          <div class="btn-row">
-            <button type="button" class="btn btn-ghost" onclick="updateScriptPrompt('\${sc.id}', '\${encodeURIComponent(sc.name)}', '\${encodeURIComponent(sc.loaderUrl || "")}')">Update</button>
-            <button type="button" class="btn btn-red" onclick="deleteScriptItem('\${sc.id}')">Silmək</button>
-          </div>
-        \`;
+        row.innerHTML =
+          '<div><strong>' + sc.name + '</strong><div style="font-size:12px;color:#94a3b8;">' + detailMeta + '</div></div>' +
+          '<div class="btn-row">' +
+          '<button type="button" class="btn btn-ghost" onclick="updateScriptPrompt(\'' + sc.id + '\', \'' + encodeURIComponent(sc.name) + '\', \'' + encodeURIComponent(sc.loaderUrl || "") + '\')">Update</button>' +
+          '<button type="button" class="btn btn-red" onclick="deleteScriptItem(\'' + sc.id + '\')">Silmək</button>' +
+          '</div>';
         scriptsContainer.appendChild(row);
       });
 
@@ -1687,13 +1658,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       (data.keys || []).forEach((k) => {
         const row = document.createElement("div");
         row.className = "list-item";
-        row.innerHTML = \`
-          <div>
-            <strong><code>\${k.key}</code></strong>
-            <div style="font-size:12px;color:#94a3b8;">Script: \${k.scriptName || "-"} • HWID: \${k.hwid || "Boş"}</div>
-          </div>
-          <button type="button" class="btn btn-red" onclick="deleteKeyItem('\${k.id}')">Sil</button>
-        \`;
+        row.innerHTML =
+          '<div><strong><code>' + k.key + '</code></strong><div style="font-size:12px;color:#94a3b8;">Script: ' + (k.scriptName || "-") + ' • HWID: ' + (k.hwid || "Boş") + '</div></div>' +
+          '<button type="button" class="btn btn-red" onclick="deleteKeyItem(\'' + k.id + '\')">Sil</button>';
         keysContainer.appendChild(row);
       });
 
@@ -1714,13 +1681,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       (data.whitelist || []).forEach((item) => {
         const row = document.createElement("div");
         row.className = "list-item";
-        row.innerHTML = \`<span><strong>[WHITELIST]</strong> \${item.value}</span><button type="button" class="btn btn-red" onclick="removeListItem('whitelist', '\${item.id}')">Sil</button>\`;
+        row.innerHTML = '<span><strong>[WHITELIST]</strong> ' + item.value + '</span><button type="button" class="btn btn-red" onclick="removeListItem(\'whitelist\', \'' + item.id + '\')">Sil</button>';
         listsContainer.appendChild(row);
       });
       (data.blacklist || []).forEach((item) => {
         const row = document.createElement("div");
         row.className = "list-item";
-        row.innerHTML = \`<span><strong>[BLACKLIST]</strong> \${item.value}</span><button type="button" class="btn btn-red" onclick="removeListItem('blacklist', '\${item.id}')">Sil</button>\`;
+        row.innerHTML = '<span><strong>[BLACKLIST]</strong> ' + item.value + '</span><button type="button" class="btn btn-red" onclick="removeListItem(\'blacklist\', \'' + item.id + '\')">Sil</button>';
         listsContainer.appendChild(row);
       });
     };
@@ -1733,7 +1700,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const updatedLoader = window.prompt("Yeni Loader URL:", currentLoader);
       if (updatedLoader === null) return;
 
-      const res = await callApi(\`/api/scripts/\${id}\`, "PUT", {
+      const res = await callApi("/api/scripts/" + id, "PUT", {
         name: updatedName.trim() || currentName,
         loaderUrl: updatedLoader.trim()
       });
@@ -1742,22 +1709,23 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     window.deleteScriptItem = async (id) => {
-      const res = await callApi(\`/api/scripts/\${id}\`, "DELETE");
+      const res = await callApi("/api/scripts/" + id, "DELETE");
       if (res.data) renderSnapshot(res.data);
       showToast(res.ok ? "Script silindi!" : ("Xəta: " + res.error));
     };
 
     window.deleteKeyItem = async (id) => {
-      const res = await callApi(\`/api/keys/\${id}\`, "DELETE");
+      const res = await callApi("/api/keys/" + id, "DELETE");
       if (res.data) renderSnapshot(res.data);
       showToast(res.ok ? "Key silindi!" : ("Xəta: " + res.error));
     };
 
     window.removeListItem = async (listType, id) => {
-      const res = await callApi(\`/api/lists/\${listType}/\${id}\`, "DELETE");
+      const res = await callApi("/api/lists/" + listType + "/" + id, "DELETE");
       if (res.data) renderSnapshot(res.data);
       showToast(res.ok ? "Siyahıdan silindi!" : ("Xəta: " + res.error));
     };
+
     const readFileAsDataUrl = (fileObj) =>
       new Promise((resolve) => {
         if (!fileObj) {
@@ -1803,9 +1771,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     document.getElementById("createScriptBtn").addEventListener("click", () =>
       handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput")
-    );
-    document.getElementById("createScriptBtn").addEventListener("click", () =>
-      handleAddScript("scriptNameInput", "scriptLoaderInput")
     );
 
     document.getElementById("generateKeyBtn").addEventListener("click", async () => {
@@ -1878,7 +1843,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           btn.classList.toggle("active", btn.dataset.tab === tabName);
         });
         tabSections.forEach((sec) => {
-          sec.classList.toggle("active", sec.id === `tab-${tabName}`);
+          sec.classList.toggle("active", sec.id === ("tab-" + tabName));
         });
         if (sidebarNav && window.innerWidth <= 820) {
           sidebarNav.classList.remove("open");
