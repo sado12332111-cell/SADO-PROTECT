@@ -3055,7 +3055,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             optionsHtml.push('<option value="">Bütün Scriptlər</option>');
           }
           (scripts || []).forEach((s) => {
-            optionsHtml.push(`<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+            optionsHtml.push('<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + '</option>');
           });
           if (optionsHtml.length === 0) {
             optionsHtml.push('<option value="">Script yoxdur</option>');
@@ -3082,51 +3082,40 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
         box.innerHTML = state.panelButtonsDraft
           .map((btn, idx) => {
-            return `
-              <div class="record-row">
-                <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:1;">
-                  <span class="pill">#${idx + 1}</span>
-                  <input
-                    type="text"
-                    class="input-control"
-                    style="width:76px;"
-                    value="${escapeHtml(btn.emoji)}"
-                    placeholder="Emoji"
-                    onchange="window.__spEditBtn(${idx}, 'emoji', this.value)"
-                  />
-                  <input
-                    type="text"
-                    class="input-control"
-                    style="width:170px;"
-                    value="${escapeHtml(btn.label)}"
-                    placeholder="Buton adı"
-                    onchange="window.__spEditBtn(${idx}, 'label', this.value)"
-                  />
-                  <select
-                    class="select-control"
-                    style="width:130px;"
-                    onchange="window.__spEditBtn(${idx}, 'style', this.value)"
-                  >
-                    <option value="Primary" ${btn.style === 'Primary' ? 'selected' : ''}>Mavi (Primary)</option>
-                    <option value="Success" ${btn.style === 'Success' ? 'selected' : ''}>Yaşıl (Success)</option>
-                    <option value="Danger" ${btn.style === 'Danger' ? 'selected' : ''}>Qırmızı (Danger)</option>
-                    <option value="Secondary" ${btn.style === 'Secondary' ? 'selected' : ''}>Boz (Secondary)</option>
-                  </select>
-                  <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;">
-                    <input
-                      type="checkbox"
-                      ${btn.enabled !== false ? 'checked' : ''}
-                      onchange="window.__spEditBtn(${idx}, 'enabled', this.checked)"
-                    />
-                    Aktiv
-                  </label>
-                </div>
-                <div class="btn-row">
-                  <button type="button" class="btn btn-ghost" onclick="window.__spMoveBtn(${idx}, -1)">↑</button>
-                  <button type="button" class="btn btn-ghost" onclick="window.__spMoveBtn(${idx}, 1)">↓</button>
-                </div>
-              </div>
-            `;
+            return (
+              '<div class="record-row">' +
+              '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;flex:1;">' +
+              '<span class="pill">#' + (idx + 1) + '</span>' +
+              '<input type="text" class="input-control" style="width:76px;" value="' +
+              escapeHtml(btn.emoji) +
+              '" placeholder="Emoji" onchange="window.__spEditBtn(' +
+              idx +
+              ', \'emoji\', this.value)" />' +
+              '<input type="text" class="input-control" style="width:170px;" value="' +
+              escapeHtml(btn.label) +
+              '" placeholder="Buton adı" onchange="window.__spEditBtn(' +
+              idx +
+              ', \'label\', this.value)" />' +
+              '<select class="select-control" style="width:130px;" onchange="window.__spEditBtn(' +
+              idx +
+              ', \'style\', this.value)">' +
+              '<option value="Primary"' + (btn.style === 'Primary' ? ' selected' : '') + '>Mavi (Primary)</option>' +
+              '<option value="Success"' + (btn.style === 'Success' ? ' selected' : '') + '>Yaşıl (Success)</option>' +
+              '<option value="Danger"' + (btn.style === 'Danger' ? ' selected' : '') + '>Qırmızı (Danger)</option>' +
+              '<option value="Secondary"' + (btn.style === 'Secondary' ? ' selected' : '') + '>Boz (Secondary)</option>' +
+              '</select>' +
+              '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;">' +
+              '<input type="checkbox"' +
+              (btn.enabled !== false ? ' checked' : '') +
+              ' onchange="window.__spEditBtn(' +
+              idx +
+              ', \'enabled\', this.checked)" /> Aktiv</label>' +
+              '</div>' +
+              '<div class="btn-row">' +
+              '<button type="button" class="btn btn-ghost" onclick="window.__spMoveBtn(' + idx + ', -1)">↑</button>' +
+              '<button type="button" class="btn btn-ghost" onclick="window.__spMoveBtn(' + idx + ', 1)">↓</button>' +
+              '</div></div>'
+            );
           })
           .join('');
       };
@@ -3168,12 +3157,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
         const headerGuildSub = document.getElementById('headerGuildSub');
         if (headerGuildSub) {
-          headerGuildSub.textContent = `Qoşulan Sunucu: ${guildName}`;
+          headerGuildSub.textContent = 'Qoşulan Sunucu: ' + guildName;
         }
 
         const badge = document.getElementById('headerBotBadge');
         if (badge) {
-          badge.textContent = `Bot: ${data.bot?.status || 'Aktiv'}`;
+          badge.textContent = 'Bot: ' + (data.bot?.status || 'Aktiv');
           badge.classList.toggle('offline', !data.bot?.online);
         }
 
@@ -3189,7 +3178,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const ovGuildName = document.getElementById('overviewGuildName');
         const ovGuildId = document.getElementById('overviewGuildId');
         if (ovGuildName) ovGuildName.textContent = guildName;
-        if (ovGuildId) ovGuildId.textContent = `Sunucu ID: ${guildId || 'Təyin edilməyib'}`;
+        if (ovGuildId) ovGuildId.textContent = 'Sunucu ID: ' + (guildId || 'Təyin edilməyib');
 
         const recentKeysBox = document.getElementById('overviewRecentKeys');
         if (recentKeysBox) {
@@ -3201,22 +3190,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               .slice(0, 8)
               .map((k) => {
                 const whoProf = k.usedByProfile || k.creatorProfile || {};
-                return `
-                  <div class="record-row">
-                    <div class="user-chip">
-                      <img class="avatar-img" src="${escapeHtml(whoProf.avatarUrl || '')}" alt="avatar" />
-                      <div>
-                        <div style="font-weight:800;font-size:13px;">${escapeHtml(k.code)}</div>
-                        <div class="field-label">
-                          Yaradan: ${escapeHtml(k.creatorProfile?.globalName || k.createdByTag || 'Dashboard')} •
-                          İşlədən: ${escapeHtml(k.usedByProfile?.globalName || k.usedByTag || 'Hələ işlədilməyib')} •
-                          Vaxt: ${escapeHtml(k.remainingLabel || k.durationLabel || 'Lifetime')}
-                        </div>
-                      </div>
-                    </div>
-                    <span class="pill ${k.expired ? 'rose' : 'teal'}">${escapeHtml(k.durationLabel || 'Lifetime')}</span>
-                  </div>
-                `;
+                const creatorName = k.creatorProfile?.globalName || k.createdByTag || 'Dashboard';
+                const usedByName = k.usedByProfile?.globalName || k.usedByTag || 'Hələ işlədilməyib';
+                const timeLabel = k.remainingLabel || k.durationLabel || 'Lifetime';
+                return (
+                  '<div class="record-row">' +
+                  '<div class="user-chip">' +
+                  '<img class="avatar-img" src="' + escapeHtml(whoProf.avatarUrl || '') + '" alt="avatar" />' +
+                  '<div>' +
+                  '<div style="font-weight:800;font-size:13px;">' + escapeHtml(k.code) + '</div>' +
+                  '<div class="field-label">Yaradan: ' +
+                  escapeHtml(creatorName) +
+                  ' • İşlədən: ' +
+                  escapeHtml(usedByName) +
+                  ' • Vaxt: ' +
+                  escapeHtml(timeLabel) +
+                  '</div></div></div>' +
+                  '<span class="pill ' + (k.expired ? 'rose' : 'teal') + '">' +
+                  escapeHtml(k.durationLabel || 'Lifetime') +
+                  '</span></div>'
+                );
               })
               .join('');
           }
@@ -3236,34 +3229,29 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             existingScriptsList.innerHTML = scripts
               .map((s) => {
                 const bundle = s.bundle || {};
-                return `
-                  <div class="card" style="background:#080c15;">
-                    <div class="card-heading">
-                      <span>📜 ${escapeHtml(s.name)}</span>
-                      <span class="pill ${s.obfuscationEnabled ? 'teal' : 'rose'}">
-                        Obfuscation: ${s.obfuscationEnabled ? 'AÇIQ (ULTRA)' : 'BAĞLI'}
-                      </span>
-                    </div>
-                    <div class="code-box">${escapeHtml((bundle.scriptKeySection || '') + '\n' + (bundle.loadstringSection || ''))}</div>
-                    <div class="btn-row">
-                      <button
-                        type="button"
-                        class="btn btn-gold"
-                        onclick="window.__spCopyText(${JSON.stringify((bundle.scriptKeySection || '') + '\n' + (bundle.loadstringSection || ''))})"
-                      >Get Script Kopyala</button>
-                      <button
-                        type="button"
-                        class="btn btn-teal"
-                        onclick="window.__spToggleScriptObf('${s.id}', ${!s.obfuscationEnabled})"
-                      >Obfuscation ${s.obfuscationEnabled ? 'Bağla' : 'Aç'}</button>
-                      <button
-                        type="button"
-                        class="btn btn-danger"
-                        onclick="window.__spDeleteScript('${s.id}')"
-                      >Sil</button>
-                    </div>
-                  </div>
-                `;
+                const bundleStr = (bundle.scriptKeySection || '') + '\n' + (bundle.loadstringSection || '');
+                return (
+                  '<div class="card" style="background:#080c15;">' +
+                  '<div class="card-heading">' +
+                  '<span>📜 ' + escapeHtml(s.name) + '</span>' +
+                  '<span class="pill ' + (s.obfuscationEnabled ? 'teal' : 'rose') + '">' +
+                  'Obfuscation: ' + (s.obfuscationEnabled ? 'AÇIQ (ULTRA)' : 'BAĞLI') +
+                  '</span></div>' +
+                  '<div class="code-box">' + escapeHtml(bundleStr) + '</div>' +
+                  '<div class="btn-row">' +
+                  '<button type="button" class="btn btn-gold" onclick="window.__spCopyText(' +
+                  escapeHtml(JSON.stringify(bundleStr)) +
+                  ')">Get Script Kopyala</button>' +
+                  '<button type="button" class="btn btn-teal" onclick="window.__spToggleScriptObf(\'' +
+                  escapeHtml(s.id) +
+                  '\', ' +
+                  (!s.obfuscationEnabled) +
+                  ')">Obfuscation ' + (s.obfuscationEnabled ? 'Bağla' : 'Aç') + '</button>' +
+                  '<button type="button" class="btn btn-danger" onclick="window.__spDeleteScript(\'' +
+                  escapeHtml(s.id) +
+                  '\')">Sil</button>' +
+                  '</div></div>'
+                );
               })
               .join('');
           }
@@ -3278,22 +3266,88 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               : keys
                   .map((k) => {
                     const prof = k.usedByProfile || k.creatorProfile || {};
-                    return `
-                      <div class="record-row">
-                        <div class="user-chip">
-                          <img class="avatar-img" src="${escapeHtml(prof.avatarUrl || '')}" alt="avatar" />
-                          <div>
-                            <div style="font-weight:900;font-size:13px;color:#fbbf24;">${escapeHtml(k.code)}</div>
-                            <div class="field-label">
-                              Script: ${escapeHtml(k.scriptName || '-')} •
-                              Vaxt: ${escapeHtml(k.durationLabel)} (${escapeHtml(k.remainingLabel)}) •
-                              Profil: ${escapeHtml(prof.globalName || prof.username || 'Dashboard')}
-                            </div>
-                          </div>
-                        </div>
-                        <button type="button" class="btn btn-danger" onclick="window.__spDeleteKey('${k.id}')">Sil</button>
-                      </div>
-                    `;
+                    const profName = prof.globalName || prof.username || 'Dashboard';
+                    return (
+                      '<div class="record-row">' +
+                      '<div class="user-chip">' +
+                      '<img class="avatar-img" src="' + escapeHtml(prof.avatarUrl || '') + '" alt="avatar" />' +
+                      '<div>' +
+                      '<div style="font-weight:900;font-size:13px;color:#fbbf24;">' + escapeHtml(k.code) + '</div>' +
+                      '<div class="field-label">Script: ' +
+                      escapeHtml(k.scriptName || '-') +
+                      ' • Vaxt: ' +
+                      escapeHtml(k.durationLabel) +
+                      ' (' +
+                      escapeHtml(k.remainingLabel) +
+                      ') • Profil: ' +
+                      escapeHtml(profName) +
+                      '</div></div></div>' +
+                      '<button type="button" class="btn btn-danger" onclick="window.__spDeleteKey(\'' +
+                      escapeHtml(k.id) +
+                      '\')">Sil</button></div>'
+                    );
+                  })
+                  .join('');
+        }
+
+        const whitelistBox = document.getElementById('whitelistBox');
+        if (whitelistBox) {
+          const wl = data.whitelist || [];
+          whitelistBox.innerHTML =
+            wl.length === 0
+              ? '<div class="field-label">Whitelist boşdur.</div>'
+              : wl
+                  .map((w) => {
+                    const prof = w.profile || {};
+                    const labelName = prof.globalName || w.discordTag || w.discordId;
+                    return (
+                      '<div class="record-row">' +
+                      '<div class="user-chip">' +
+                      '<img class="avatar-img" src="' + escapeHtml(prof.avatarUrl || '') + '" alt="avatar" />' +
+                      '<div>' +
+                      '<div style="font-weight:800;font-size:13px;">' + escapeHtml(labelName) + '</div>' +
+                      '<div class="field-label">ID: ' +
+                      escapeHtml(w.discordId) +
+                      ' • Vaxt: ' +
+                      escapeHtml(w.durationLabel) +
+                      ' (' +
+                      escapeHtml(w.remainingLabel) +
+                      ')</div></div></div>' +
+                      '<button type="button" class="btn btn-danger" onclick="window.__spRemoveWhitelist(\'' +
+                      escapeHtml(w.discordId) +
+                      '\')">Çıxar</button></div>'
+                    );
+                  })
+                  .join('');
+        }
+
+        const blacklistBox = document.getElementById('blacklistBox');
+        if (blacklistBox) {
+          const bl = data.blacklist || [];
+          blacklistBox.innerHTML =
+            bl.length === 0
+              ? '<div class="field-label">Blacklist boşdur.</div>'
+              : bl
+                  .map((b) => {
+                    const prof = b.profile || {};
+                    const blName = prof.globalName || b.discordTag || b.discordId;
+                    return (
+                      '<div class="record-row">' +
+                      '<div class="user-chip">' +
+                      '<img class="avatar-img" src="' + escapeHtml(prof.avatarUrl || '') + '" alt="avatar" />' +
+                      '<div>' +
+                      '<div style="font-weight:800;font-size:13px;color:#fda4af;">' + escapeHtml(blName) + '</div>' +
+                      '<div class="field-label">ID: ' +
+                      escapeHtml(b.discordId) +
+                      ' • Səbəb: ' +
+                      escapeHtml(b.reason) +
+                      ' • Vaxt: ' +
+                      escapeHtml(b.durationLabel) +
+                      '</div></div></div>' +
+                      '<button type="button" class="btn btn-danger" onclick="window.__spRemoveBlacklist(\'' +
+                      escapeHtml(b.discordId) +
+                      '\')">Sil</button></div>'
+                    );
                   })
                   .join('');
         }
