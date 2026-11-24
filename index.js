@@ -932,7 +932,7 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-app.post('/api/bot/connect', async (req, res) => {
+app.post('/api/keys', async (req, res) => {
   try {
     const body = req.body || {};
     if (typeof body.clientId === 'string') appState.db.botConfig.clientId = body.clientId.trim();
@@ -1169,7 +1169,7 @@ app.delete('/api/whitelist/:discordId', (req, res) => {
   }
 });
 
-app.post('/api/blacklist', (req, res) => {
+app.post('/api/blacklist', async (req, res) => {
   try {
     const body = req.body || {};
     const discordId = String(body.discordId || '').trim();
