@@ -1952,237 +1952,212 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <title>SADO PROTECT • Studio V2</title>
+  <title>SADO PROTECT • Cyber Command V3</title>
   <style>
     :root {
-      --bg-main: #060911;
-      --bg-card: #0d1322;
-      --bg-elevated: #141d33;
-      --border-soft: rgba(148, 163, 184, 0.16);
-      --accent-cyan: #06b6d4;
-      --accent-emerald: #10b981;
-      --accent-violet: #8b5cf6;
-      --accent-rose: #f43f5e;
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
+      --bg-base: #04060b;
+      --bg-surface: #0b0f19;
+      --bg-card: #101726;
+      --line: rgba(255, 255, 255, 0.09);
+      --gold: #f59e0b;
+      --teal: #14b8a6;
+      --sky: #38bdf8;
+      --rose: #fb7185;
+      --txt: #f8fafc;
+      --sub: #94a3b8;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
     body {
       background:
-        radial-gradient(circle at 12% 8%, rgba(6, 182, 212, 0.15), transparent 36%),
-        radial-gradient(circle at 88% 15%, rgba(139, 92, 246, 0.16), transparent 40%),
-        var(--bg-main);
-      color: var(--text-main);
+        radial-gradient(circle at 0% 0%, rgba(245, 158, 11, 0.13), transparent 38%),
+        radial-gradient(circle at 100% 100%, rgba(20, 184, 166, 0.14), transparent 42%),
+        var(--bg-base);
+      color: var(--txt);
       min-height: 100vh;
     }
-    .app-wrap { max-width: 1180px; margin: 0 auto; padding: 14px 16px 40px; display: grid; gap: 16px; }
-    .navbar {
-      position: sticky; top: 10px; z-index: 40;
-      background: rgba(13, 19, 34, 0.88);
-      backdrop-filter: blur(16px);
-      border: 1px solid var(--border-soft);
-      border-radius: 20px;
-      padding: 12px 16px;
-      display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+    .shell { max-width: 1140px; margin: 0 auto; padding: 14px 14px 44px; display: grid; gap: 16px; }
+    .topbar {
+      background: rgba(11, 15, 25, 0.94);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      border-radius: 22px;
+      padding: 12px 15px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
     }
-    .nav-left { display: flex; align-items: center; gap: 12px; }
-    .hamburger {
-      width: 46px; height: 46px; border-radius: 14px;
-      border: 1px solid rgba(6, 182, 212, 0.45);
-      background: linear-gradient(135deg, rgba(6, 182, 212, 0.22), rgba(139, 92, 246, 0.22));
-      color: #ffffff; font-size: 22px; font-weight: 900;
+    .brand-group { display: flex; align-items: center; gap: 12px; }
+    .menu-trigger {
+      width: 48px; height: 48px; border-radius: 15px;
+      border: 1px solid rgba(245, 158, 11, 0.55);
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      color: #090d16; font-size: 23px; font-weight: 900;
       display: inline-flex; align-items: center; justify-content: center;
       cursor: pointer; touch-action: manipulation;
     }
-    .hamburger:active { transform: scale(0.95); }
-    .logo-text { font-size: 18px; font-weight: 900; letter-spacing: 0.7px; background: linear-gradient(90deg, #38bdf8, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .logo-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-    .bot-chip {
-      padding: 7px 13px; border-radius: 999px; font-size: 12px; font-weight: 800;
-      background: rgba(16, 185, 129, 0.14); color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.35); white-space: nowrap;
+    .brand-name { font-size: 18px; font-weight: 900; letter-spacing: 0.6px; color: #fbbf24; }
+    .brand-meta { font-size: 12px; color: var(--sub); margin-top: 2px; }
+    .status-pill {
+      padding: 7px 12px; border-radius: 999px; font-size: 12px; font-weight: 800;
+      background: rgba(20, 184, 166, 0.14); color: #2dd4bf;
+      border: 1px solid rgba(20, 184, 166, 0.35); white-space: nowrap;
     }
 
-    /* Slide-over Sidebar Drawer */
-    .drawer-backdrop {
-      position: fixed; inset: 0; background: rgba(2, 6, 23, 0.74);
-      backdrop-filter: blur(4px); z-index: 90;
+    /* Fullscreen Command Menu Modal */
+    #navOverlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: rgba(4, 6, 11, 0.95);
+      padding: 20px 16px;
+      display: none; flex-direction: column; gap: 12px;
+      overflow-y: auto;
+    }
+    .nav-top { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+    .close-nav {
+      width: 42px; height: 42px; border-radius: 12px;
+      border: 1px solid var(--line); background: var(--bg-card);
+      color: #fff; font-size: 18px; font-weight: 900; cursor: pointer;
+    }
+    .menu-card-btn {
+      width: 100%; text-align: left; padding: 15px 16px; border-radius: 16px;
+      border: 1px solid var(--line); background: var(--bg-card);
+      color: var(--txt); font-size: 14px; font-weight: 800; cursor: pointer;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .menu-card-btn.active {
+      background: linear-gradient(135deg, #f59e0b, #ea580c);
+      color: #090d16; border-color: #fde68a;
+    }
+
+    .page-panel { display: none; gap: 16px; }
+    .page-panel.active { display: grid; }
+
+    .bento-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 12px; }
+    .bento-tile {
+      background: var(--bg-card); border: 1px solid var(--line);
+      border-radius: 20px; padding: 16px;
+      border-left: 4px solid var(--gold);
+    }
+    .bento-label { font-size: 12px; color: var(--sub); font-weight: 700; }
+    .bento-val { font-size: 24px; font-weight: 900; margin-top: 8px; color: #fff; word-break: break-word; }
+
+    .card-block {
+      background: var(--bg-surface); border: 1px solid var(--line);
+      border-radius: 22px; padding: 18px; display: grid; gap: 14px;
+    }
+    .card-block h2 { font-size: 16px; font-weight: 900; color: #fde68a; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); gap: 12px; }
+    label { display: grid; gap: 6px; font-size: 12px; font-weight: 700; color: var(--sub); }
+    input, select, textarea {
+      width: 100%; background: #060912; border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 13px; padding: 11px 13px; color: #fff; font-size: 14px; outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--gold); }
+    textarea { min-height: 110px; font-family: ui-monospace, monospace; }
+
+    .btn {
+      border: none; border-radius: 13px; padding: 11px 16px; font-size: 13px; font-weight: 800;
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      text-decoration: none;
+    }
+    .btn-gold { background: linear-gradient(135deg, #f59e0b, #d97706); color: #090d16; }
+    .btn-teal { background: linear-gradient(135deg, #14b8a6, #0d9488); color: #042f2e; }
+    .btn-sky { background: linear-gradient(135deg, #38bdf8, #0284c7); color: #fff; }
+    .btn-rose { background: linear-gradient(135deg, #fb7185, #e11d48); color: #fff; }
+    .btn-dark { background: #1e293b; color: #f8fafc; border: 1px solid var(--line); }
+    .btn-sm { padding: 7px 10px; font-size: 12px; border-radius: 9px; }
+
+    .script-box {
+      background: #070b14; border: 1px solid var(--line);
+      border-radius: 16px; padding: 14px; display: grid; gap: 10px;
+    }
+    .script-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .loader-box {
+      background: #03050a; border: 1px solid rgba(20, 184, 166, 0.3);
+      border-radius: 12px; padding: 11px; font-family: ui-monospace, monospace;
+      font-size: 12px; color: #2dd4bf; word-break: break-all; line-height: 1.5;
+    }
+    .prof-chip { display: inline-flex; align-items: center; gap: 7px; }
+    .prof-img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; background: #1e293b; }
+    .order-list { display: grid; gap: 8px; }
+    .order-row {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #070b14; border: 1px solid var(--line);
+      border-radius: 12px; padding: 10px 12px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 9px 6px; text-align: left; }
+    th { color: var(--sub); }
+    .toast {
+      position: fixed; bottom: 18px; right: 18px; z-index: 10000;
+      background: linear-gradient(135deg, #f59e0b, #14b8a6); color: #090d16;
+      font-weight: 900; padding: 12px 18px; border-radius: 14px;
       display: none;
     }
-    .drawer-backdrop.open { display: block; }
-    .side-drawer {
-      position: fixed; top: 0; left: 0; bottom: 0; width: 295px; max-width: 84vw;
-      background: #0b1120; border-right: 1px solid rgba(56, 189, 248, 0.25);
-      z-index: 100; padding: 18px 14px;
-      display: flex; flex-direction: column; gap: 10px;
-      transform: translateX(-105%); transition: transform 0.22s ease;
-      box-shadow: 20px 0 50px rgba(0, 0, 0, 0.75);
-    }
-    .side-drawer.open { transform: translateX(0); }
-    .drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 12px; border-bottom: 1px solid var(--border-soft); }
-    .close-drawer-btn {
-      width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border-soft);
-      background: var(--bg-elevated); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer;
-    }
-    .nav-item {
-      width: 100%; text-align: left; padding: 13px 14px; border-radius: 14px;
-      border: 1px solid transparent; background: rgba(20, 29, 51, 0.65);
-      color: #e2e8f0; font-size: 13px; font-weight: 800; cursor: pointer;
-      display: flex; align-items: center; gap: 10px;
-    }
-    .nav-item.active {
-      background: linear-gradient(135deg, #0284c7, #6d28d9);
-      border-color: rgba(125, 211, 252, 0.45);
-      color: #ffffff;
-      box-shadow: 0 8px 20px rgba(2, 132, 199, 0.3);
-    }
-
-    .view-section { display: none; gap: 16px; }
-    .view-section.active { display: grid; }
-
-    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-    .metric-card {
-      background: linear-gradient(160deg, #11192e, #0b101d);
-      border: 1px solid var(--border-soft);
-      border-radius: 18px; padding: 16px; position: relative; overflow: hidden;
-    }
-    .metric-card::after {
-      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-emerald));
-    }
-    .metric-title { font-size: 12px; color: var(--text-muted); font-weight: 700; }
-    .metric-number { font-size: 24px; font-weight: 900; color: #ffffff; margin-top: 8px; word-break: break-word; }
-
-    .panel-box {
-      background: var(--bg-card); border: 1px solid var(--border-soft);
-      border-radius: 20px; padding: 18px; display: grid; gap: 14px;
-    }
-    .panel-box h2 { font-size: 16px; font-weight: 800; color: #f1f5f9; display: flex; align-items: center; gap: 8px; }
-    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-    label { display: grid; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text-muted); }
-    input, select, textarea {
-      width: 100%; background: #070b15; border: 1px solid rgba(148, 163, 184, 0.22);
-      border-radius: 12px; padding: 11px 13px; color: #f8fafc; font-size: 14px; outline: none;
-    }
-    input:focus, select:focus, textarea:focus { border-color: var(--accent-cyan); }
-    textarea { min-height: 115px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-
-    .action-btn {
-      border: none; border-radius: 12px; padding: 11px 16px; font-size: 13px; font-weight: 800;
-      cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-      text-decoration: none; transition: transform 0.12s ease;
-    }
-    .action-btn:active { transform: scale(0.97); }
-    .btn-emerald { background: linear-gradient(135deg, #10b981, #059669); color: #022c22; }
-    .btn-cyan { background: linear-gradient(135deg, #06b6d4, #0284c7); color: #ffffff; }
-    .btn-violet { background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: #ffffff; }
-    .btn-rose { background: linear-gradient(135deg, #f43f5e, #e11d48); color: #ffffff; }
-    .btn-slate { background: #1e293b; color: #e2e8f0; border: 1px solid var(--border-soft); }
-    .btn-mini { padding: 7px 10px; font-size: 12px; border-radius: 9px; }
-
-    .script-card {
-      background: #080d19; border: 1px solid var(--border-soft);
-      border-radius: 15px; padding: 14px; display: grid; gap: 10px;
-    }
-    .script-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .code-preview {
-      background: #04070f; border: 1px solid rgba(16, 185, 129, 0.22);
-      border-radius: 11px; padding: 11px; font-family: ui-monospace, monospace;
-      font-size: 12px; color: #34d399; word-break: break-all; line-height: 1.5;
-    }
-
-    .user-badge { display: inline-flex; align-items: center; gap: 7px; }
-    .user-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; background: #1e293b; }
-
-    .order-stack { display: grid; gap: 8px; }
-    .order-item {
-      display: flex; align-items: center; justify-content: space-between;
-      background: #080d19; border: 1px solid var(--border-soft);
-      border-radius: 12px; padding: 10px 12px; gap: 10px;
-    }
-
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { border-bottom: 1px solid var(--border-soft); padding: 9px 6px; text-align: left; }
-    th { color: var(--text-muted); font-weight: 700; }
-
-    .toast-msg {
-      position: fixed; bottom: 18px; right: 18px; z-index: 200;
-      background: linear-gradient(135deg, #10b981, #06b6d4); color: #022c22;
-      font-weight: 900; padding: 12px 18px; border-radius: 13px;
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
-      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
-    }
-    .toast-msg.show { opacity: 1; }
   </style>
 </head>
 <body>
-  <div class="drawer-backdrop" id="drawerBackdrop" onclick="window.sadoToggleDrawer(false)"></div>
-
-  <aside class="side-drawer" id="sideDrawer">
-    <div class="drawer-header">
+  <div id="navOverlay">
+    <div class="nav-top">
       <div>
-        <div class="logo-text">SADO PROTECT</div>
-        <div class="logo-sub">Naviqasiya Menyusu</div>
+        <div class="brand-name">SADO PROTECT</div>
+        <div class="brand-meta">Bölmə Seçin</div>
       </div>
-      <button type="button" class="close-drawer-btn" onclick="window.sadoToggleDrawer(false)">✕</button>
+      <button type="button" class="close-nav" id="closeMenuBtn">✕</button>
     </div>
 
-    <button type="button" class="nav-item active" data-tab="overview" onclick="window.sadoSwitchTab('overview')">
+    <button type="button" class="menu-card-btn active" data-page="overview">
       <span>1️⃣</span><span>Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</span>
     </button>
-    <button type="button" class="nav-item" data-tab="scripts" onclick="window.sadoSwitchTab('scripts')">
+    <button type="button" class="menu-card-btn" data-page="scripts">
       <span>2️⃣</span><span>Script Yaratma &amp; Ultra Obfuscation</span>
     </button>
-    <button type="button" class="nav-item" data-tab="keys" onclick="window.sadoSwitchTab('keys')">
+    <button type="button" class="menu-card-btn" data-page="keys">
       <span>3️⃣</span><span>Key, Whitelist &amp; Blacklist</span>
     </button>
-    <button type="button" class="nav-item" data-tab="discord" onclick="window.sadoSwitchTab('discord')">
+    <button type="button" class="menu-card-btn" data-page="discord">
       <span>4️⃣</span><span>Discord Bot &amp; Panel Dizayn</span>
     </button>
-    <button type="button" class="nav-item" data-tab="sendpanel" onclick="window.sadoSwitchTab('sendpanel')">
+    <button type="button" class="menu-card-btn" data-page="sendpanel">
       <span>📤</span><span>Kanala Panel Göndər</span>
     </button>
-  </aside>
+  </div>
 
-  <div class="app-wrap">
-    <header class="navbar">
-      <div class="nav-left">
-        <button type="button" class="hamburger" id="openDrawerBtn" onclick="window.sadoToggleDrawer()" aria-label="Menyu">☰</button>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand-group">
+        <button type="button" class="menu-trigger" id="openMenuBtn" aria-label="Menyu">☰</button>
         <div>
-          <div class="logo-text">SADO PROTECT</div>
-          <div class="logo-sub" id="headerSub">Control Studio • Qoşulan Sunucu: Seçilməyib</div>
+          <div class="brand-name">SADO PROTECT</div>
+          <div class="brand-meta" id="headerSub">Cyber Command • Qoşulan Sunucu: Seçilməyib</div>
         </div>
       </div>
-      <div class="bot-chip" id="botStatusChip">Bot: Qoşulur...</div>
+      <div class="status-pill" id="botStatusChip">Bot: Qoşulur...</div>
     </header>
 
-    <!-- 1-Cİ BÖLMƏ: OVERVIEW -->
-    <section class="view-section active" id="view-overview">
-      <div class="metrics-grid">
-        <div class="metric-card"><div class="metric-title">Skriptlər</div><div class="metric-number" id="statScripts">0</div></div>
-        <div class="metric-card"><div class="metric-title">Keylər</div><div class="metric-number" id="statKeys">0</div></div>
-        <div class="metric-card"><div class="metric-title">Whitelist</div><div class="metric-number" id="statWl">0</div></div>
-        <div class="metric-card"><div class="metric-title">Blacklist</div><div class="metric-number" id="statBl">0</div></div>
-        <div class="metric-card"><div class="metric-title">Qoşulan Sunucu</div><div class="metric-number" id="statGuild">Seçilməyib</div></div>
+    <!-- 1-Cİ BÖLMƏ -->
+    <section class="page-panel active" id="page-overview">
+      <div class="bento-stats">
+        <div class="bento-tile"><div class="bento-label">Skriptlər</div><div class="bento-val" id="statScripts">0</div></div>
+        <div class="bento-tile"><div class="bento-label">Keylər</div><div class="bento-val" id="statKeys">0</div></div>
+        <div class="bento-tile"><div class="bento-label">Whitelist</div><div class="bento-val" id="statWl">0</div></div>
+        <div class="bento-tile"><div class="bento-label">Blacklist</div><div class="bento-val" id="statBl">0</div></div>
+        <div class="bento-tile"><div class="bento-label">Qoşulan Sunucu</div><div class="bento-val" id="statGuild">Seçilməyib</div></div>
       </div>
 
-      <div class="panel-box">
+      <div class="card-block">
         <h2>🕒 Son Key-lər (Yaradan &amp; İşlədən Profil)</h2>
-        <div id="recentKeysTable" class="logo-sub">Hələ key yaradılmayıb.</div>
+        <div id="recentKeysTable" class="brand-meta">Hələ key yaradılmayıb.</div>
       </div>
     </section>
 
-    <!-- 2-Cİ BÖLMƏ: SCRIPT & OBFUSCATION -->
-    <section class="view-section" id="view-scripts">
-      <div class="panel-box">
+    <!-- 2-Cİ BÖLMƏ -->
+    <section class="page-panel" id="page-scripts">
+      <div class="card-block">
         <h2>📜 Yeni Skript Yarat &amp; Dosyadan Yüklə</h2>
-        <div class="form-grid">
-          <label>Skript Adı<input id="scNameInput" placeholder="Məs: SADO HUB V2" /></label>
-          <label>Dosyadan Yüklə (.lua / .txt)<input type="file" id="scFileInput" accept=".lua,.txt,text/plain" onchange="window.sadoReadScriptFile(this)" /></label>
+        <div class="grid-2">
+          <label>Skript Adı<input id="scNameInput" placeholder="Məs: SADO HUB V3" /></label>
+          <label>Dosyadan Yüklə (.lua / .txt)<input type="file" id="scFileInput" accept=".lua,.txt,text/plain" /></label>
         </div>
         <label>Lua Skript Kodu<textarea id="scCodeInput" placeholder="print('SADO PROTECT')"></textarea></label>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Ultra Qoruma Səviyyəsi
             <select id="scObfLevel">
               <option value="1">Level 1 — Base64 Shield</option>
@@ -2192,27 +2167,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </label>
           <label style="display:flex;align-items:center;gap:10px;padding-top:20px;cursor:pointer;">
             <input type="checkbox" id="scObfToggle" checked style="width:18px;height:18px;" />
-            <span>Obfuscation Açıq / Bağlı (Açanda ultra şifrələnir)</span>
+            <span>Obfuscation Açıq / Bağlı</span>
           </label>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="action-btn btn-emerald" onclick="window.sadoCreateScript()">➕ Skript Yarat</button>
-          <button type="button" class="action-btn btn-violet" onclick="window.sadoTestObfuscate()">🛡️ Kodu Şifrələ (Preview)</button>
+          <button type="button" class="btn btn-gold" id="createScriptBtn">➕ Skript Yarat</button>
+          <button type="button" class="btn btn-sky" id="testObfBtn">🛡️ Kodu Şifrələ (Preview)</button>
         </div>
         <label>Şifrələnmiş Kod Nəticəsi<textarea id="scObfPreview" readonly></textarea></label>
       </div>
 
-      <div class="panel-box">
+      <div class="card-block">
         <h2>📂 Mövcud Skriptlər (Get Script: Əvvəl Script Key, Sonra Loadstring)</h2>
         <div id="existingScriptsList"></div>
       </div>
     </section>
 
-    <!-- 3-CÜ BÖLMƏ: KEY, WHITELIST & BLACKLIST -->
-    <section class="view-section" id="view-keys">
-      <div class="panel-box">
+    <!-- 3-CÜ BÖLMƏ -->
+    <section class="page-panel" id="page-keys">
+      <div class="card-block">
         <h2>🔑 Key Yarat (Müddət Seçimi ilə)</h2>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Skript<select id="keyScSelect"></select></label>
           <label>Vaxt Seçimi
             <select id="keyDurSelect">
@@ -2227,22 +2202,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </select>
           </label>
         </div>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Key Sayı<input id="keyCountInput" type="number" min="1" max="50" value="1" /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="action-btn btn-emerald" onclick="window.sadoGenerateKeys()">🔑 Key Yarat</button>
+            <button type="button" class="btn btn-gold" id="genKeysBtn">🔑 Key Yarat</button>
           </div>
         </div>
         <div id="allKeysTable"></div>
       </div>
 
-      <div class="panel-box">
+      <div class="card-block">
         <h2>✅ Whitelist (Vaxt &amp; İlk Cihaz HWID Kilidi)</h2>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Discord User ID<input id="wlDiscordInput" placeholder="Məs: 987654321098765432" /></label>
           <label>Skript<select id="wlScSelect"></select></label>
         </div>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Vaxt Seçimi
             <select id="wlDurSelect">
               <option value="lifetime" selected>lifetime</option>
@@ -2261,55 +2236,55 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </label>
         </div>
         <div>
-          <button type="button" class="action-btn btn-cyan" onclick="window.sadoAddWhitelist()">➕ Whitelist-ə Əlavə Et</button>
+          <button type="button" class="btn btn-teal" id="addWlBtn">➕ Whitelist-ə Əlavə Et</button>
         </div>
         <div id="allWlTable"></div>
       </div>
 
-      <div class="panel-box">
+      <div class="card-block">
         <h2>🚫 Blacklist</h2>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Discord User ID<input id="blDiscordInput" placeholder="Discord User ID" /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="action-btn btn-rose" onclick="window.sadoAddBlacklist()">🚫 Blacklist-ə At</button>
+            <button type="button" class="btn btn-rose" id="addBlBtn">🚫 Blacklist-ə At</button>
           </div>
         </div>
         <div id="allBlTable"></div>
       </div>
     </section>
 
-    <!-- 4-CÜ BÖLMƏ: DISCORD BOT & PANEL DİZAYN -->
-    <section class="view-section" id="view-discord">
-      <div class="panel-box">
+    <!-- 4-CÜ BÖLMƏ -->
+    <section class="page-panel" id="page-discord">
+      <div class="card-block">
         <h2>🤖 1. Join Discord &amp; 2. Sunucu ID Bağlantısı</h2>
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
-          <a id="inviteBotAnchor" href="https://discord.gg/sado-protect" target="_blank" rel="noopener noreferrer" class="action-btn btn-violet">💬 Join Discord (Botu Dəvət Et)</a>
-          <span class="bot-chip" id="guildNameLiveBadge">Sunucu Adı: Seçilməyib</span>
+          <a id="inviteBotAnchor" href="https://discord.gg/sado-protect" target="_blank" rel="noopener noreferrer" class="btn btn-sky">💬 Join Discord (Botu Dəvət Et)</a>
+          <span class="status-pill" id="guildNameLiveBadge">Sunucu Adı: Seçilməyib</span>
         </div>
-        <div class="form-grid">
-          <label>Botun Olduğu Sunucular<select id="botGuildDropdown" onchange="window.sadoSelectGuildDropdown(this.value)"></select></label>
-          <label>Sunucu (Guild) ID<input id="inputGuildId" placeholder="Sunucu ID yazın..." oninput="window.sadoLiveGuildLookup()" /></label>
+        <div class="grid-2">
+          <label>Botun Olduğu Sunucular<select id="botGuildDropdown"></select></label>
+          <label>Sunucu (Guild) ID<input id="inputGuildId" placeholder="Sunucu ID yazın..." /></label>
         </div>
-        <div class="form-grid">
-          <label>Sahib Discord User ID<input id="inputOwnerDiscordId" placeholder="Discord User ID..." oninput="window.sadoLiveGuildLookup()" /></label>
+        <div class="grid-2">
+          <label>Sahib Discord User ID<input id="inputOwnerDiscordId" placeholder="Discord User ID..." /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="action-btn btn-emerald" onclick="window.sadoSaveWorkspaceLink()">🔗 Sunucuya Bağla</button>
+            <button type="button" class="btn btn-gold" id="saveWsLinkBtn">🔗 Sunucuya Bağla</button>
           </div>
         </div>
       </div>
 
-      <div class="panel-box">
+      <div class="card-block">
         <h2>🎨 Panel Dizaynı (Düymə Adı, Emoji, Rəng &amp; Sıra)</h2>
-        <div class="form-grid">
-          <label>Embed Rəngi (Hex)<input id="cfgEmbedColor" value="#10B981" oninput="window.sadoSyncColorPicker(this.value)" /></label>
-          <label>Rəng Seçici<input type="color" id="cfgColorPicker" value="#10b981" style="height:44px;padding:4px;" oninput="document.getElementById('cfgEmbedColor').value = this.value.toUpperCase()" /></label>
+        <div class="grid-2">
+          <label>Embed Rəngi (Hex)<input id="cfgEmbedColor" value="#10B981" /></label>
+          <label>Rəng Seçici<input type="color" id="cfgColorPicker" value="#10b981" style="height:44px;padding:4px;" /></label>
         </div>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Panel Başlığı<input id="cfgTitle" value="SADO PROTECT • Script Panel" /></label>
           <label>Panel Təsviri<input id="cfgDesc" value="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin." /></label>
         </div>
 
-        <div class="form-grid">
+        <div class="grid-2">
           <label>1. Düymə Adı (Redeem)<input id="cfgRedeemLabel" value="Redeem Key" /></label>
           <label>Emoji<input id="cfgRedeemEmoji" value="🔑" /></label>
           <label>Rəngi
@@ -2322,7 +2297,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </label>
         </div>
 
-        <div class="form-grid">
+        <div class="grid-2">
           <label>2. Düymə Adı (Get Script)<input id="cfgGetScriptLabel" value="Get Script" /></label>
           <label>Emoji<input id="cfgGetScriptEmoji" value="📜" /></label>
           <label>Rəngi
@@ -2335,7 +2310,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </label>
         </div>
 
-        <div class="form-grid">
+        <div class="grid-2">
           <label>3. Düymə Adı (Reset HWID)<input id="cfgResetHwidLabel" value="Reset HWID" /></label>
           <label>Emoji<input id="cfgResetHwidEmoji" value="⚙️" /></label>
           <label>Rəngi
@@ -2348,7 +2323,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </label>
         </div>
 
-        <div class="form-grid">
+        <div class="grid-2">
           <label>4. Düymə Adı (Get Stats)<input id="cfgStatsLabel" value="Get Stats" /></label>
           <label>Emoji<input id="cfgStatsEmoji" value="📊" /></label>
           <label>Rəngi
@@ -2363,386 +2338,138 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
         <div>
           <label style="margin-bottom:8px;">Butonların Yerini Dəyiş (Sıralama)</label>
-          <div class="order-stack" id="btnOrderStack"></div>
+          <div class="order-list" id="btnOrderStack"></div>
         </div>
 
         <div>
-          <button type="button" class="action-btn btn-emerald" onclick="window.sadoSavePanelDesign()">💾 Dizaynı Saxla &amp; Aktiv Paneldə Yenilə</button>
+          <button type="button" class="btn btn-gold" id="saveDesignBtn">💾 Dizaynı Saxla &amp; Aktiv Paneldə Yenilə</button>
         </div>
       </div>
     </section>
 
     <!-- KANALA PANEL GÖNDƏR -->
-    <section class="view-section" id="view-sendpanel">
-      <div class="panel-box">
+    <section class="page-panel" id="page-sendpanel">
+      <div class="card-block">
         <h2>📤 Discord Kanalına Skript Paneli Göndər</h2>
-        <div class="form-grid">
+        <div class="grid-2">
           <label>Discord Channel ID<input id="sendChannelIdInput" placeholder="Kanal ID yazın..." /></label>
           <label>Mövcud Skript<select id="sendScriptSelect"></select></label>
         </div>
         <div>
-          <button type="button" class="action-btn btn-cyan" onclick="window.sadoSendPanel()">📤 Paneli Göndər</button>
+          <button type="button" class="btn btn-teal" id="sendPanelBtn">📤 Paneli Göndər</button>
         </div>
       </div>
     </section>
   </div>
 
-  <div class="toast-msg" id="toastBox"></div>
+  <div class="toast" id="toastBox"></div>
 
   <script>
-    const BTN_TITLE_MAP = {
+    const BTN_NAMES = {
       redeem: 'Redeem Key',
       getscript: 'Get Script',
       resethwid: 'Reset HWID',
       stats: 'Get Stats',
     };
 
-    const appState = {
+    const uiState = {
       hydrated: false,
       buttonOrder: ['redeem', 'getscript', 'resethwid', 'stats'],
     };
 
-    const getWorkspaceId = () => {
+    const getWsId = () => {
       try {
-        const existing = localStorage.getItem('sado_studio_ws');
-        if (existing) return existing;
-        const generated = 'ws_' + Math.random().toString(36).slice(2, 10);
-        localStorage.setItem('sado_studio_ws', generated);
-        return generated;
+        const saved = localStorage.getItem('sado_cyber_ws');
+        if (saved) return saved;
+        const fresh = 'ws_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('sado_cyber_ws', fresh);
+        return fresh;
       } catch (_e) {
         return 'default';
       }
     };
 
-    const currentWsId = getWorkspaceId();
+    const wsId = getWsId();
 
-    const requestApi = (url, options) => {
-      const opts = options || {};
-      const headers = Object.assign({ 'X-Client-Workspace': currentWsId }, opts.headers || {});
-      return fetch(url, Object.assign({}, opts, { headers }));
+    const apiCall = (url, opts) => {
+      const options = opts || {};
+      const headers = Object.assign({ 'X-Client-Workspace': wsId }, options.headers || {});
+      return fetch(url, Object.assign({}, options, { headers }));
     };
 
-    const notify = (text) => {
-      const box = document.getElementById('toastBox');
-      if (!box) return;
-      box.textContent = String(text || '');
-      box.classList.add('show');
-      setTimeout(() => box.classList.remove('show'), 2500);
+    const showToast = (msg) => {
+      const el = document.getElementById('toastBox');
+      if (!el) return;
+      el.textContent = String(msg || '');
+      el.style.display = 'block';
+      setTimeout(() => {
+        el.style.display = 'none';
+      }, 2400);
     };
 
-    window.sadoToggleDrawer = (forceVal) => {
-      const drawer = document.getElementById('sideDrawer');
-      const backdrop = document.getElementById('drawerBackdrop');
-      if (!drawer || !backdrop) return;
-      const shouldOpen = typeof forceVal === 'boolean' ? forceVal : !drawer.classList.contains('open');
-      drawer.classList.toggle('open', shouldOpen);
-      backdrop.classList.toggle('open', shouldOpen);
+    const setMenuVisible = (visible) => {
+      const overlay = document.getElementById('navOverlay');
+      if (overlay) overlay.style.display = visible ? 'flex' : 'none';
     };
 
-    window.sadoSwitchTab = (tabName) => {
-      document.querySelectorAll('.view-section').forEach((sec) => {
-        sec.classList.toggle('active', sec.id === 'view-' + tabName);
+    const activatePage = (pageKey) => {
+      document.querySelectorAll('.page-panel').forEach((panel) => {
+        panel.classList.toggle('active', panel.id === 'page-' + pageKey);
       });
-      document.querySelectorAll('.nav-item').forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
+      document.querySelectorAll('.menu-card-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-page') === pageKey);
       });
-      window.sadoToggleDrawer(false);
+      setMenuVisible(false);
     };
 
-    const drawOrderStack = () => {
+    const renderButtonOrderList = () => {
       const stack = document.getElementById('btnOrderStack');
       if (!stack) return;
-      stack.innerHTML = appState.buttonOrder
-        .map((k, idx) => {
+      stack.innerHTML = uiState.buttonOrder
+        .map((key, idx) => {
           return (
-            '<div class="order-item"><strong>#' +
+            '<div class="order-row"><strong>#' +
             (idx + 1) +
             ' • ' +
-            (BTN_TITLE_MAP[k] || k) +
+            (BTN_NAMES[key] || key) +
             '</strong><div style="display:flex;gap:6px;">' +
-            '<button type="button" class="action-btn btn-slate btn-mini" onclick="window.sadoMoveButton(\'' +
-            k +
-            '\', -1)">⬆️</button>' +
-            '<button type="button" class="action-btn btn-slate btn-mini" onclick="window.sadoMoveButton(\'' +
-            k +
-            '\', 1)">⬇️</button>' +
+            '<button type="button" class="btn btn-dark btn-sm" data-move-key="' +
+            key +
+            '" data-move-dir="-1">⬆️</button>' +
+            '<button type="button" class="btn btn-dark btn-sm" data-move-key="' +
+            key +
+            '" data-move-dir="1">⬇️</button>' +
             '</div></div>'
           );
         })
         .join('');
     };
 
-    window.sadoMoveButton = (key, delta) => {
-      const idx = appState.buttonOrder.indexOf(key);
-      const next = idx + delta;
-      if (idx < 0 || next < 0 || next >= appState.buttonOrder.length) return;
-      const arr = appState.buttonOrder.slice();
-      const tmp = arr[idx];
-      arr[idx] = arr[next];
-      arr[next] = tmp;
-      appState.buttonOrder = arr;
-      drawOrderStack();
+    const renderProfile = (name, avatarUrl, fallback) => {
+      const txt = name || fallback || '-';
+      const img = avatarUrl ? '<img class="prof-img" src="' + avatarUrl + '" alt="" />' : '';
+      return '<span class="prof-chip">' + img + '<span>' + txt + '</span></span>';
     };
 
-    window.sadoSyncColorPicker = (hex) => {
-      const picker = document.getElementById('cfgColorPicker');
-      if (picker && /^#[0-9a-fA-F]{6}$/.test(String(hex || '').trim())) {
-        picker.value = String(hex).trim();
-      }
-    };
-
-    window.sadoReadScriptFile = (input) => {
-      const file = input && input.files && input.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        document.getElementById('scCodeInput').value = String(reader.result || '');
-        const nameEl = document.getElementById('scNameInput');
-        if (nameEl && !nameEl.value.trim()) {
-          nameEl.value = file.name.replace(/\.(lua|txt)$/i, '');
-        }
-      };
-      reader.readAsText(file);
-    };
-
-    window.sadoCopyString = (encoded) => {
-      const raw = decodeURIComponent(encoded || '');
-      const ta = document.createElement('textarea');
-      ta.value = raw;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      notify('Kopyalandı!');
-    };
-
-    window.sadoCreateScript = async () => {
-      const name = document.getElementById('scNameInput').value.trim();
-      const code = document.getElementById('scCodeInput').value;
-      const obfuscate = document.getElementById('scObfToggle').checked;
-      const obfuscateLevel = Number(document.getElementById('scObfLevel').value || 3);
-      const r = await requestApi('/api/scripts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, code, obfuscate, obfuscateLevel }),
-      });
-      const j = await r.json();
-      if (j && j.ok) document.getElementById('scNameInput').value = '';
-      notify((j && j.message) || 'Skript yaradıldı');
-      await refreshDashboard();
-    };
-
-    window.sadoDeleteScript = async (id) => {
-      const r = await requestApi('/api/scripts/' + id, { method: 'DELETE' });
-      const j = await r.json();
-      notify((j && j.message) || 'Skript silindi');
-      await refreshDashboard();
-    };
-
-    window.sadoTestObfuscate = async () => {
-      const code = document.getElementById('scCodeInput').value;
-      const level = Number(document.getElementById('scObfLevel').value || 3);
-      const r = await requestApi('/api/obfuscate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, level }),
-      });
-      const j = await r.json();
-      if (j && j.obfuscated) document.getElementById('scObfPreview').value = j.obfuscated;
-      notify((j && j.message) || 'Şifrələndi');
-    };
-
-    window.sadoGenerateKeys = async () => {
-      const scriptId = document.getElementById('keyScSelect').value;
-      const duration = document.getElementById('keyDurSelect').value;
-      const amount = Number(document.getElementById('keyCountInput').value || 1);
-      const createdByDiscordId = document.getElementById('inputOwnerDiscordId').value.trim();
-      const r = await requestApi('/api/keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scriptId, duration, amount, createdByDiscordId }),
-      });
-      const j = await r.json();
-      notify((j && j.message) || 'Key yaradıldı');
-      await refreshDashboard();
-    };
-
-    window.sadoDeleteKey = async (encKey) => {
-      const r = await requestApi('/api/keys/' + encKey, { method: 'DELETE' });
-      const j = await r.json();
-      notify((j && j.message) || 'Key silindi');
-      await refreshDashboard();
-    };
-
-    window.sadoAddWhitelist = async () => {
-      const discordUserId = document.getElementById('wlDiscordInput').value.trim();
-      const scriptId = document.getElementById('wlScSelect').value;
-      const duration = document.getElementById('wlDurSelect').value;
-      const hwidLocked = document.getElementById('wlHwidCheck').checked;
-      const addedByDiscordId = document.getElementById('inputOwnerDiscordId').value.trim();
-      const r = await requestApi('/api/whitelist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discordUserId, scriptId, duration, hwidLocked, addedByDiscordId }),
-      });
-      const j = await r.json();
-      if (j && j.ok) document.getElementById('wlDiscordInput').value = '';
-      notify((j && j.message) || 'Whitelist yeniləndi');
-      await refreshDashboard();
-    };
-
-    window.sadoToggleWlLock = async (id) => {
-      const r = await requestApi('/api/whitelist/' + id + '/toggle-lock', { method: 'POST' });
-      const j = await r.json();
-      notify((j && j.message) || 'Kilid dəyişdi');
-      await refreshDashboard();
-    };
-
-    window.sadoResetWlHwid = async (id) => {
-      const r = await requestApi('/api/whitelist/' + id + '/reset-hwid', { method: 'POST' });
-      const j = await r.json();
-      notify((j && j.message) || 'HWID sıfırlandı');
-      await refreshDashboard();
-    };
-
-    window.sadoDeleteWl = async (id) => {
-      const r = await requestApi('/api/whitelist/' + id, { method: 'DELETE' });
-      const j = await r.json();
-      notify((j && j.message) || 'Silindi');
-      await refreshDashboard();
-    };
-
-    window.sadoAddBlacklist = async () => {
-      const discordUserId = document.getElementById('blDiscordInput').value.trim();
-      const r = await requestApi('/api/blacklist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discordUserId }),
-      });
-      const j = await r.json();
-      if (j && j.ok) document.getElementById('blDiscordInput').value = '';
-      notify((j && j.message) || 'Blacklist yeniləndi');
-      await refreshDashboard();
-    };
-
-    window.sadoDeleteBl = async (id) => {
-      const r = await requestApi('/api/blacklist/' + id, { method: 'DELETE' });
-      const j = await r.json();
-      notify((j && j.message) || 'Silindi');
-      await refreshDashboard();
-    };
-
-    window.sadoSelectGuildDropdown = (val) => {
-      if (!val) return;
-      document.getElementById('inputGuildId').value = val;
-      window.sadoLiveGuildLookup();
-    };
-
-    window.sadoLiveGuildLookup = async () => {
-      const guildId = document.getElementById('inputGuildId').value.trim();
-      const discordUserId = document.getElementById('inputOwnerDiscordId').value.trim();
-      if (!guildId && !discordUserId) return;
-      const r = await requestApi('/api/workspace/link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId, discordUserId }),
-      });
-      const j = await r.json();
-      if (j && j.guildName) {
-        document.getElementById('statGuild').textContent = j.guildName;
-        document.getElementById('headerSub').textContent = 'Control Studio • Qoşulan Sunucu: ' + j.guildName;
-        document.getElementById('guildNameLiveBadge').textContent = 'Sunucu Adı: ' + j.guildName;
-      }
-    };
-
-    window.sadoSaveWorkspaceLink = async () => {
-      const guildId = document.getElementById('inputGuildId').value.trim();
-      const discordUserId = document.getElementById('inputOwnerDiscordId').value.trim();
-      const r = await requestApi('/api/workspace/link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId, discordUserId }),
-      });
-      const j = await r.json();
-      appState.hydrated = false;
-      notify((j && j.message) || 'Sunucu bağlandı');
-      await refreshDashboard();
-    };
-
-    window.sadoSavePanelDesign = async () => {
-      const body = {
-        embedColor: document.getElementById('cfgEmbedColor').value.trim(),
-        title: document.getElementById('cfgTitle').value.trim(),
-        description: document.getElementById('cfgDesc').value.trim(),
-        redeemLabel: document.getElementById('cfgRedeemLabel').value.trim(),
-        redeemEmoji: document.getElementById('cfgRedeemEmoji').value.trim(),
-        redeemStyle: document.getElementById('cfgRedeemStyle').value,
-        getScriptLabel: document.getElementById('cfgGetScriptLabel').value.trim(),
-        getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value.trim(),
-        getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
-        resetHwidLabel: document.getElementById('cfgResetHwidLabel').value.trim(),
-        resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value.trim(),
-        resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
-        statsLabel: document.getElementById('cfgStatsLabel').value.trim(),
-        statsEmoji: document.getElementById('cfgStatsEmoji').value.trim(),
-        statsStyle: document.getElementById('cfgStatsStyle').value,
-        buttonOrder: appState.buttonOrder.slice(),
-      };
-      const r = await requestApi('/api/panel-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const j = await r.json();
-      notify((j && j.message) || 'Panel dizaynı yeniləndi');
-      await refreshDashboard();
-    };
-
-    window.sadoSendPanel = async () => {
-      const channelId = document.getElementById('sendChannelIdInput').value.trim();
-      const scriptId = document.getElementById('sendScriptSelect').value;
-      const r = await requestApi('/api/send-panel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId, scriptId }),
-      });
-      const j = await r.json();
-      notify((j && j.message) || 'Panel göndərildi');
-      await refreshDashboard();
-    };
-
-    const renderProfileBadge = (name, avatarUrl, fallbackText) => {
-      const label = name || fallbackText || '-';
-      const img = avatarUrl
-        ? '<img class="user-avatar" src="' + avatarUrl + '" alt="" />'
-        : '';
-      return '<span class="user-badge">' + img + '<span>' + label + '</span></span>';
-    };
-
-    const refreshDashboard = async () => {
+    const loadAllData = async () => {
       try {
-        const [stRes, stateRes] = await Promise.all([
-          requestApi('/api/status'),
-          requestApi('/api/state'),
-        ]);
+        const [stRes, stateRes] = await Promise.all([apiCall('/api/status'), apiCall('/api/state')]);
         const st = await stRes.json();
         const data = await stateRes.json();
         if (!data || !data.ok) return;
 
-        const guildLabel = data.guildName || 'Seçilməyib';
+        const gName = data.guildName || 'Seçilməyib';
         document.getElementById('botStatusChip').textContent =
           st && st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...';
         document.getElementById('headerSub').textContent =
-          'Control Studio • Qoşulan Sunucu: ' + guildLabel;
+          'Cyber Command • Qoşulan Sunucu: ' + gName;
         document.getElementById('statScripts').textContent = String((data.scripts || []).length);
         document.getElementById('statKeys').textContent = String((data.keys || []).length);
         document.getElementById('statWl').textContent = String((data.whitelists || []).length);
         document.getElementById('statBl').textContent = String((data.blacklist || []).length);
-        document.getElementById('statGuild').textContent = guildLabel;
+        document.getElementById('statGuild').textContent = gName;
 
-        if (data.inviteUrl) {
-          document.getElementById('inviteBotAnchor').href = data.inviteUrl;
-        }
+        if (data.inviteUrl) document.getElementById('inviteBotAnchor').href = data.inviteUrl;
 
         const gDrop = document.getElementById('botGuildDropdown');
         if (gDrop) {
@@ -2753,150 +2480,134 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           if (data.guildId) gDrop.value = data.guildId;
         }
 
-        const scriptOptions = (data.scripts || [])
+        const scOpts = (data.scripts || [])
           .map((s) => '<option value="' + s.id + '">' + s.name + '</option>')
           .join('');
         ['keyScSelect', 'wlScSelect', 'sendScriptSelect'].forEach((id) => {
           const el = document.getElementById(id);
-          if (el) el.innerHTML = scriptOptions;
+          if (el) el.innerHTML = scOpts;
         });
 
         const recentList = (data.keys || []).slice(0, 8);
-        const recentEl = document.getElementById('recentKeysTable');
-        if (recentEl) {
-          recentEl.innerHTML = recentList.length
-            ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th></tr>' +
-              recentList
-                .map(
-                  (k) =>
-                    '<tr><td><code>' +
-                    k.key +
-                    '</code></td><td>' +
-                    (k.duration || 'lifetime') +
-                    '</td><td>' +
-                    renderProfileBadge(k.createdByName, k.createdByAvatar, '-') +
-                    '</td><td>' +
-                    (k.used
-                      ? renderProfileBadge(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
-                      : 'Hələ işlənməyib') +
-                    '</td></tr>'
-                )
-                .join('') +
-              '</table>'
-            : 'Hələ key yaradılmayıb.';
-        }
+        document.getElementById('recentKeysTable').innerHTML = recentList.length
+          ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th></tr>' +
+            recentList
+              .map(
+                (k) =>
+                  '<tr><td><code>' +
+                  k.key +
+                  '</code></td><td>' +
+                  (k.duration || 'lifetime') +
+                  '</td><td>' +
+                  renderProfile(k.createdByName, k.createdByAvatar, '-') +
+                  '</td><td>' +
+                  (k.used
+                    ? renderProfile(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
+                    : 'Hələ işlənməyib') +
+                  '</td></tr>'
+              )
+              .join('') +
+            '</table>'
+          : 'Hələ key yaradılmayıb.';
 
-        const scListEl = document.getElementById('existingScriptsList');
-        if (scListEl) {
-          const origin = window.location.origin;
-          scListEl.innerHTML = (data.scripts || [])
-            .map((s) => {
-              const loaderUrl = origin + '/loader/' + s.loaderToken + '?ws=' + currentWsId;
-              const getScriptSnippet =
-                'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
-              const badge = s.obfuscated
-                ? '🛡️ Obfuscation Açıq (Lv.' + (s.obfuscateLevel || 3) + ')'
-                : 'Obfuscation Bağlı';
-              return (
-                '<div class="script-card"><div class="script-top"><div><strong>📜 ' +
-                s.name +
-                '</strong><div class="logo-sub">' +
-                badge +
-                '</div></div><div style="display:flex;gap:8px;">' +
-                '<button type="button" class="action-btn btn-cyan btn-mini" onclick="window.sadoCopyString(\'' +
-                encodeURIComponent(getScriptSnippet) +
-                '\')">📋 Get Script Kopyala</button>' +
-                '<button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteScript(\'' +
-                s.id +
-                '\')">🗑️ Sil</button></div></div>' +
-                '<div class="code-preview">' +
-                getScriptSnippet.replace(/\n/g, '<br/>') +
-                '</div></div>'
-              );
-            })
-            .join('');
-        }
+        const origin = window.location.origin;
+        document.getElementById('existingScriptsList').innerHTML = (data.scripts || [])
+          .map((s) => {
+            const loaderUrl = origin + '/loader/' + s.loaderToken + '?ws=' + wsId;
+            const snippet = 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
+            const badge = s.obfuscated
+              ? '🛡️ Obfuscation Açıq (Lv.' + (s.obfuscateLevel || 3) + ')'
+              : 'Obfuscation Bağlı';
+            return (
+              '<div class="script-box"><div class="script-head"><div><strong>📜 ' +
+              s.name +
+              '</strong><div class="brand-meta">' +
+              badge +
+              '</div></div><div style="display:flex;gap:8px;">' +
+              '<button type="button" class="btn btn-teal btn-sm" data-copy-snippet="' +
+              encodeURIComponent(snippet) +
+              '">📋 Get Script Kopyala</button>' +
+              '<button type="button" class="btn btn-rose btn-sm" data-del-script="' +
+              s.id +
+              '">🗑️ Sil</button></div></div>' +
+              '<div class="loader-box">' +
+              snippet.replace(/\n/g, '<br/>') +
+              '</div></div>'
+            );
+          })
+          .join('');
 
-        const allKeysEl = document.getElementById('allKeysTable');
-        if (allKeysEl) {
-          allKeysEl.innerHTML = (data.keys || []).length
-            ? '<table><tr><th>Key</th><th>Skript</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
-              (data.keys || [])
-                .map(
-                  (k) =>
-                    '<tr><td><code>' +
-                    k.key +
-                    '</code></td><td>' +
-                    (k.scriptName || '-') +
-                    '</td><td>' +
-                    (k.duration || 'lifetime') +
-                    '</td><td>' +
-                    renderProfileBadge(k.createdByName, k.createdByAvatar, '-') +
-                    '</td><td>' +
-                    (k.used
-                      ? renderProfileBadge(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
-                      : 'Boş') +
-                    '</td><td><button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteKey(\'' +
-                    encodeURIComponent(k.key) +
-                    '\')">Sil</button></td></tr>'
-                )
-                .join('') +
-              '</table>'
-            : '<div class="logo-sub">Hələ key yaradılmayıb.</div>';
-        }
+        document.getElementById('allKeysTable').innerHTML = (data.keys || []).length
+          ? '<table><tr><th>Key</th><th>Skript</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
+            (data.keys || [])
+              .map(
+                (k) =>
+                  '<tr><td><code>' +
+                  k.key +
+                  '</code></td><td>' +
+                  (k.scriptName || '-') +
+                  '</td><td>' +
+                  (k.duration || 'lifetime') +
+                  '</td><td>' +
+                  renderProfile(k.createdByName, k.createdByAvatar, '-') +
+                  '</td><td>' +
+                  (k.used
+                    ? renderProfile(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
+                    : 'Boş') +
+                  '</td><td><button type="button" class="btn btn-rose btn-sm" data-del-key="' +
+                  encodeURIComponent(k.key) +
+                  '">Sil</button></td></tr>'
+              )
+              .join('') +
+            '</table>'
+          : '<div class="brand-meta">Hələ key yaradılmayıb.</div>';
 
-        const allWlEl = document.getElementById('allWlTable');
-        if (allWlEl) {
-          allWlEl.innerHTML = (data.whitelists || []).length
-            ? '<table><tr><th>İstifadəçi</th><th>Bağlı HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
-              (data.whitelists || [])
-                .map(
-                  (w) =>
-                    '<tr><td>' +
-                    renderProfileBadge(w.username, w.avatarUrl, w.discordUserId) +
-                    '<div class="logo-sub">Edən: ' +
-                    (w.addedByName || '-') +
-                    '</div></td><td><code>' +
-                    (w.hwid || 'İlk cihaza bağlanacaq') +
-                    '</code></td><td>' +
-                    (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
-                    '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
-                    '<button type="button" class="action-btn btn-cyan btn-mini" onclick="window.sadoToggleWlLock(\'' +
-                    w.id +
-                    '\')">Kilid</button>' +
-                    '<button type="button" class="action-btn btn-violet btn-mini" onclick="window.sadoResetWlHwid(\'' +
-                    w.id +
-                    '\')">Reset HWID</button>' +
-                    '<button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteWl(\'' +
-                    w.id +
-                    '\')">Sil</button></div></td></tr>'
-                )
-                .join('') +
-              '</table>'
-            : '<div class="logo-sub">Aktiv whitelist yoxdur.</div>';
-        }
+        document.getElementById('allWlTable').innerHTML = (data.whitelists || []).length
+          ? '<table><tr><th>İstifadəçi</th><th>Bağlı HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
+            (data.whitelists || [])
+              .map(
+                (w) =>
+                  '<tr><td>' +
+                  renderProfile(w.username, w.avatarUrl, w.discordUserId) +
+                  '<div class="brand-meta">Edən: ' +
+                  (w.addedByName || '-') +
+                  '</div></td><td><code>' +
+                  (w.hwid || 'İlk cihaza bağlanacaq') +
+                  '</code></td><td>' +
+                  (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
+                  '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                  '<button type="button" class="btn btn-sky btn-sm" data-lock-wl="' +
+                  w.id +
+                  '">Kilid</button>' +
+                  '<button type="button" class="btn btn-gold btn-sm" data-reset-wl="' +
+                  w.id +
+                  '">Reset HWID</button>' +
+                  '<button type="button" class="btn btn-rose btn-sm" data-del-wl="' +
+                  w.id +
+                  '">Sil</button></div></td></tr>'
+              )
+              .join('') +
+            '</table>'
+          : '<div class="brand-meta">Aktiv whitelist yoxdur.</div>';
 
-        const allBlEl = document.getElementById('allBlTable');
-        if (allBlEl) {
-          allBlEl.innerHTML = (data.blacklist || []).length
-            ? '<table><tr><th>İstifadəçi</th><th>ID</th><th>Sil</th></tr>' +
-              (data.blacklist || [])
-                .map(
-                  (b) =>
-                    '<tr><td>' +
-                    renderProfileBadge(b.username, b.avatarUrl, b.discordUserId) +
-                    '</td><td>' +
-                    b.discordUserId +
-                    '</td><td><button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteBl(\'' +
-                    b.id +
-                    '\')">Çıxar</button></td></tr>'
-                )
-                .join('') +
-              '</table>'
-            : '<div class="logo-sub">Blacklist boşdur.</div>';
-        }
+        document.getElementById('allBlTable').innerHTML = (data.blacklist || []).length
+          ? '<table><tr><th>İstifadəçi</th><th>ID</th><th>Sil</th></tr>' +
+            (data.blacklist || [])
+              .map(
+                (b) =>
+                  '<tr><td>' +
+                  renderProfile(b.username, b.avatarUrl, b.discordUserId) +
+                  '</td><td>' +
+                  b.discordUserId +
+                  '</td><td><button type="button" class="btn btn-rose btn-sm" data-del-bl="' +
+                  b.id +
+                  '">Çıxar</button></td></tr>'
+              )
+              .join('') +
+            '</table>'
+          : '<div class="brand-meta">Blacklist boşdur.</div>';
 
-        if (!appState.hydrated) {
+        if (!uiState.hydrated) {
           document.getElementById('inputGuildId').value = data.guildId || '';
           document.getElementById('inputOwnerDiscordId').value = data.discordUserId || '';
           document.getElementById('guildNameLiveBadge').textContent =
@@ -2904,7 +2615,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           const cfg = data.panelConfig || {};
           if (cfg.embedColor) {
             document.getElementById('cfgEmbedColor').value = cfg.embedColor.toUpperCase();
-            window.sadoSyncColorPicker(cfg.embedColor);
+            document.getElementById('cfgColorPicker').value = cfg.embedColor;
           }
           if (cfg.title) document.getElementById('cfgTitle').value = cfg.title;
           if (cfg.description) document.getElementById('cfgDesc').value = cfg.description;
@@ -2921,17 +2632,285 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           if (cfg.statsEmoji) document.getElementById('cfgStatsEmoji').value = cfg.statsEmoji;
           if (cfg.statsStyle) document.getElementById('cfgStatsStyle').value = cfg.statsStyle;
           if (Array.isArray(cfg.buttonOrder) && cfg.buttonOrder.length) {
-            appState.buttonOrder = cfg.buttonOrder.slice();
+            uiState.buttonOrder = cfg.buttonOrder.slice();
           }
-          drawOrderStack();
-          appState.hydrated = true;
+          renderButtonOrderList();
+          uiState.hydrated = true;
         }
       } catch (_e) {}
     };
 
-    drawOrderStack();
-    refreshDashboard();
-    setInterval(refreshDashboard, 6500);
+    document.getElementById('openMenuBtn').addEventListener('click', () => setMenuVisible(true));
+    document.getElementById('closeMenuBtn').addEventListener('click', () => setMenuVisible(false));
+
+    document.querySelectorAll('.menu-card-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activatePage(btn.getAttribute('data-page'));
+      });
+    });
+
+    document.getElementById('scFileInput').addEventListener('change', (ev) => {
+      const f = ev.target && ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        document.getElementById('scCodeInput').value = String(r.result || '');
+        const n = document.getElementById('scNameInput');
+        if (n && !n.value.trim()) n.value = f.name.replace(/\.(lua|txt)$/i, '');
+      };
+      r.readAsText(f);
+    });
+
+    document.getElementById('createScriptBtn').addEventListener('click', async () => {
+      const name = document.getElementById('scNameInput').value.trim();
+      const code = document.getElementById('scCodeInput').value;
+      const obfuscate = document.getElementById('scObfToggle').checked;
+      const obfuscateLevel = Number(document.getElementById('scObfLevel').value || 3);
+      const r = await apiCall('/api/scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, code, obfuscate, obfuscateLevel }),
+      });
+      const j = await r.json();
+      if (j && j.ok) document.getElementById('scNameInput').value = '';
+      showToast((j && j.message) || 'Skript yaradıldı');
+      await loadAllData();
+    });
+
+    document.getElementById('testObfBtn').addEventListener('click', async () => {
+      const code = document.getElementById('scCodeInput').value;
+      const level = Number(document.getElementById('scObfLevel').value || 3);
+      const r = await apiCall('/api/obfuscate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, level }),
+      });
+      const j = await r.json();
+      if (j && j.obfuscated) document.getElementById('scObfPreview').value = j.obfuscated;
+      showToast((j && j.message) || 'Şifrələndi');
+    });
+
+    document.getElementById('genKeysBtn').addEventListener('click', async () => {
+      const scriptId = document.getElementById('keyScSelect').value;
+      const duration = document.getElementById('keyDurSelect').value;
+      const amount = Number(document.getElementById('keyCountInput').value || 1);
+      const createdByDiscordId = document.getElementById('inputOwnerDiscordId').value.trim();
+      const r = await apiCall('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scriptId, duration, amount, createdByDiscordId }),
+      });
+      const j = await r.json();
+      showToast((j && j.message) || 'Key yaradıldı');
+      await loadAllData();
+    });
+
+    document.getElementById('addWlBtn').addEventListener('click', async () => {
+      const discordUserId = document.getElementById('wlDiscordInput').value.trim();
+      const scriptId = document.getElementById('wlScSelect').value;
+      const duration = document.getElementById('wlDurSelect').value;
+      const hwidLocked = document.getElementById('wlHwidCheck').checked;
+      const addedByDiscordId = document.getElementById('inputOwnerDiscordId').value.trim();
+      const r = await apiCall('/api/whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordUserId, scriptId, duration, hwidLocked, addedByDiscordId }),
+      });
+      const j = await r.json();
+      if (j && j.ok) document.getElementById('wlDiscordInput').value = '';
+      showToast((j && j.message) || 'Whitelist yeniləndi');
+      await loadAllData();
+    });
+
+    document.getElementById('addBlBtn').addEventListener('click', async () => {
+      const discordUserId = document.getElementById('blDiscordInput').value.trim();
+      const r = await apiCall('/api/blacklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordUserId }),
+      });
+      const j = await r.json();
+      if (j && j.ok) document.getElementById('blDiscordInput').value = '';
+      showToast((j && j.message) || 'Blacklist yeniləndi');
+      await loadAllData();
+    });
+
+    const syncGuildLive = async () => {
+      const guildId = document.getElementById('inputGuildId').value.trim();
+      const discordUserId = document.getElementById('inputOwnerDiscordId').value.trim();
+      if (!guildId && !discordUserId) return;
+      const r = await apiCall('/api/workspace/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, discordUserId }),
+      });
+      const j = await r.json();
+      if (j && j.guildName) {
+        document.getElementById('statGuild').textContent = j.guildName;
+        document.getElementById('headerSub').textContent = 'Cyber Command • Qoşulan Sunucu: ' + j.guildName;
+        document.getElementById('guildNameLiveBadge').textContent = 'Sunucu Adı: ' + j.guildName;
+      }
+    };
+
+    document.getElementById('botGuildDropdown').addEventListener('change', (ev) => {
+      if (!ev.target.value) return;
+      document.getElementById('inputGuildId').value = ev.target.value;
+      syncGuildLive();
+    });
+
+    document.getElementById('inputGuildId').addEventListener('input', syncGuildLive);
+    document.getElementById('inputOwnerDiscordId').addEventListener('input', syncGuildLive);
+
+    document.getElementById('saveWsLinkBtn').addEventListener('click', async () => {
+      const guildId = document.getElementById('inputGuildId').value.trim();
+      const discordUserId = document.getElementById('inputOwnerDiscordId').value.trim();
+      const r = await apiCall('/api/workspace/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, discordUserId }),
+      });
+      const j = await r.json();
+      uiState.hydrated = false;
+      showToast((j && j.message) || 'Sunucu bağlandı');
+      await loadAllData();
+    });
+
+    document.getElementById('cfgColorPicker').addEventListener('input', (ev) => {
+      document.getElementById('cfgEmbedColor').value = ev.target.value.toUpperCase();
+    });
+
+    document.getElementById('cfgEmbedColor').addEventListener('input', (ev) => {
+      const val = ev.target.value.trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+        document.getElementById('cfgColorPicker').value = val;
+      }
+    });
+
+    document.getElementById('saveDesignBtn').addEventListener('click', async () => {
+      const payload = {
+        embedColor: document.getElementById('cfgEmbedColor').value.trim(),
+        title: document.getElementById('cfgTitle').value.trim(),
+        description: document.getElementById('cfgDesc').value.trim(),
+        redeemLabel: document.getElementById('cfgRedeemLabel').value.trim(),
+        redeemEmoji: document.getElementById('cfgRedeemEmoji').value.trim(),
+        redeemStyle: document.getElementById('cfgRedeemStyle').value,
+        getScriptLabel: document.getElementById('cfgGetScriptLabel').value.trim(),
+        getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value.trim(),
+        getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
+        resetHwidLabel: document.getElementById('cfgResetHwidLabel').value.trim(),
+        resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value.trim(),
+        resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
+        statsLabel: document.getElementById('cfgStatsLabel').value.trim(),
+        statsEmoji: document.getElementById('cfgStatsEmoji').value.trim(),
+        statsStyle: document.getElementById('cfgStatsStyle').value,
+        buttonOrder: uiState.buttonOrder.slice(),
+      };
+      const r = await apiCall('/api/panel-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      showToast((j && j.message) || 'Panel dizaynı yeniləndi');
+      await loadAllData();
+    });
+
+    document.getElementById('sendPanelBtn').addEventListener('click', async () => {
+      const channelId = document.getElementById('sendChannelIdInput').value.trim();
+      const scriptId = document.getElementById('sendScriptSelect').value;
+      const r = await apiCall('/api/send-panel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, scriptId }),
+      });
+      const j = await r.json();
+      showToast((j && j.message) || 'Panel göndərildi');
+      await loadAllData();
+    });
+
+    document.addEventListener('click', async (ev) => {
+      const target = ev.target.closest('button');
+      if (!target) return;
+
+      if (target.hasAttribute('data-copy-snippet')) {
+        const raw = decodeURIComponent(target.getAttribute('data-copy-snippet') || '');
+        const ta = document.createElement('textarea');
+        ta.value = raw;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Get Script kodu kopyalandı!');
+        return;
+      }
+
+      if (target.hasAttribute('data-del-script')) {
+        const r = await apiCall('/api/scripts/' + target.getAttribute('data-del-script'), { method: 'DELETE' });
+        const j = await r.json();
+        showToast((j && j.message) || 'Skript silindi');
+        await loadAllData();
+        return;
+      }
+
+      if (target.hasAttribute('data-del-key')) {
+        const r = await apiCall('/api/keys/' + target.getAttribute('data-del-key'), { method: 'DELETE' });
+        const j = await r.json();
+        showToast((j && j.message) || 'Key silindi');
+        await loadAllData();
+        return;
+      }
+
+      if (target.hasAttribute('data-lock-wl')) {
+        const r = await apiCall('/api/whitelist/' + target.getAttribute('data-lock-wl') + '/toggle-lock', { method: 'POST' });
+        const j = await r.json();
+        showToast((j && j.message) || 'Kilid dəyişdi');
+        await loadAllData();
+        return;
+      }
+
+      if (target.hasAttribute('data-reset-wl')) {
+        const r = await apiCall('/api/whitelist/' + target.getAttribute('data-reset-wl') + '/reset-hwid', { method: 'POST' });
+        const j = await r.json();
+        showToast((j && j.message) || 'HWID sıfırlandı');
+        await loadAllData();
+        return;
+      }
+
+      if (target.hasAttribute('data-del-wl')) {
+        const r = await apiCall('/api/whitelist/' + target.getAttribute('data-del-wl'), { method: 'DELETE' });
+        const j = await r.json();
+        showToast((j && j.message) || 'Whitelist silindi');
+        await loadAllData();
+        return;
+      }
+
+      if (target.hasAttribute('data-del-bl')) {
+        const r = await apiCall('/api/blacklist/' + target.getAttribute('data-del-bl'), { method: 'DELETE' });
+        const j = await r.json();
+        showToast((j && j.message) || 'Blacklist silindi');
+        await loadAllData();
+        return;
+      }
+
+      if (target.hasAttribute('data-move-key')) {
+        const key = target.getAttribute('data-move-key');
+        const dir = Number(target.getAttribute('data-move-dir') || 0);
+        const idx = uiState.buttonOrder.indexOf(key);
+        const next = idx + dir;
+        if (idx >= 0 && next >= 0 && next < uiState.buttonOrder.length) {
+          const copy = uiState.buttonOrder.slice();
+          const tmp = copy[idx];
+          copy[idx] = copy[next];
+          copy[next] = tmp;
+          uiState.buttonOrder = copy;
+          renderButtonOrderList();
+        }
+      }
+    });
+
+    renderButtonOrderList();
+    loadAllData();
+    setInterval(loadAllData, 6500);
   </script>
 </body>
 </html>`;
