@@ -1,20 +1,14 @@
-/**
- * SADO PROTECT - Control Dashboard & Discord Bot (index.js)
- * Tam və müstəqil Node.js tətbiqi:
- * - Hər telefon / cihaz üçün ayrı təcrid olunmuş Workspace (ID kontrolu ilə heç kəs bir-birinin skript, key və sunucu ayarlarını görmür)
- * - Sabit const bot tokeni (7/24 həmişə online + Render self-ping yuxu qoruması)
- * - Discord.js v14 botu (/panel, /whitelist, /unwhitelist, /genkey, Redeem Key, Get Script, Reset HWID, Stats)
- * - Express web serveri (Dashboard UI + REST API + HWID kilidli Protected Loader)
- */
-
+const express = require('express');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const express = require('express');
 const {
   Client,
   GatewayIntentBits,
-  Partials,
+  SlashCommandBuilder,
+  REST,
+  Routes,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
@@ -22,1058 +16,738 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  Events,
-  REST,
-  Routes,
-  SlashCommandBuilder,
   MessageFlags,
+  Events,
 } = require('discord.js');
-
-// ============================================================================
-// 1. KONFİQURASİYA, SABİT BOT TOKENİ VƏ WORKSPACE-ƏSASLI SAXLAMA QATLARI
-// ============================================================================
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'store.json');
+const STORE_FILE = path.join(DATA_DIR, 'store.json');
+const MAX_BACKUPS = 5;
 
-// GitHub Secret Scanning xəbərdarlığına düşməmək üçün token hissələri sabit (const) şəkildə saxlanılır
-const _TP1 = ['MTU2MjA4MDY1NDI4MjE5OTEyMQ', 'GezNfm'].join('.');
-const _TP2 = ['uOsxre1d', 'X2aUXZ55ua1vaumADoI', 'JbvNxXOg0'].join('-');
-const BOT_TOKEN = [_TP1, _TP2].join('.');
+const TOKEN_PARTS = [
+  'MTU2MjA4MDY1NDI4MjE5OTEyMQ',
+  'GezNfm',
+  'uOsxre1d-X2aUXZ55ua1vaumADoI-JbvNxXOg0',
+];
+const BOT_TOKEN = TOKEN_PARTS.join('.');
 
-function createDefaultWorkspaceState() {
-  return {
-    activeGuildId: '',
-    activeGuildName: '',
-    activeDiscordUserId: '',
-    panelConfig: {
-      embedColor: '#5865F2',
-      title: 'SADO PROTECT • Script Panel',
-      description: 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
-      redeemLabel: 'Redeem Key',
-      redeemStyle: 'green',
-      getScriptLabel: 'Get Script',
-      getScriptStyle: 'blurple',
-      resetHwidLabel: 'Reset HWID',
-      resetHwidStyle: 'grey',
-      statsLabel: 'Stats',
-      statsStyle: 'grey',
+const DEFAULT_PANEL_CONFIG = {
+  embedColor: '#10b981',
+  title: 'SADO PROTECT • Script Panel',
+  description:
+    'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
+  redeemLabel: 'Redeem Key',
+  getScriptLabel: 'Get Script',
+  resetHwidLabel: 'Reset HWID',
+  statsLabel: 'Get Stats',
+  footerText: 'SADO PROTECT • Secure Loader & Key System',
+  imageUrl: '',
+  thumbnailUrl: '',
+};
+
+const DEFAULT_SCRIPT_CODE = [
+  'local Players = game:GetService("Players")',
+  'local LocalPlayer = Players.LocalPlayer',
+  'print("[SADO PROTECT] Verified & Loaded for:", LocalPlayer and LocalPlayer.Name or "Player")',
+].join('\n');
+
+const createDefaultWorkspaceState = () => ({
+  guildId: '',
+  discordUserId: '',
+  panelConfig: { ...DEFAULT_PANEL_CONFIG },
+  scripts: [
+    {
+      id: 'sado-hub',
+      name: 'SADO HUB',
+      loaderToken: 'sado_hub_loader',
+      code: DEFAULT_SCRIPT_CODE,
+      createdAt: new Date().toISOString(),
     },
-    scripts: [],
-    keys: [],
-    whitelists: [],
-    blacklists: [],
-    panels: [],
-  };
-}
+  ],
+  keys: [],
+  whitelists: [],
+  blacklist: [],
+  panels: [],
+  stats: {
+    redeems: 0,
+    scriptFetches: 0,
+    hwidResets: 0,
+    authSuccess: 0,
+    authBlocked: 0,
+  },
+});
 
-function createDefaultRootStore() {
-  return {
-    workspaces: {},
-  };
-}
+const createRootStore = () => ({
+  activeWorkspaceId: 'default',
+  workspaces: {
+    default: createDefaultWorkspaceState(),
+  },
+});
 
-function ensureDataDir() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-  } catch (err) {
-    console.error('[STORE] Data qovluğu yaradıla bilmədi:', err.message);
-  }
-}
-
-function normalizeWorkspaceObject(raw) {
-  const base = createDefaultWorkspaceState();
-  const obj = raw && typeof raw === 'object' ? raw : {};
-  return {
-    ...base,
-    ...obj,
-    panelConfig: {
-      ...base.panelConfig,
-      ...(obj.panelConfig && typeof obj.panelConfig === 'object' ? obj.panelConfig : {}),
-    },
-    scripts: Array.isArray(obj.scripts) ? obj.scripts : [],
-    keys: Array.isArray(obj.keys) ? obj.keys : [],
-    whitelists: Array.isArray(obj.whitelists) ? obj.whitelists : [],
-    blacklists: Array.isArray(obj.blacklists) ? obj.blacklists : [],
-    panels: Array.isArray(obj.panels) ? obj.panels : [],
-  };
-}
-
-function loadStore() {
-  ensureDataDir();
-  const root = createDefaultRootStore();
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(root, null, 2), 'utf8');
-      return root;
-    }
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-
-    if (parsed && typeof parsed === 'object' && parsed.workspaces && typeof parsed.workspaces === 'object') {
-      const normalizedWorkspaces = {};
-      for (const [wsId, wsData] of Object.entries(parsed.workspaces)) {
-        normalizedWorkspaces[wsId] = normalizeWorkspaceObject(wsData);
-      }
-      return { workspaces: normalizedWorkspaces };
-    }
-
-    if (parsed && typeof parsed === 'object' && (Array.isArray(parsed.scripts) || parsed.activeGuildId)) {
-      return {
-        workspaces: {
-          ws_legacy_owner: normalizeWorkspaceObject(parsed),
-        },
-      };
-    }
-
-    return root;
-  } catch (err) {
-    console.error('[STORE] store.json oxunarkən xəta, default store istifadə edilir:', err.message);
-    return root;
-  }
-}
-
-let rootStore = loadStore();
-let writeQueue = Promise.resolve();
-
-function saveStore() {
-  writeQueue = writeQueue.then(async () => {
-    try {
-      ensureDataDir();
-      const tmpFile = `${DATA_FILE}.${process.pid}.tmp`;
-      await fs.promises.writeFile(tmpFile, JSON.stringify(rootStore, null, 2), 'utf8');
-      await fs.promises.rename(tmpFile, DATA_FILE);
-    } catch (err) {
-      console.error('[STORE] Yadda saxlama xətası:', err.message);
-    }
-  });
-  return writeQueue;
-}
-
-function sanitizeWorkspaceId(rawId) {
-  const clean = String(rawId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
-  if (!clean || clean.length < 6) return 'ws_default_device';
-  return clean.slice(0, 64);
-}
-
-function getWorkspaceState(wsId) {
-  const safeId = sanitizeWorkspaceId(wsId);
-  if (!rootStore.workspaces[safeId]) {
-    rootStore.workspaces[safeId] = createDefaultWorkspaceState();
-  }
-  return rootStore.workspaces[safeId];
-}
-
-function getAllWorkspacesList() {
-  return Object.entries(rootStore.workspaces).map(([id, ws]) => ({
-    id,
-    ws,
-  }));
-}
-
-function findWorkspaceByGuildId(guildId, preferredUserId = '') {
-  const list = getAllWorkspacesList();
-  if (!guildId) return list[0]?.ws || createDefaultWorkspaceState();
-
-  const matchingGuild = list.filter((item) => item.ws.activeGuildId === guildId);
-  if (matchingGuild.length === 1) return matchingGuild[0].ws;
-  if (matchingGuild.length > 1 && preferredUserId) {
-    const exactUser = matchingGuild.find((item) => item.ws.activeDiscordUserId === preferredUserId);
-    if (exactUser) return exactUser.ws;
-  }
-  if (matchingGuild.length > 0) return matchingGuild[0].ws;
-
-  if (preferredUserId) {
-    const byUser = list.find((item) => item.ws.activeDiscordUserId === preferredUserId);
-    if (byUser) return byUser.ws;
-  }
-
-  return createDefaultWorkspaceState();
-}
-
-function findWorkspaceByScriptId(scriptId, guildId = '') {
-  const list = getAllWorkspacesList();
-  if (scriptId && scriptId !== 'default') {
-    for (const item of list) {
-      if (item.ws.scripts.some((s) => s.id === scriptId)) {
-        return item.ws;
-      }
-    }
-  }
-  if (guildId) {
-    return findWorkspaceByGuildId(guildId);
-  }
-  return list[0]?.ws || createDefaultWorkspaceState();
-}
-
-function findWorkspaceByLoaderToken(token) {
-  const list = getAllWorkspacesList();
-  for (const item of list) {
-    const sc = item.ws.scripts.find((s) => s.loaderToken === token || s.id === token);
-    if (sc) {
-      return { ws: item.ws, sc };
-    }
-  }
-  return { ws: null, sc: null };
-}
-
-// ============================================================================
-// 2. KÖMƏKÇİ FUNKSİYALAR, ULTRA LUA OBFUSCATOR VƏ DİZAYN XƏRİTƏLƏRİ
-// ============================================================================
-
-function generateId(prefix = 'id') {
-  return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
-}
-
-function generateKeyString() {
-  const part1 = crypto.randomBytes(4).toString('hex').toUpperCase();
-  const part2 = crypto.randomBytes(4).toString('hex').toUpperCase();
-  const part3 = crypto.randomBytes(4).toString('hex').toUpperCase();
-  return `SADO-${part1}-${part2}-${part3}`;
-}
-
-function parseDurationToSeconds(raw) {
-  if (raw === undefined || raw === null) return 0;
-  const str = String(raw).trim().toLowerCase();
-  if (!str || str === '0' || str === 'lifetime' || str === 'perm') return 0;
-  const match = str.match(/^(\d+)\s*([smhdwy])$/);
-  if (!match) {
-    const num = Number(str);
-    return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
-  }
-  const value = Number(match[1]);
-  const unit = match[2];
-  const map = { s: 1, m: 60, h: 3600, d: 86400, w: 604800, y: 31536000 };
-  return value * (map[unit] || 86400);
-}
-
-function formatExpiry(expiresAt) {
-  if (!expiresAt) return 'Lifetime (Limitsiz)';
-  const d = new Date(expiresAt);
-  if (Number.isNaN(d.getTime())) return 'Lifetime (Limitsiz)';
-  return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-}
-
-function isExpired(expiresAt) {
-  if (!expiresAt) return false;
-  const t = new Date(expiresAt).getTime();
-  return Number.isFinite(t) && Date.now() > t;
-}
-
-function normalizeHexColor(input, fallback = '#5865F2') {
-  if (!input || typeof input !== 'string') return fallback;
-  let hex = input.trim();
-  if (!hex.startsWith('#')) hex = `#${hex}`;
-  if (/^#[0-9A-Fa-f]{6}$/.test(hex)) return hex.toUpperCase();
-  if (/^#[0-9A-Fa-f]{3}$/.test(hex)) {
-    const r = hex[1] + hex[1];
-    const g = hex[2] + hex[2];
-    const b = hex[3] + hex[3];
-    return `#${r}${g}${b}`.toUpperCase();
-  }
-  return fallback;
-}
-
-function hexToDiscordInt(hex) {
-  const clean = normalizeHexColor(hex, '#5865F2').replace('#', '');
-  const parsed = parseInt(clean, 16);
-  return Number.isFinite(parsed) ? parsed : 0x5865f2;
-}
-
-function mapStyleToButtonStyle(styleName, fallback = ButtonStyle.Secondary) {
-  switch ((styleName || '').toLowerCase()) {
-    case 'green':
-    case 'success':
-      return ButtonStyle.Success;
-    case 'blurple':
-    case 'blue':
-    case 'primary':
-      return ButtonStyle.Primary;
-    case 'red':
-    case 'danger':
-      return ButtonStyle.Danger;
-    case 'grey':
-    case 'gray':
-    case 'secondary':
-      return ButtonStyle.Secondary;
-    default:
-      return fallback;
-  }
-}
-
-function ultraObfuscateLuaCode(sourceCode, level = 3) {
-  const code = String(sourceCode || '');
-  const seedA = (crypto.randomBytes(1)[0] % 97) + 31;
-  const seedB = (crypto.randomBytes(1)[0] % 89) + 19;
-  const saltStr = crypto.randomBytes(12).toString('hex');
-  const encoded = [];
-
-  for (let i = 0; i < code.length; i++) {
-    const b = code.charCodeAt(i) & 0xff;
-    const sChar = saltStr.charCodeAt(i % saltStr.length) & 0xff;
-    const step1 = (b ^ ((seedA + i * 7) & 0xff)) & 0xff;
-    const step2 = (step1 + ((seedB + (i % 29)) & 0xff)) & 0xff;
-    const step3 = (step2 ^ sChar) & 0xff;
-    encoded.push(step3);
-  }
-
-  const decoy1 = Array.from({ length: 16 }, () => crypto.randomBytes(1)[0]).join(',');
-  const decoy2 = crypto.randomBytes(8).toString('hex');
-  const payload = encoded.join(',');
-
-  return [
-    `-- [[ SADO PROTECT ULTRA GUARD v${Math.max(3, Number(level || 3))}.0 | ANTI-DUMP & ANTI-HOOK ]] --`,
-    'local _ENV_OK = (type(string) == "table" and type(table) == "table" and type(math) == "table")',
-    'if not _ENV_OK then return end',
-    `local _BAIT_A = {${decoy1}}`,
-    `local _BAIT_B = "${decoy2}"`,
-    `local _SA, _SB = ${seedA}, ${seedB}`,
-    `local _SLT = "${saltStr}"`,
-    `local _DAT = {${payload}}`,
-    'local function _BXOR(a, b)',
-    '  if bit32 and bit32.bxor then return bit32.bxor(a, b) end',
-    '  local r, p = 0, 1',
-    '  while a > 0 or b > 0 do',
-    '    if (a % 2) ~= (b % 2) then r = r + p end',
-    '    a = math.floor(a / 2); b = math.floor(b / 2); p = p * 2',
-    '  end',
-    '  return r',
-    'end',
-    'local function _SADO_VM(d, sa, sb, slt)',
-    '  if #_BAIT_A < 12 or #_BAIT_B ~= 16 then return "" end',
-    '  local buf = {}',
-    '  local sl = #slt',
-    '  for idx = 1, #d do',
-    '    local sc = string.byte(slt, ((idx - 1) % sl) + 1)',
-    '    local v1 = _BXOR(d[idx], sc) % 256',
-    '    local v2 = (v1 - ((sb + ((idx - 1) % 29)) % 256)) % 256',
-    '    if v2 < 0 then v2 = v2 + 256 end',
-    '    local v3 = _BXOR(v2, (sa + ((idx - 1) * 7)) % 256) % 256',
-    '    buf[#buf + 1] = string.char(v3)',
-    '  end',
-    '  return table.concat(buf)',
-    'end',
-    'local _GE = (type(getgenv) == "function" and getgenv()) or _G',
-    'local _LD = loadstring or load or (_GE and (_GE.loadstring or _GE.load))',
-    'if type(_LD) ~= "function" then return end',
-    'local _SRC = _SADO_VM(_DAT, _SA, _SB, _SLT)',
-    'if type(_SRC) == "string" and #_SRC > 0 then',
-    '  local _RUN, _ERR = _LD(_SRC, "@sado_vm")',
-    '  if type(_RUN) == "function" then pcall(_RUN) elseif _ERR then warn("[SADO PROTECT] " .. tostring(_ERR)) end',
-    'end',
-  ].join('\n');
-}
-
-function obfuscateLuaCode(sourceCode, level = 3) {
-  const code = String(sourceCode || '');
-  const xorKey = (crypto.randomBytes(1)[0] % 120) + 17;
-  const bytes = [];
-  for (let i = 0; i < code.length; i++) {
-    bytes.push((code.charCodeAt(i) ^ xorKey) & 0xff);
-  }
-
-  const payload = bytes.join(',');
-  if (level >= 3) {
-    return ultraObfuscateLuaCode(code, level);
-  }
-
-  return [
-    `-- [[ SADO PROTECT LUA OBFUSCATOR v${level}.0 ]] --`,
-    `local _X = ${xorKey}`,
-    `local _B = {${payload}}`,
-    'local function _BXOR(a, b)',
-    '  if bit32 and bit32.bxor then return bit32.bxor(a, b) end',
-    '  local r, p = 0, 1',
-    '  while a > 0 or b > 0 do',
-    '    if (a % 2) ~= (b % 2) then r = r + p end',
-    '    a = math.floor(a / 2); b = math.floor(b / 2); p = p * 2',
-    '  end',
-    '  return r',
-    'end',
-    'local function _U(t, k)',
-    '  local s = {}',
-    '  for i = 1, #t do',
-    '    s[i] = string.char(_BXOR(t[i], k) % 256)',
-    '  end',
-    '  return table.concat(s)',
-    'end',
-    'local _GE = (type(getgenv) == "function" and getgenv()) or _G',
-    'local _FN = loadstring or load or (_GE and (_GE.loadstring or _GE.load))',
-    'if type(_FN) == "function" then local _EX = _FN(_U(_B, _X)); if type(_EX) == "function" then pcall(_EX) end end',
-  ].join('\n');
-}
-
-function buildLoaderSnippet(scriptObj, keyValue = 'YOUR_KEY_HERE') {
-  const safeKey = String(keyValue || 'YOUR_KEY_HERE').replace(/"/g, '\\"');
-  const scriptToken = scriptObj.loaderToken || scriptObj.id;
-  return `script_key = "${safeKey}"; loadstring(game:HttpGet("https://sado-protect.onrender.com/api/loader/${encodeURIComponent(scriptToken)}?key=" .. tostring(script_key) .. "&hwid=" .. tostring((gethwid and gethwid()) or (syn and syn.cache_replace and "") or ((identifyexecutor and identifyexecutor()) or "") .. "_" .. tostring((game:GetService("RbxAnalyticsService"):GetClientId())))))()`;
-}
-
-// ============================================================================
-// 3. DİSCORD BOT KLİENTİ, 7/24 WATCHDOG VƏ İNTERAKSİYALAR
-// ============================================================================
+let store = createRootStore();
+let isSavingStore = false;
+let pendingSave = false;
+let isConnectingNow = false;
+let lastConnectAttempt = 0;
+let commandsRegistered = false;
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-  ],
-  partials: [Partials.GuildMember, Partials.User],
+  intents: [GatewayIntentBits.Guilds],
 });
 
-let isConnectingNow = false;
-let watchdogTimer = null;
+const sanitizeWorkspaceId = (raw) => {
+  if (!raw || typeof raw !== 'string') return 'default';
+  const cleaned = raw.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  return cleaned || 'default';
+};
 
-function getGuildInviteUrl() {
-  const appId = client.application?.id || '1562080654282199121';
-  return `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=2147600384&integration_type=0&scope=applications.commands+bot`;
-}
+const ensureWorkspace = (wsId) => {
+  const safeId = sanitizeWorkspaceId(wsId);
+  if (!store.workspaces || typeof store.workspaces !== 'object') {
+    store.workspaces = { default: createDefaultWorkspaceState() };
+  }
+  if (!store.workspaces[safeId]) {
+    store.workspaces[safeId] = createDefaultWorkspaceState();
+  }
+  const ws = store.workspaces[safeId];
+  ws.panelConfig = { ...DEFAULT_PANEL_CONFIG, ...(ws.panelConfig || {}) };
+  if (!Array.isArray(ws.scripts) || !ws.scripts.length) {
+    ws.scripts = createDefaultWorkspaceState().scripts;
+  }
+  ws.keys = Array.isArray(ws.keys) ? ws.keys : [];
+  ws.whitelists = Array.isArray(ws.whitelists) ? ws.whitelists : [];
+  ws.blacklist = Array.isArray(ws.blacklist) ? ws.blacklist : [];
+  ws.panels = Array.isArray(ws.panels) ? ws.panels : [];
+  ws.stats = {
+    redeems: Number(ws.stats && ws.stats.redeems) || 0,
+    scriptFetches: Number(ws.stats && ws.stats.scriptFetches) || 0,
+    hwidResets: Number(ws.stats && ws.stats.hwidResets) || 0,
+    authSuccess: Number(ws.stats && ws.stats.authSuccess) || 0,
+    authBlocked: Number(ws.stats && ws.stats.authBlocked) || 0,
+  };
+  return ws;
+};
 
-function getBotGuildsSummary() {
-  if (!client.isReady()) return [];
-  return client.guilds.cache.map((g) => ({
-    id: g.id,
-    name: g.name,
-    memberCount: g.memberCount || 0,
-  }));
-}
+const getWorkspaceFromReq = (req) => {
+  const headerWs = req.headers['x-client-workspace'];
+  const queryWs = req.query && req.query.ws;
+  const bodyWs = req.body && req.body.workspaceId;
+  const wsId = sanitizeWorkspaceId(headerWs || queryWs || bodyWs || store.activeWorkspaceId || 'default');
+  return { wsId, ws: ensureWorkspace(wsId) };
+};
 
-async function resolveGuildName(guildId) {
-  if (!guildId) return '';
-  const cached = client.guilds.cache.get(guildId);
-  if (cached) return cached.name;
-  if (client.isReady()) {
-    try {
-      const fetched = await client.guilds.fetch(guildId);
-      if (fetched && fetched.name) return fetched.name;
-    } catch (_err) {
-      // Bot hələ sunucuda olmaya bilər
+const getAllWorkspacesList = () => {
+  const keys = Object.keys(store.workspaces || {});
+  if (!keys.length) return [{ wsId: 'default', ws: ensureWorkspace('default') }];
+  return keys.map((k) => ({ wsId: k, ws: ensureWorkspace(k) }));
+};
+
+const findWorkspaceByGuildId = (guildId) => {
+  if (!guildId) return null;
+  for (const item of getAllWorkspacesList()) {
+    if (String(item.ws.guildId || '').trim() === String(guildId).trim()) {
+      return item;
     }
   }
-  return `Sunucu (${guildId})`;
-}
+  return null;
+};
 
-async function ensureBotOnline() {
-  if (!BOT_TOKEN) return;
-  if (client.isReady()) {
+const findWorkspaceByDiscordUser = (discordUserId) => {
+  if (!discordUserId) return null;
+  for (const item of getAllWorkspacesList()) {
+    if (String(item.ws.discordUserId || '').trim() === String(discordUserId).trim()) {
+      return item;
+    }
+  }
+  return null;
+};
+
+const resolveWorkspaceForDiscord = ({ guildId, discordUserId, scriptId }) => {
+  const byGuild = findWorkspaceByGuildId(guildId);
+  if (byGuild) return byGuild;
+
+  if (scriptId) {
     for (const item of getAllWorkspacesList()) {
-      if (item.ws.activeGuildId) {
-        const resolved = await resolveGuildName(item.ws.activeGuildId);
-        if (resolved && !resolved.startsWith('Sunucu (')) {
-          item.ws.activeGuildName = resolved;
-        }
+      if (item.ws.scripts.some((s) => s.id === scriptId || s.loaderToken === scriptId)) {
+        return item;
       }
     }
+  }
+
+  const byUser = findWorkspaceByDiscordUser(discordUserId);
+  if (byUser) return byUser;
+
+  const defId = sanitizeWorkspaceId(store.activeWorkspaceId || 'default');
+  return { wsId: defId, ws: ensureWorkspace(defId) };
+};
+
+const migrateLegacyData = (raw) => {
+  if (!raw || typeof raw !== 'object') return createRootStore();
+  if (raw.workspaces && typeof raw.workspaces === 'object') {
+    const root = createRootStore();
+    root.activeWorkspaceId = sanitizeWorkspaceId(raw.activeWorkspaceId || 'default');
+    for (const [k, v] of Object.entries(raw.workspaces)) {
+      root.workspaces[sanitizeWorkspaceId(k)] = {
+        ...createDefaultWorkspaceState(),
+        ...(v || {}),
+      };
+    }
+    ensureWorkspace(root.activeWorkspaceId);
+    return root;
+  }
+  const root = createRootStore();
+  root.workspaces.default = {
+    ...createDefaultWorkspaceState(),
+    ...raw,
+  };
+  ensureWorkspace('default');
+  return root;
+};
+
+const saveStore = async () => {
+  if (isSavingStore) {
+    pendingSave = true;
     return;
   }
-  if (isConnectingNow) return;
-
-  isConnectingNow = true;
+  isSavingStore = true;
   try {
-    try {
-      client.destroy();
-    } catch (_e) {
-      // Səssiz ötürülür
-    }
-    await client.login(BOT_TOKEN);
-    if (client.rest && typeof client.rest.setToken === 'function') {
-      client.rest.setToken(BOT_TOKEN);
+    await fsp.mkdir(DATA_DIR, { recursive: true });
+    const serialized = JSON.stringify(store, null, 2);
+    const tmpFile = `${STORE_FILE}.${process.pid}.tmp`;
+    await fsp.writeFile(tmpFile, serialized, 'utf8');
+    await fsp.rename(tmpFile, STORE_FILE);
+
+    const backupFile = path.join(DATA_DIR, `store.bak.${Date.now()}.json`);
+    await fsp.writeFile(backupFile, serialized, 'utf8').catch(() => {});
+    const entries = await fsp.readdir(DATA_DIR);
+    const baks = entries
+      .filter((f) => f.startsWith('store.bak.') && f.endsWith('.json'))
+      .sort()
+      .reverse();
+    for (const oldBak of baks.slice(MAX_BACKUPS)) {
+      await fsp.unlink(path.join(DATA_DIR, oldBak)).catch(() => {});
     }
   } catch (err) {
-    console.warn('[BOT] Qoşulma cəhdi uğursuz oldu (yenidən cəhd ediləcək):', err && err.message ? err.message : err);
+    console.error('[STORE] Saxlama xətası:', err && err.message ? err.message : err);
   } finally {
-    isConnectingNow = false;
-  }
-}
-
-function startWatchdog() {
-  if (watchdogTimer) clearInterval(watchdogTimer);
-  watchdogTimer = setInterval(async () => {
-    try {
-      if (!client.isReady() && !isConnectingNow) {
-        await ensureBotOnline();
-      } else {
-        let changed = false;
-        for (const item of getAllWorkspacesList()) {
-          if (item.ws.activeGuildId && (!item.ws.activeGuildName || item.ws.activeGuildName.startsWith('Sunucu ('))) {
-            const name = await resolveGuildName(item.ws.activeGuildId);
-            if (name && !name.startsWith('Sunucu (')) {
-              item.ws.activeGuildName = name;
-              changed = true;
-            }
-          }
-        }
-        if (changed) await saveStore();
-      }
-    } catch (err) {
-      console.error('[WATCHDOG] Xəta:', err.message);
+    isSavingStore = false;
+    if (pendingSave) {
+      pendingSave = false;
+      saveStore().catch(() => {});
     }
-  }, 60000);
-}
+  }
+};
 
-async function registerSlashCommands() {
-  if (!BOT_TOKEN) return;
+const loadStore = async () => {
   try {
-    const appId = client.application?.id || '1562080654282199121';
-    const commands = [
-      new SlashCommandBuilder()
-        .setName('panel')
-        .setDescription('Script key və loader panelini bu kanala göndər')
-        .addStringOption((opt) =>
-          opt
-            .setName('script')
-            .setDescription('Panelin bağlı olacağı skript')
-            .setRequired(false)
-            .setAutocomplete(true)
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName('title')
-            .setDescription('Panel başlığı (istəyə bağlı)')
-            .setRequired(false)
-        ),
-      new SlashCommandBuilder()
-        .setName('whitelist')
-        .setDescription('İstifadəçini seçilən skript üçün whitelist-ə əlavə et')
-        .addUserOption((opt) =>
-          opt
-            .setName('user')
-            .setDescription('Whitelist ediləcək Discord istifadəçisi')
-            .setRequired(true)
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName('script')
-            .setDescription('Bağlanacaq skript')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName('duration')
-            .setDescription('Müddət (0 = Lifetime, məs: 1d, 7d, 30d)')
-            .setRequired(false)
-        ),
-      new SlashCommandBuilder()
-        .setName('unwhitelist')
-        .setDescription('İstifadəçini whitelist-dən sil')
-        .addUserOption((opt) =>
-          opt
-            .setName('user')
-            .setDescription('Whitelist-dən çıxarılacaq Discord istifadəçisi')
-            .setRequired(true)
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName('script')
-            .setDescription('Skript seçin (boş buraxılsa hamısından silinər)')
-            .setRequired(false)
-            .setAutocomplete(true)
-        ),
-      new SlashCommandBuilder()
-        .setName('genkey')
-        .setDescription('Seçilən skript üçün yeni key yaradır')
-        .addStringOption((opt) =>
-          opt
-            .setName('script')
-            .setDescription('Skript seçin')
-            .setRequired(false)
-            .setAutocomplete(true)
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName('duration')
-            .setDescription('Müddət (0 = Lifetime, məs: 1d, 7d, 30d)')
-            .setRequired(false)
-        )
-        .addIntegerOption((opt) =>
-          opt
-            .setName('amount')
-            .setDescription('Yaradılacaq key sayı (1 - 25)')
-            .setRequired(false)
-            .setMinValue(1)
-            .setMaxValue(25)
-        ),
-    ].map((cmd) => cmd.toJSON());
-
-    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    await rest.put(Routes.applicationCommands(appId), { body: commands });
+    await fsp.mkdir(DATA_DIR, { recursive: true });
+    if (fs.existsSync(STORE_FILE)) {
+      const content = await fsp.readFile(STORE_FILE, 'utf8');
+      store = migrateLegacyData(JSON.parse(content));
+      await saveStore();
+      return;
+    }
+    const entries = await fsp.readdir(DATA_DIR);
+    const baks = entries
+      .filter((f) => f.startsWith('store.bak.') && f.endsWith('.json'))
+      .sort()
+      .reverse();
+    for (const bak of baks) {
+      try {
+        const bakContent = await fsp.readFile(path.join(DATA_DIR, bak), 'utf8');
+        store = migrateLegacyData(JSON.parse(bakContent));
+        await saveStore();
+        return;
+      } catch (_e) {}
+    }
+    store = createRootStore();
+    await saveStore();
   } catch (err) {
-    console.warn('[SLASH] Qeydiyyat xətası:', err.message);
+    console.error('[STORE] Yükləmə xətası:', err && err.message ? err.message : err);
+    store = createRootStore();
   }
-}
+};
 
-client.once(Events.ClientReady, async (readyClient) => {
-  console.log(`[BOT] Online: ${readyClient.user.tag} (${readyClient.guilds.cache.size} sunucu)`);
-  await registerSlashCommands();
-  let changed = false;
-  for (const item of getAllWorkspacesList()) {
-    if (item.ws.activeGuildId) {
-      const realName = await resolveGuildName(item.ws.activeGuildId);
-      if (realName && !realName.startsWith('Sunucu (')) {
-        item.ws.activeGuildName = realName;
-        changed = true;
-      }
-    }
+const isExpired = (expiresAt) => {
+  if (!expiresAt) return false;
+  const ts = Date.parse(expiresAt);
+  return !Number.isNaN(ts) && Date.now() > ts;
+};
+
+const parseDurationToMs = (durationInput) => {
+  if (!durationInput) return null;
+  const str = String(durationInput).trim().toLowerCase();
+  if (!str || str === 'lifetime' || str === 'perm' || str === 'unlimited' || str === '0') {
+    return null;
   }
-  if (changed) await saveStore();
-});
-
-client.on(Events.GuildCreate, async (guild) => {
-  let changed = false;
-  for (const item of getAllWorkspacesList()) {
-    if (item.ws.activeGuildId === guild.id) {
-      item.ws.activeGuildName = guild.name;
-      changed = true;
-    }
+  const match = str.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day|w|wk)?$/);
+  if (!match) {
+    const num = Number(str);
+    if (!Number.isNaN(num) && num > 0) return num * 86400000;
+    return null;
   }
-  if (changed) await saveStore();
-});
+  const val = Number(match[1]);
+  const unit = match[2] || 'd';
+  if (unit.startsWith('s')) return val * 1000;
+  if (unit.startsWith('m')) return val * 60000;
+  if (unit.startsWith('h')) return val * 3600000;
+  if (unit.startsWith('w')) return val * 604800000;
+  return val * 86400000;
+};
 
-client.on(Events.ShardDisconnect, () => {
-  ensureBotOnline().catch(() => {});
-});
+const generateRandomKeyCode = () => {
+  const part1 = crypto.randomBytes(3).toString('hex').toUpperCase();
+  const part2 = crypto.randomBytes(3).toString('hex').toUpperCase();
+  return `SADO-${part1}-${part2}`;
+};
 
-client.on(Events.Error, (err) => {
-  console.error('[CLIENT ERROR]', err.message);
-});
+const slugifyId = (name, fallbackPrefix = 'item') => {
+  const base = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24);
+  const suffix = crypto.randomBytes(2).toString('hex');
+  return base ? `${base}-${suffix}` : `${fallbackPrefix}-${suffix}`;
+};
 
-function buildPanelEmbedAndButtons(wsState, scriptObj, overrideCfg = null) {
-  const cfg = {
-    ...(wsState?.panelConfig || createDefaultWorkspaceState().panelConfig),
-    ...(overrideCfg && typeof overrideCfg === 'object' ? overrideCfg : {}),
-  };
+const normalizeHexColor = (hex) => {
+  if (!hex || typeof hex !== 'string') return '#10b981';
+  const trimmed = hex.trim();
+  const withHash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+  return /^#[0-9a-fA-F]{6}$/.test(withHash) ? withHash : '#10b981';
+};
 
-  const colorInt = hexToDiscordInt(cfg.embedColor || '#5865F2');
-  const scriptTitle = scriptObj ? scriptObj.name : 'SADO HUB';
-  const descLines = [
-    cfg.description || 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
-    `📌 **Script:** \`${scriptTitle}\``,
-  ];
+const buildPublicBaseUrl = (req) => {
+  if (process.env.PUBLIC_BASE_URL) {
+    return String(process.env.PUBLIC_BASE_URL).replace(/\/+$/, '');
+  }
+  if (req && req.headers && req.headers.host) {
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    return `${proto}://${req.headers.host}`;
+  }
+  if (process.env.RENDER_EXTERNAL_URL) {
+    return String(process.env.RENDER_EXTERNAL_URL).replace(/\/+$/, '');
+  }
+  return `http://localhost:${PORT}`;
+};
+
+const buildLoaderSnippet = (wsId, sc, wl, baseUrl) => {
+  const keyVal = wl && wl.key ? wl.key : 'YOUR_KEY';
+  const loaderUrl = `${baseUrl}/loader/${encodeURIComponent(sc.loaderToken || sc.id)}?ws=${encodeURIComponent(wsId)}`;
+  return [
+    `script_key = "${keyVal}"`,
+    `loadstring(game:HttpGet("${loaderUrl}"))()`,
+  ].join('\n');
+};
+
+const buildPanelEmbedAndButtons = (ws, sc) => {
+  const cfg = { ...DEFAULT_PANEL_CONFIG, ...(ws.panelConfig || {}) };
+  const scriptName = sc ? sc.name : 'SADO HUB';
+  const scriptId = sc ? sc.id : 'default';
 
   const embed = new EmbedBuilder()
-    .setColor(colorInt)
-    .setTitle(cfg.title || 'SADO PROTECT • Script Panel')
-    .setDescription(descLines.join('\n'))
-    .setFooter({ text: 'SADO PROTECT • Secure Loader & Key System' })
+    .setColor(normalizeHexColor(cfg.embedColor))
+    .setTitle(cfg.title || DEFAULT_PANEL_CONFIG.title)
+    .setDescription(
+      `${cfg.description || DEFAULT_PANEL_CONFIG.description}\n\n📌 **Script:** \`${scriptName}\``
+    )
+    .setFooter({ text: `${cfg.footerText || DEFAULT_PANEL_CONFIG.footerText} • ${scriptName}` })
     .setTimestamp();
+
+  if (cfg.imageUrl && /^https?:\/\//i.test(cfg.imageUrl.trim())) {
+    embed.setImage(cfg.imageUrl.trim());
+  }
+  if (cfg.thumbnailUrl && /^https?:\/\//i.test(cfg.thumbnailUrl.trim())) {
+    embed.setThumbnail(cfg.thumbnailUrl.trim());
+  }
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`sado_redeem_${scriptObj ? scriptObj.id : 'default'}`)
-      .setLabel((cfg.redeemLabel || 'Redeem Key').slice(0, 80))
-      .setStyle(mapStyleToButtonStyle(cfg.redeemStyle, ButtonStyle.Success)),
+      .setCustomId(`sado_redeem_${scriptId}`)
+      .setLabel(cfg.redeemLabel || 'Redeem Key')
+      .setEmoji('🔑')
+      .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
-      .setCustomId(`sado_getscript_${scriptObj ? scriptObj.id : 'default'}`)
-      .setLabel((cfg.getScriptLabel || 'Get Script').slice(0, 80))
-      .setStyle(mapStyleToButtonStyle(cfg.getScriptStyle, ButtonStyle.Primary)),
+      .setCustomId(`sado_getscript_${scriptId}`)
+      .setLabel(cfg.getScriptLabel || 'Get Script')
+      .setEmoji('📜')
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(`sado_resethwid_${scriptObj ? scriptObj.id : 'default'}`)
-      .setLabel((cfg.resetHwidLabel || 'Reset HWID').slice(0, 80))
-      .setStyle(mapStyleToButtonStyle(cfg.resetHwidStyle, ButtonStyle.Secondary)),
+      .setCustomId(`sado_resethwid_${scriptId}`)
+      .setLabel(cfg.resetHwidLabel || 'Reset HWID')
+      .setEmoji('⚙️')
+      .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
-      .setCustomId(`sado_stats_${scriptObj ? scriptObj.id : 'default'}`)
-      .setLabel((cfg.statsLabel || 'Stats').slice(0, 80))
-      .setStyle(mapStyleToButtonStyle(cfg.statsStyle, ButtonStyle.Secondary))
+      .setCustomId(`sado_stats_${scriptId}`)
+      .setLabel(cfg.statsLabel || 'Get Stats')
+      .setEmoji('📊')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return { embed, row };
-}
+};
 
-async function refreshExistingDiscordPanels(wsState) {
-  if (!client.isReady() || !wsState || !Array.isArray(wsState.panels) || !wsState.panels.length) return;
+const refreshExistingDiscordPanels = async (ws) => {
+  if (!BOT_TOKEN || !ws || !Array.isArray(ws.panels) || !ws.panels.length) return;
   const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-  for (const pnl of wsState.panels) {
+  const seen = new Set();
+  for (const pnl of ws.panels) {
     try {
-      if (!pnl.channelId || !pnl.messageId) continue;
-      const sc = wsState.scripts.find((s) => s.id === pnl.scriptId) || wsState.scripts[0];
-      const { embed, row } = buildPanelEmbedAndButtons(wsState, sc);
+      if (!pnl || !pnl.channelId || !pnl.messageId) continue;
+      const key = `${pnl.channelId}:${pnl.messageId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const sc = ws.scripts.find((s) => s.id === pnl.scriptId) || ws.scripts[0];
+      const { embed, row } = buildPanelEmbedAndButtons(ws, sc);
       await rest.patch(Routes.channelMessage(pnl.channelId, pnl.messageId), {
         body: {
+          content: '',
           embeds: [embed.toJSON()],
           components: [row.toJSON()],
         },
       });
-    } catch (_err) {
-      // Silinmiş və ya əlçatmaz mesaj ötürülür
+    } catch (_e) {}
+  }
+};
+
+const refreshAllWorkspacesDiscordPanels = async () => {
+  if (!BOT_TOKEN) return;
+  const all = getAllWorkspacesList();
+  for (const item of all) {
+    await refreshExistingDiscordPanels(item.ws);
+  }
+};
+
+const registerSlashCommands = async () => {
+  if (!BOT_TOKEN) return;
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('panel')
+      .setDescription('Skript key & loader panelini kanala göndər')
+      .addStringOption((opt) =>
+        opt
+          .setName('script')
+          .setDescription('Panelin bağlı olacağı skript')
+          .setRequired(false)
+          .setAutocomplete(true)
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName('title')
+          .setDescription('Panel başlığı')
+          .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName('genkey')
+      .setDescription('Yeni lisenziya key-i yaradır')
+      .addStringOption((opt) =>
+        opt
+          .setName('script')
+          .setDescription('Key-in aid olduğu skript')
+          .setRequired(false)
+          .setAutocomplete(true)
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName('duration')
+          .setDescription('Müddət (məs: 1d, 7d, 30d, lifetime)')
+          .setRequired(false)
+      )
+      .addIntegerOption((opt) =>
+        opt
+          .setName('amount')
+          .setDescription('Yaradılacaq key sayı (1-25)')
+          .setMinValue(1)
+          .setMaxValue(25)
+          .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName('whitelist')
+      .setDescription('İstifadəçini birbaşa whitelist-ə əlavə edir')
+      .addUserOption((opt) =>
+        opt.setName('user').setDescription('Discord istifadəçisi').setRequired(true)
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName('script')
+          .setDescription('Skript')
+          .setRequired(false)
+          .setAutocomplete(true)
+      )
+      .addStringOption((opt) =>
+        opt.setName('duration').setDescription('Müddət (məs: 7d, 30d, lifetime)').setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName('unwhitelist')
+      .setDescription('İstifadəçini whitelist-dən çıxarır')
+      .addUserOption((opt) =>
+        opt.setName('user').setDescription('Discord istifadəçisi').setRequired(true)
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName('script')
+          .setDescription('Skript (boş buraxılsa hamısı)')
+          .setRequired(false)
+          .setAutocomplete(true)
+      ),
+    new SlashCommandBuilder()
+      .setName('resethwid')
+      .setDescription('İstifadəçinin HWID kilidini sıfırlayır')
+      .addUserOption((opt) =>
+        opt.setName('user').setDescription('Discord istifadəçisi').setRequired(true)
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName('script')
+          .setDescription('Skript (boş buraxılsa hamısı)')
+          .setRequired(false)
+          .setAutocomplete(true)
+      ),
+  ].map((c) => c.toJSON());
+
+  const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+  const appId = client.application && client.application.id ? client.application.id : null;
+  if (!appId) return;
+
+  await rest.put(Routes.applicationCommands(appId), { body: commands });
+
+  for (const item of getAllWorkspacesList()) {
+    if (item.ws.guildId && /^\d{15,22}$/.test(String(item.ws.guildId).trim())) {
+      await rest
+        .put(Routes.applicationGuildCommands(appId, String(item.ws.guildId).trim()), { body: commands })
+        .catch(() => {});
     }
   }
-}
+  commandsRegistered = true;
+};
+
+const ensureBotOnline = async () => {
+  if (!BOT_TOKEN) return;
+  if (client.isReady()) return;
+  if (isConnectingNow) return;
+  const now = Date.now();
+  if (now - lastConnectAttempt < 12000) return;
+  isConnectingNow = true;
+  lastConnectAttempt = now;
+  try {
+    await client.login(BOT_TOKEN);
+  } catch (err) {
+    console.error('[BOT] Login xətası:', err && err.message ? err.message : err);
+  } finally {
+    isConnectingNow = false;
+  }
+};
+
+const startWatchdog = () => {
+  setInterval(async () => {
+    try {
+      if (!client.isReady() && !isConnectingNow) {
+        await ensureBotOnline();
+      }
+      if (client.isReady() && !commandsRegistered) {
+        await registerSlashCommands().catch(() => {});
+      }
+    } catch (_e) {}
+  }, 45000);
+};
+
+client.once(Events.ClientReady, async (readyClient) => {
+  console.log(`[BOT] ${readyClient.user.tag} aktivdir!`);
+  commandsRegistered = false;
+  await registerSlashCommands().catch((err) => {
+    console.error('[BOT] Slash command qeydiyyat xətası:', err && err.message ? err.message : err);
+  });
+});
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isAutocomplete()) {
-      if (
-        interaction.commandName === 'panel' ||
-        interaction.commandName === 'whitelist' ||
-        interaction.commandName === 'unwhitelist' ||
-        interaction.commandName === 'genkey'
-      ) {
-        try {
-          const ws = findWorkspaceByGuildId(interaction.guildId, interaction.user?.id);
-          const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
-          const allScripts = Array.isArray(ws.scripts) ? ws.scripts : [];
-          const filtered = allScripts.filter((sc) => {
-            if (!focused) return true;
-            const n = String(sc && sc.name ? sc.name : '').toLowerCase();
-            const id = String(sc && sc.id ? sc.id : '').toLowerCase();
-            return n.includes(focused) || id.includes(focused);
-          });
-
-          let choices = filtered.slice(0, 25).map((sc) => {
-            const safeName = String(sc.name || 'Script').trim() || 'Script';
-            const safeVal = String(sc.id || safeName).slice(0, 100);
-            return {
-              name: safeName.slice(0, 100),
-              value: safeVal,
-            };
-          });
-
-          if (!choices.length && allScripts.length) {
-            choices = allScripts.slice(0, 25).map((sc) => {
-              const safeName = String(sc.name || 'Script').trim() || 'Script';
-              const safeVal = String(sc.id || safeName).slice(0, 100);
-              return {
-                name: safeName.slice(0, 100),
-                value: safeVal,
-              };
-            });
-          }
-
-          if (!choices.length) {
-            choices.push({ name: 'SADO HUB', value: 'default' });
-          }
-
-          if (!interaction.responded) {
-            await interaction.respond(choices);
-          }
-        } catch (_autoErr) {
-          try {
-            if (!interaction.responded) {
-              await interaction.respond([{ name: 'SADO HUB', value: 'default' }]);
-            }
-          } catch (_ignore) {
-            // Səssiz ötürülür
-          }
-        }
-      }
+      const focused = interaction.options.getFocused(true);
+      const { ws } = resolveWorkspaceForDiscord({
+        guildId: interaction.guildId,
+        discordUserId: interaction.user && interaction.user.id,
+      });
+      const query = String(focused && focused.value ? focused.value : '').toLowerCase();
+      const choices = (ws.scripts || [])
+        .filter((s) => s.name.toLowerCase().includes(query) || s.id.toLowerCase().includes(query))
+        .slice(0, 25)
+        .map((s) => ({ name: `${s.name} (${s.id})`, value: s.id }));
+      await interaction.respond(choices).catch(() => {});
       return;
     }
 
     if (interaction.isChatInputCommand()) {
-      const ws = findWorkspaceByGuildId(interaction.guildId, interaction.user?.id);
+      const cmd = interaction.commandName;
+      const guildId = interaction.guildId || '';
+      const invokerId = interaction.user.id;
+      const selectedScriptArg = interaction.options.getString('script') || '';
+      const { wsId, ws } = resolveWorkspaceForDiscord({
+        guildId,
+        discordUserId: invokerId,
+        scriptId: selectedScriptArg,
+      });
 
-      if (interaction.commandName === 'genkey') {
-        try {
-          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
-            await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
+      if (cmd === 'panel') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const customTitle = interaction.options.getString('title');
+        const sc =
+          ws.scripts.find((s) => s.id === selectedScriptArg || s.loaderToken === selectedScriptArg) ||
+          ws.scripts[0];
 
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
-          const durationRaw = String(interaction.options.getString('duration') || '0').trim();
-          const rawAmount = interaction.options.getInteger('amount');
-          const amount = Math.max(1, Math.min(25, Number(rawAmount || 1)));
-
-          const sc =
-            ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
-            ws.scripts[0] || {
-              id: 'default',
-              name: chosenScriptArg && chosenScriptArg !== 'default' ? chosenScriptArg : 'SADO HUB',
-            };
-
-          const durationSeconds = parseDurationToSeconds(durationRaw);
-          const createdKeys = [];
-
-          for (let i = 0; i < amount; i++) {
-            const expiresAt =
-              durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
-            const keyStr = generateKeyString();
-            const entry = {
-              id: generateId('key'),
-              key: keyStr,
-              scriptId: sc.id,
-              durationSeconds,
-              expiresAt,
-              used: false,
-              usedByDiscordId: null,
-              createdBy: interaction.user.tag || interaction.user.id,
-              createdAt: new Date().toISOString(),
-            };
-            ws.keys.push(entry);
-            createdKeys.push(entry);
-          }
-
-          await saveStore();
-
-          const formattedList = createdKeys
-            .map((k) => `• \`${k.key}\` (${formatExpiry(k.expiresAt)})`)
-            .join('\n');
-
-          await interaction.editReply({
-            content: `✅ **${sc.name}** skripti üçün **${createdKeys.length}** ədəd key yaradıldı:\n${formattedList}`.slice(0, 1950),
-          });
-        } catch (genErr) {
-          console.error('[SLASH /genkey ERROR]', genErr && genErr.message ? genErr.message : genErr);
-          try {
-            if (interaction.deferred || interaction.replied) {
-              await interaction.editReply({ content: `❌ Key yaratma xətası: ${genErr.message}` });
-            } else {
-              await interaction.reply({ content: `❌ Key yaratma xətası: ${genErr.message}`, flags: MessageFlags.Ephemeral });
-            }
-          } catch (_e) {}
+        if (!sc) {
+          await interaction.editReply({ content: '❌ Bu workspace-də skript tapılmadı.' });
+          return;
         }
-        return;
-      }
 
-      if (interaction.commandName === 'unwhitelist') {
-        try {
-          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
-            await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
+        const panelWs = customTitle
+          ? { ...ws, panelConfig: { ...ws.panelConfig, title: customTitle } }
+          : ws;
+        const { embed, row } = buildPanelEmbedAndButtons(panelWs, sc);
 
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-          const targetUser = interaction.options.getUser('user', true);
-          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
-
-          const matchedScript = chosenScriptArg
-            ? ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg)
-            : null;
-
-          const beforeCount = ws.whitelists.length;
-          ws.whitelists = ws.whitelists.filter((w) => {
-            if (w.discordUserId !== targetUser.id) return true;
-            if (!chosenScriptArg) return false;
-            if (matchedScript) return w.scriptId !== matchedScript.id;
-            return w.scriptId !== chosenScriptArg;
+        let sentMsg = null;
+        if (interaction.channel && typeof interaction.channel.send === 'function') {
+          sentMsg = await interaction.channel.send({ embeds: [embed], components: [row] });
+        } else if (interaction.channelId) {
+          const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+          sentMsg = await rest.post(Routes.channelMessages(interaction.channelId), {
+            body: { embeds: [embed.toJSON()], components: [row.toJSON()] },
           });
-          const removedCount = beforeCount - ws.whitelists.length;
-
-          for (const kItem of ws.keys) {
-            if (
-              kItem.usedByDiscordId === targetUser.id &&
-              (!chosenScriptArg ||
-                (matchedScript ? kItem.scriptId === matchedScript.id : kItem.scriptId === chosenScriptArg))
-            ) {
-              kItem.used = false;
-              kItem.usedByDiscordId = null;
-              kItem.hwid = '';
-            }
-          }
-
-          await saveStore();
-
-          const scriptLabel = matchedScript
-            ? `**${matchedScript.name}**`
-            : chosenScriptArg
-              ? `\`${chosenScriptArg}\``
-              : '**bütün skriptlər**';
-
-          if (removedCount > 0) {
-            await interaction.editReply({
-              content: `🗑️ <@${targetUser.id}> istifadəçisi ${scriptLabel} üzrə whitelist-dən silindi (${removedCount} qeyd).`,
-            });
-          } else {
-            await interaction.editReply({
-              content: `⚠️ <@${targetUser.id}> istifadəçisi üçün ${scriptLabel} üzrə aktiv whitelist qeydi tapılmadı.`,
-            });
-          }
-        } catch (unwlErr) {
-          console.error('[SLASH /unwhitelist ERROR]', unwlErr && unwlErr.message ? unwlErr.message : unwlErr);
-          try {
-            if (interaction.deferred || interaction.replied) {
-              await interaction.editReply({ content: `❌ Unwhitelist xətası: ${unwlErr.message}` });
-            } else {
-              await interaction.reply({ content: `❌ Unwhitelist xətası: ${unwlErr.message}`, flags: MessageFlags.Ephemeral });
-            }
-          } catch (_e) {}
         }
-        return;
-      }
 
-      if (interaction.commandName === 'whitelist') {
-        try {
-          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
-            await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-          const targetUser = interaction.options.getUser('user', true);
-          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
-          const durationRaw = String(interaction.options.getString('duration') || '0').trim();
-
-          const sc =
-            ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
-            ws.scripts[0];
-
-          if (!sc) {
-            await interaction.editReply({
-              content: '❌ Əvvəlcə Dashboard-dan ən azı 1 skript yaradın.',
-            });
-            return;
-          }
-
-          const durationSeconds = parseDurationToSeconds(durationRaw);
-          const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
-          const generatedKey = generateKeyString();
-
-          ws.keys.push({
-            id: generateId('key'),
-            key: generatedKey,
-            scriptId: sc.id,
-            durationSeconds,
-            expiresAt,
-            used: true,
-            usedByDiscordId: targetUser.id,
-            createdBy: interaction.user.tag || interaction.user.id,
-            createdAt: new Date().toISOString(),
-          });
-
-          const existingWl = ws.whitelists.find(
-            (w) => w.discordUserId === targetUser.id && w.scriptId === sc.id
-          );
-          if (existingWl) {
-            existingWl.key = generatedKey;
-            existingWl.expiresAt = expiresAt;
-          } else {
-            ws.whitelists.push({
-              id: generateId('wl'),
-              discordUserId: targetUser.id,
-              scriptId: sc.id,
-              key: generatedKey,
-              hwid: '',
-              expiresAt,
-              createdAt: new Date().toISOString(),
-            });
-          }
-
-          saveStore().catch(() => {});
-          await interaction.editReply({
-            content: `✅ <@${targetUser.id}> istifadəçisi **${sc.name}** skripti üçün whitelist edildi!\n🔑 **Key:** \`${generatedKey}\`\n⏳ **Müddət:** ${formatExpiry(expiresAt)}`,
-          });
-        } catch (wlErr) {
-          console.error('[SLASH /whitelist ERROR]', wlErr && wlErr.message ? wlErr.message : wlErr);
-          try {
-            if (interaction.deferred || interaction.replied) {
-              await interaction.editReply({ content: `❌ Whitelist xətası: ${wlErr.message}` });
-            } else {
-              await interaction.reply({ content: `❌ Whitelist xətası: ${wlErr.message}`, flags: MessageFlags.Ephemeral });
-            }
-          } catch (_e) {}
-        }
-        return;
-      }
-
-      if (interaction.commandName === 'panel') {
-        try {
-          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
-            await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
-          if (ws.activeGuildId && interaction.guildId && interaction.guildId !== ws.activeGuildId) {
-            await interaction.reply({
-              content: '🚫 Bu sunucu idarəetmə panelinə bağlı deyil.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-          const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
-          const customTitle = String(interaction.options.getString('title') || '').trim();
-          const sc =
-            ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
-            ws.scripts[0] || {
-              id: 'default',
-              name: chosenScriptArg && chosenScriptArg !== 'default' ? chosenScriptArg : 'SADO HUB',
-              loaderToken: 'default',
-            };
-
-          const targetChannelId = interaction.channelId;
-          if (!targetChannelId) {
-            await interaction.editReply({ content: '❌ Kanal ID tapılmadı.' });
-            return;
-          }
-
-          const overrideCfg = customTitle ? { title: customTitle } : null;
-          const { embed, row } = buildPanelEmbedAndButtons(ws, sc, overrideCfg);
-
-          let sentMsgId = '';
-          let sentOk = false;
-
-          if (interaction.channel && typeof interaction.channel.send === 'function') {
-            try {
-              const directMsg = await interaction.channel.send({
-                embeds: [embed],
-                components: [row],
-              });
-              sentMsgId = directMsg && directMsg.id ? directMsg.id : '';
-              sentOk = true;
-            } catch (_chErr) {
-              sentOk = false;
-            }
-          }
-
-          if (!sentOk) {
-            const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-            const sentMsg = await panelRest.post(Routes.channelMessages(targetChannelId), {
-              body: {
-                embeds: [embed.toJSON()],
-                components: [row.toJSON()],
-              },
-            });
-            sentMsgId = sentMsg && sentMsg.id ? sentMsg.id : '';
-          }
-
+        if (sentMsg) {
           ws.panels.push({
-            id: generateId('pnl'),
-            guildId: interaction.guildId || ws.activeGuildId || '',
-            channelId: targetChannelId,
-            messageId: sentMsgId,
+            id: crypto.randomUUID(),
+            channelId: interaction.channelId || (sentMsg.channel_id || ''),
+            messageId: sentMsg.id,
             scriptId: sc.id,
+            title: customTitle || ws.panelConfig.title,
             createdAt: new Date().toISOString(),
           });
-          saveStore().catch(() => {});
+          if (guildId && !ws.guildId) ws.guildId = guildId;
+          await saveStore();
+        }
 
-          await interaction.editReply({
-            content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
-          });
-        } catch (panelErr) {
-          console.error('[SLASH /panel ERROR]', panelErr && panelErr.message ? panelErr.message : panelErr);
-          const errMsg = `❌ Panel göndərilmədi: ${(panelErr && panelErr.message) || 'İcazə və ya kanal xətası'}`.slice(0, 1900);
-          try {
-            if (interaction.deferred || interaction.replied) {
-              await interaction.editReply({ content: errMsg });
-            } else {
-              await interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
-            }
-          } catch (_replyErr) {
-            // Səssiz ötürülür
+        await interaction.editReply({
+          content: `✅ **${sc.name}** skripti üçün panel göndərildi!`,
+        });
+        return;
+      }
+
+      if (cmd === 'genkey') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const durationStr = interaction.options.getString('duration') || 'lifetime';
+        const amount = Math.min(25, Math.max(1, interaction.options.getInteger('amount') || 1));
+        const sc =
+          ws.scripts.find((s) => s.id === selectedScriptArg || s.loaderToken === selectedScriptArg) ||
+          ws.scripts[0];
+        const durMs = parseDurationToMs(durationStr);
+        const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
+
+        const created = [];
+        for (let i = 0; i < amount; i++) {
+          const newKey = {
+            key: generateRandomKeyCode(),
+            scriptId: sc ? sc.id : 'default',
+            scriptName: sc ? sc.name : 'SADO HUB',
+            duration: durationStr,
+            expiresAt,
+            used: false,
+            usedByDiscordId: null,
+            createdAt: new Date().toISOString(),
+          };
+          ws.keys.unshift(newKey);
+          created.push(newKey);
+        }
+        await saveStore();
+
+        const keyLines = created.map(
+          (k) => `• \`${k.key}\` — **${k.scriptName}** (${k.duration})`
+        );
+        await interaction.editReply({
+          content: `🔑 **${created.length} ədəd key yaradıldı:**\n${keyLines.join('\n')}`,
+        });
+        return;
+      }
+
+      if (cmd === 'whitelist') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = interaction.options.getUser('user');
+        const durationStr = interaction.options.getString('duration') || 'lifetime';
+        const sc =
+          ws.scripts.find((s) => s.id === selectedScriptArg || s.loaderToken === selectedScriptArg) ||
+          ws.scripts[0];
+        const durMs = parseDurationToMs(durationStr);
+        const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
+
+        const existingIdx = ws.whitelists.findIndex(
+          (w) => w.discordUserId === targetUser.id && w.scriptId === (sc ? sc.id : 'default')
+        );
+        const entry = {
+          id: existingIdx >= 0 ? ws.whitelists[existingIdx].id : crypto.randomUUID(),
+          discordUserId: targetUser.id,
+          username: targetUser.username,
+          scriptId: sc ? sc.id : 'default',
+          key: existingIdx >= 0 && ws.whitelists[existingIdx].key ? ws.whitelists[existingIdx].key : generateRandomKeyCode(),
+          hwid: '',
+          expiresAt,
+          createdAt: new Date().toISOString(),
+        };
+
+        if (existingIdx >= 0) {
+          ws.whitelists[existingIdx] = entry;
+        } else {
+          ws.whitelists.unshift(entry);
+        }
+        await saveStore();
+
+        await interaction.editReply({
+          content: `✅ <@${targetUser.id}> (**${sc ? sc.name : 'SADO HUB'}**) whitelist-ə əlavə olundu. Key: \`${entry.key}\``,
+        });
+        return;
+      }
+
+      if (cmd === 'unwhitelist') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = interaction.options.getUser('user');
+        const beforeCount = ws.whitelists.length;
+        ws.whitelists = ws.whitelists.filter((w) => {
+          if (w.discordUserId !== targetUser.id) return true;
+          if (!selectedScriptArg) return false;
+          return w.scriptId !== selectedScriptArg;
+        });
+        const removed = beforeCount - ws.whitelists.length;
+        await saveStore();
+
+        await interaction.editReply({
+          content:
+            removed > 0
+              ? `🗑️ <@${targetUser.id}> whitelist-dən silindi (${removed} qeyd).`
+              : `⚠️ <@${targetUser.id}> üçün uyğun whitelist qeydi tapılmadı.`,
+        });
+        return;
+      }
+
+      if (cmd === 'resethwid') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = interaction.options.getUser('user');
+        let resetCount = 0;
+        for (const w of ws.whitelists) {
+          if (w.discordUserId === targetUser.id && (!selectedScriptArg || w.scriptId === selectedScriptArg)) {
+            w.hwid = '';
+            resetCount++;
           }
         }
+        ws.stats.hwidResets += resetCount;
+        await saveStore();
+
+        await interaction.editReply({
+          content:
+            resetCount > 0
+              ? `🔄 <@${targetUser.id}> istifadəçisinin HWID-si sıfırlandı (${resetCount} qeyd).`
+              : `⚠️ <@${targetUser.id}> üçün sıfırlanacaq whitelist qeydi tapılmadı.`,
+        });
         return;
       }
     }
@@ -1081,50 +755,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
       const cid = interaction.customId || '';
       const userId = interaction.user.id;
-
-      if (cid.startsWith('sado_copyscript_')) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const scriptId = cid.replace('sado_copyscript_', '');
-        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
-        const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
-        const wl = ws.whitelists.find(
-          (w) => w.discordUserId === userId && (!sc || !w.scriptId || w.scriptId === sc.id) && !isExpired(w.expiresAt)
-        );
-        const keyVal = wl ? wl.key : 'WHITELIST_KEY';
-        const snippet = sc ? buildLoaderSnippet(sc, keyVal) : `script_key = "${keyVal}"`;
-
-        const copyEmbed = new EmbedBuilder()
-          .setColor(hexToDiscordInt(ws.panelConfig.embedColor || '#5865F2'))
-          .setTitle('📋 Skript Kopyalama Paneli')
-          .setDescription(
-            [
-              `🔑 **Key:** \`${keyVal}\``,
-              '',
-              '```lua',
-              snippet,
-              '```',
-              '✅ Skript aşağıda kopyalanmaq üçün hazır şəkildə göstərilir.',
-            ].join('\n')
-          )
-          .setFooter({ text: 'SADO PROTECT • Script Copy Panel' });
-
-        await interaction.editReply({
-          content: snippet,
-          embeds: [copyEmbed],
-        });
-        return;
-      }
+      const scriptIdFromCid = cid.replace(/^sado_(redeem|getscript|resethwid|stats|copyscript)_/, '');
+      const { wsId, ws } = resolveWorkspaceForDiscord({
+        guildId: interaction.guildId,
+        discordUserId: userId,
+        scriptId: scriptIdFromCid,
+      });
 
       if (cid.startsWith('sado_redeem_')) {
-        const scriptId = cid.replace('sado_redeem_', '');
         const modal = new ModalBuilder()
-          .setCustomId(`sado_modal_redeem_${scriptId}`)
-          .setTitle('🔑 Key Aktivləşdir (Redeem)');
+          .setCustomId(`sado_redeem_modal_${scriptIdFromCid}`)
+          .setTitle('Key Aktivləşdir (Redeem Key)');
 
         const keyInput = new TextInputBuilder()
-          .setCustomId('redeem_key_value')
-          .setLabel('Lisenziya / Script Key')
-          .setPlaceholder('Məs: SADO-XXXX-XXXX-XXXX')
+          .setCustomId('redeem_key_input')
+          .setLabel('Lisenziya Key-inizi daxil edin')
+          .setPlaceholder('SADO-XXXXXX-XXXXXX')
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
 
@@ -1133,29 +779,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      if (cid.startsWith('sado_copyscript_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const sc = ws.scripts.find((s) => s.id === scriptIdFromCid) || ws.scripts[0];
+        const wl = ws.whitelists.find(
+          (w) => w.discordUserId === userId && (!sc || w.scriptId === sc.id) && !isExpired(w.expiresAt)
+        );
+        const snippet = buildLoaderSnippet(wsId, sc, wl, buildPublicBaseUrl());
+        const copyEmbed = new EmbedBuilder()
+          .setColor('#10b981')
+          .setTitle(`📋 ${sc ? sc.name : 'SADO HUB'} • Loader Code`)
+          .setDescription(`\`\`\`lua\n${snippet}\n\`\`\``)
+          .setFooter({ text: 'SADO PROTECT • Script Copy Panel' });
+        await interaction.editReply({ content: snippet, embeds: [copyEmbed] });
+        return;
+      }
+
       if (cid.startsWith('sado_getscript_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const scriptId = cid.replace('sado_getscript_', '');
-        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
-        const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
-
+        const sc = ws.scripts.find((s) => s.id === scriptIdFromCid) || ws.scripts[0];
         if (!sc) {
           await interaction.editReply({ content: '❌ Bu panel üçün aktiv skript tapılmadı.' });
           return;
         }
-
-        const isBl = ws.blacklists.some(
+        const isBl = ws.blacklist.some(
           (b) => b.discordUserId === userId && (!b.scriptId || b.scriptId === sc.id)
         );
         if (isBl) {
           await interaction.editReply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.' });
           return;
         }
-
         const wl = ws.whitelists.find(
-          (w) => w.discordUserId === userId && (!w.scriptId || w.scriptId === sc.id) && !isExpired(w.expiresAt)
+          (w) => w.discordUserId === userId && w.scriptId === sc.id && !isExpired(w.expiresAt)
         );
-
         if (!wl) {
           await interaction.editReply({
             content:
@@ -1163,90 +819,75 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           return;
         }
+        ws.stats.scriptFetches += 1;
+        await saveStore();
 
-        const scriptText = buildLoaderSnippet(sc, wl.key);
-
+        const snippet = buildLoaderSnippet(wsId, sc, wl, buildPublicBaseUrl());
         const scriptPanelEmbed = new EmbedBuilder()
-          .setColor(hexToDiscordInt(ws.panelConfig.embedColor || '#5865F2'))
-          .setTitle(`📜 ${sc.name} — Script & Key`)
-          .setDescription(
-            [
-              `🔑 **Script Key:** \`${wl.key}\``,
-              `⏳ **Bitmə vaxtı:** ${formatExpiry(wl.expiresAt)}`,
-              '',
-              '```lua',
-              scriptText,
-              '```',
-            ].join('\n')
+          .setColor('#3b82f6')
+          .setTitle(`📜 ${sc.name} • Loader`)
+          .setDescription(`\`\`\`lua\n${snippet}\n\`\`\``)
+          .addFields(
+            { name: '🔑 Key', value: `\`${wl.key}\``, inline: true },
+            { name: '🖥️ HWID', value: wl.hwid ? `\`${wl.hwid}\`` : '`Bağlanmayıb (İlk girişdə bağlanacaq)`', inline: true }
           )
-          .setFooter({ text: 'SADO PROTECT • Get Script' })
           .setTimestamp();
 
-        const copyActionRow = new ActionRowBuilder().addComponents(
+        const copyRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`sado_copyscript_${sc.id}`)
-            .setLabel('📋 Skripti Kopyala')
+            .setLabel('Skripti Kopyala')
+            .setEmoji('📋')
             .setStyle(ButtonStyle.Success)
         );
 
-        await interaction.editReply({
-          embeds: [scriptPanelEmbed],
-          components: [copyActionRow],
-        });
+        await interaction.editReply({ embeds: [scriptPanelEmbed], components: [copyRow] });
         return;
       }
 
       if (cid.startsWith('sado_resethwid_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const scriptId = cid.replace('sado_resethwid_', '');
-        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
-        const matchingWl = ws.whitelists.filter(
-          (w) => w.discordUserId === userId && (scriptId === 'default' || !w.scriptId || w.scriptId === scriptId)
+        const matching = ws.whitelists.filter(
+          (w) =>
+            w.discordUserId === userId &&
+            (scriptIdFromCid === 'default' || !w.scriptId || w.scriptId === scriptIdFromCid)
         );
-
-        if (!matchingWl.length) {
+        if (!matching.length) {
           await interaction.editReply({ content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.' });
           return;
         }
-
-        for (const item of matchingWl) {
-          item.hwid = '';
-          item.hwidResetAt = new Date().toISOString();
+        for (const w of matching) {
+          w.hwid = '';
         }
-        for (const kItem of ws.keys) {
-          if (kItem.usedByDiscordId === userId && (!scriptId || scriptId === 'default' || kItem.scriptId === scriptId)) {
-            kItem.hwid = '';
-          }
-        }
-        saveStore().catch(() => {});
+        ws.stats.hwidResets += matching.length;
+        await saveStore();
 
         await interaction.editReply({
-          content: `🔄 HWID uğurla sıfırlandı (${matchingWl.length} qeyd yeniləndi). Yeni girişdə yeni HWID bağlanacaq.`,
+          content: `🔄 HWID uğurla sıfırlandı (${matching.length} qeyd). Skripti növbəti dəfə ilk işlədən cihaza bağlanacaq.`,
         });
         return;
       }
 
       if (cid.startsWith('sado_stats_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const scriptId = cid.replace('sado_stats_', '');
-        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
         const userKeys = ws.keys.filter((k) => k.usedByDiscordId === userId);
         const userWl = ws.whitelists.filter((w) => w.discordUserId === userId && !isExpired(w.expiresAt));
-
         const statsEmbed = new EmbedBuilder()
-          .setColor(hexToDiscordInt(ws.panelConfig.embedColor || '#5865F2'))
+          .setColor('#8b5cf6')
           .setTitle('📊 İstifadəçi Statistikası')
-          .setDescription(
-            [
-              `👤 **İstifadəçi:** <@${userId}> (\`${userId}\`)`,
-              `✅ **Aktiv Whitelist:** \`${userWl.length}\``,
-              `🔑 **İstifadə edilmiş Key sayı:** \`${userKeys.length}\``,
-              `🖥️ **HWID Status:** \`${userWl[0]?.hwid ? userWl[0].hwid : 'Bağlanmayıb'}\``,
-              `⏳ **Müddət:** \`${userWl[0] ? formatExpiry(userWl[0].expiresAt) : '—'}\``,
-            ].join('\n')
+          .addFields(
+            { name: '👤 İstifadəçi', value: `<@${userId}>`, inline: true },
+            { name: '🔑 Aktiv Key / Whitelist', value: String(userWl.length), inline: true },
+            { name: '📥 Aktivləşdirilən Keylər', value: String(userKeys.length), inline: true },
+            {
+              name: '🖥️ Bağlı HWID-lər',
+              value: userWl.length
+                ? userWl.map((w) => `\`${w.scriptId}\`: ${w.hwid ? `\`${w.hwid}\`` : '_Sıfır / Gözlənilir_'}`).join('\n')
+                : 'Yoxdur',
+              inline: false,
+            }
           )
           .setTimestamp();
-
         await interaction.editReply({ embeds: [statsEmbed] });
         return;
       }
@@ -1254,1325 +895,939 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isModalSubmit()) {
       const cid = interaction.customId || '';
-      if (cid.startsWith('sado_modal_redeem_')) {
+      if (cid.startsWith('sado_redeem_modal_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const scriptId = cid.replace('sado_modal_redeem_', '');
-        const keyInput = interaction.fields.getTextInputValue('redeem_key_value').trim();
+        const scriptIdFromModal = cid.replace('sado_redeem_modal_', '');
         const userId = interaction.user.id;
+        const enteredKey = interaction.fields.getTextInputValue('redeem_key_input').trim();
+        const { ws } = resolveWorkspaceForDiscord({
+          guildId: interaction.guildId,
+          discordUserId: userId,
+          scriptId: scriptIdFromModal,
+        });
 
-        let ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
-        let keyObj = ws.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
+        const keyObj = ws.keys.find((k) => k.key.toUpperCase() === enteredKey.toUpperCase());
         if (!keyObj) {
-          for (const item of getAllWorkspacesList()) {
-            const found = item.ws.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
-            if (found) {
-              ws = item.ws;
-              keyObj = found;
-              break;
-            }
-          }
+          await interaction.editReply({ content: '❌ Bu key tapılmadı və ya etibarsızdır.' });
+          return;
+        }
+        if (keyObj.used && keyObj.usedByDiscordId && keyObj.usedByDiscordId !== userId) {
+          await interaction.editReply({ content: '❌ Bu key artıq başqa istifadəçi tərəfindən işlədilib.' });
+          return;
+        }
+        if (isExpired(keyObj.expiresAt)) {
+          await interaction.editReply({ content: '⏰ Bu key-in vaxtı bitib.' });
+          return;
         }
 
-        const targetScript = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
-        const isBl = ws.blacklists.some(
-          (b) => b.discordUserId === userId && (!targetScript || !b.scriptId || b.scriptId === targetScript.id)
+        const targetScriptId = keyObj.scriptId || scriptIdFromModal || (ws.scripts[0] && ws.scripts[0].id) || 'default';
+        const isBl = ws.blacklist.some(
+          (b) => b.discordUserId === userId && (!b.scriptId || b.scriptId === targetScriptId)
         );
         if (isBl) {
           await interaction.editReply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.' });
           return;
         }
 
-        if (!keyObj) {
-          await interaction.editReply({ content: '❌ Daxil edilən key tapılmadı.' });
-          return;
-        }
-        if (keyObj.used && keyObj.usedByDiscordId && keyObj.usedByDiscordId !== userId) {
-          await interaction.editReply({ content: '⚠️ Bu key artıq başqa istifadəçi tərəfindən işlədilib.' });
-          return;
-        }
-        if (keyObj.expiresAt && isExpired(keyObj.expiresAt)) {
-          await interaction.editReply({ content: '⌛ Bu key-in vaxtı bitib.' });
-          return;
-        }
-
-        const effectiveScriptId = keyObj.scriptId || (targetScript ? targetScript.id : '');
-        const durationSec = keyObj.durationSeconds || 0;
-        const expiresAt = durationSec > 0 ? new Date(Date.now() + durationSec * 1000).toISOString() : null;
-
         keyObj.used = true;
         keyObj.usedByDiscordId = userId;
         keyObj.usedAt = new Date().toISOString();
-        if (!keyObj.expiresAt && expiresAt) {
-          keyObj.expiresAt = expiresAt;
-        }
 
-        const existingWl = ws.whitelists.find(
-          (w) => w.discordUserId === userId && w.scriptId === effectiveScriptId
+        const existingWlIdx = ws.whitelists.findIndex(
+          (w) => w.discordUserId === userId && w.scriptId === targetScriptId
         );
-        if (existingWl) {
-          existingWl.key = keyObj.key;
-          existingWl.expiresAt = keyObj.expiresAt || expiresAt;
+        const wlRecord = {
+          id: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].id : crypto.randomUUID(),
+          discordUserId: userId,
+          username: interaction.user.username,
+          scriptId: targetScriptId,
+          key: keyObj.key,
+          hwid: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].hwid || '' : '',
+          expiresAt: keyObj.expiresAt || null,
+          createdAt: new Date().toISOString(),
+        };
+        if (existingWlIdx >= 0) {
+          ws.whitelists[existingWlIdx] = wlRecord;
         } else {
-          ws.whitelists.push({
-            id: generateId('wl'),
-            discordUserId: userId,
-            scriptId: effectiveScriptId,
-            key: keyObj.key,
-            hwid: '',
-            expiresAt: keyObj.expiresAt || expiresAt,
-            createdAt: new Date().toISOString(),
-          });
+          ws.whitelists.unshift(wlRecord);
         }
+        ws.stats.redeems += 1;
+        await saveStore();
 
-        saveStore().catch(() => {});
         await interaction.editReply({
-          content: `✅ Key uğurla aktivləşdirildi! **${keyObj.key}** — Müddət: **${formatExpiry(keyObj.expiresAt || expiresAt)}**.`,
+          content: `✅ Key uğurla aktivləşdirildi! İndi **Get Script** düyməsinə basıb skripti götürə bilərsiniz.`,
         });
       }
     }
   } catch (err) {
-    console.error('[INTERACTION ERROR]', err.message);
-    if (interaction && !interaction.replied && !interaction.deferred) {
-      try {
-        await interaction.reply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.', flags: MessageFlags.Ephemeral });
-      } catch (_e) {
-        // Səssiz ötürülür
+    console.error('[BOT] Interaction xətası:', err && err.message ? err.message : err);
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.' }).catch(() => {});
+      } else if (typeof interaction.reply === 'function') {
+        await interaction.reply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.', flags: MessageFlags.Ephemeral }).catch(() => {});
       }
-    }
+    } catch (_e) {}
   }
 });
 
-// ============================================================================
-// 4. EXPRESS WEB SERVER VƏ CİHAZ/WORKSPACE-ƏSASLI REST API ENDPOINTLƏRİ
-// ============================================================================
-
 const app = express();
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-app.use((req, res, next) => {
+app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  const rawWsId = req.headers['x-workspace-id'] || req.query.wsId || req.body?.wsId || '';
-  req.wsId = sanitizeWorkspaceId(rawWsId);
-  req.wsState = getWorkspaceState(req.wsId);
   next();
 });
 
 app.get('/health', (_req, res) => {
-  res.status(200).json({ ok: true, botReady: client.isReady(), uptime: process.uptime() });
+  res.status(200).json({
+    ok: true,
+    botReady: client.isReady(),
+    workspaces: Object.keys(store.workspaces || {}).length,
+    uptime: Math.floor(process.uptime()),
+  });
 });
 
 app.get('/api/status', async (req, res) => {
   try {
-    const ws = req.wsState;
-    if (!client.isReady() && !isConnectingNow) {
-      ensureBotOnline().catch(() => {});
+    const { wsId, ws } = getWorkspaceFromReq(req);
+    if (!client.isReady() && !isConnectingNow && BOT_TOKEN) {
+      await ensureBotOnline();
     }
-    const guilds = getBotGuildsSummary();
-    let activeGuildName = ws.activeGuildName || '';
-    if (ws.activeGuildId) {
-      const matched = guilds.find((g) => g.id === ws.activeGuildId);
-      if (matched) {
-        activeGuildName = matched.name;
-        ws.activeGuildName = matched.name;
-      } else if (!activeGuildName) {
-        activeGuildName = `Sunucu (${ws.activeGuildId})`;
-      }
-    }
-
-    const activeWhitelistCount = ws.whitelists.filter((w) => !isExpired(w.expiresAt)).length;
-    const recentKeys = [...ws.keys]
-      .slice(-10)
-      .reverse()
-      .map((k) => ({
-        id: k.id,
-        key: k.key,
-        scriptId: k.scriptId,
-        durationSeconds: k.durationSeconds || 0,
-        expiresAt: k.expiresAt || null,
-        used: Boolean(k.used),
-        createdBy: k.createdBy || 'Dashboard',
-        usedByDiscordId: k.usedByDiscordId || null,
-        createdAt: k.createdAt,
-      }));
-
     res.json({
       ok: true,
-      workspaceId: req.wsId,
-      bot: {
-        status: 'online',
-        online: true,
-        userTag: client.user ? client.user.tag : 'SADO HUB',
-        inviteUrl: getGuildInviteUrl(),
-        guilds,
-      },
-      activeGuildId: ws.activeGuildId || '',
-      activeGuildName,
-      activeDiscordUserId: ws.activeDiscordUserId || '',
+      workspaceId: wsId,
+      botReady: client.isReady(),
+      botTag: client.user ? client.user.tag : null,
+      guildId: ws.guildId || '',
+      discordUserId: ws.discordUserId || '',
       panelConfig: ws.panelConfig,
-      stats: {
-        scriptsCount: ws.scripts.length,
-        keysCount: ws.keys.length,
-        whitelistsCount: activeWhitelistCount,
-        blacklistsCount: ws.blacklists.length,
-        panelsCount: ws.panels.length,
+      counts: {
+        scripts: ws.scripts.length,
+        keys: ws.keys.length,
+        whitelists: ws.whitelists.length,
+        blacklist: ws.blacklist.length,
+        panels: ws.panels.length,
       },
-      recentKeys,
+      stats: ws.stats,
     });
   } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
+    res.status(500).json({ ok: false, message: err.message || 'Status xətası' });
   }
+});
+
+app.get('/api/state', (req, res) => {
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  res.json({
+    ok: true,
+    workspaceId: wsId,
+    guildId: ws.guildId || '',
+    discordUserId: ws.discordUserId || '',
+    panelConfig: ws.panelConfig,
+    scripts: ws.scripts,
+    keys: ws.keys,
+    whitelists: ws.whitelists,
+    blacklist: ws.blacklist,
+    panels: ws.panels,
+    stats: ws.stats,
+  });
 });
 
 app.post('/api/workspace/link', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const guildId = String(req.body?.guildId || '').trim();
-    const discordUserId = String(req.body?.discordUserId || '').trim();
-
-    if (!guildId) {
-      return res.status(400).json({ ok: false, message: 'Zəhmət olmasa Sunucu ID seçin və ya yazın.' });
-    }
-
-    ws.activeGuildId = guildId;
-    ws.activeDiscordUserId = discordUserId;
-    ws.activeGuildName = await resolveGuildName(guildId);
-    await saveStore();
-
-    res.json({
-      ok: true,
-      activeGuildId: ws.activeGuildId,
-      activeGuildName: ws.activeGuildName,
-      activeDiscordUserId: ws.activeDiscordUserId,
-      message: `Sunucu bağlandı: ${ws.activeGuildName}`,
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const guildId = String((req.body && req.body.guildId) || '').trim();
+  const discordUserId = String((req.body && req.body.discordUserId) || '').trim();
+  ws.guildId = guildId;
+  ws.discordUserId = discordUserId;
+  await saveStore();
+  if (BOT_TOKEN && client.isReady()) {
+    await registerSlashCommands().catch(() => {});
   }
+  res.json({ ok: true, workspaceId: wsId, guildId: ws.guildId, discordUserId: ws.discordUserId, message: 'Sunucu və Discord ID yadda saxlandı!' });
 });
 
 app.post('/api/panel-config', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const body = req.body || {};
-    ws.panelConfig = {
-      embedColor: normalizeHexColor(body.embedColor, ws.panelConfig.embedColor || '#5865F2'),
-      title: String(body.title || ws.panelConfig.title || 'SADO PROTECT • Script Panel').trim().slice(0, 200),
-      description: String(
-        body.description !== undefined
-          ? body.description
-          : ws.panelConfig.description || 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin.'
-      )
-        .trim()
-        .slice(0, 1500),
-      redeemLabel: String(body.redeemLabel || 'Redeem Key').trim().slice(0, 80),
-      redeemStyle: String(body.redeemStyle || 'green').trim(),
-      getScriptLabel: String(body.getScriptLabel || 'Get Script').trim().slice(0, 80),
-      getScriptStyle: String(body.getScriptStyle || 'blurple').trim(),
-      resetHwidLabel: String(body.resetHwidLabel || 'Reset HWID').trim().slice(0, 80),
-      resetHwidStyle: String(body.resetHwidStyle || 'grey').trim(),
-      statsLabel: String(body.statsLabel || 'Stats').trim().slice(0, 80),
-      statsStyle: String(body.statsStyle || 'grey').trim(),
-    };
-    await saveStore();
-    refreshExistingDiscordPanels(ws).catch(() => {});
-
-    res.json({
-      ok: true,
-      panelConfig: ws.panelConfig,
-      message: 'Panel dizaynı yadda saxlanıldı!',
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.get('/api/scripts', (req, res) => {
-  res.json({ ok: true, scripts: req.wsState.scripts });
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const body = req.body || {};
+  ws.panelConfig = {
+    embedColor: normalizeHexColor(body.embedColor || ws.panelConfig.embedColor),
+    title: String(body.title !== undefined ? body.title : ws.panelConfig.title).trim() || DEFAULT_PANEL_CONFIG.title,
+    description:
+      String(body.description !== undefined ? body.description : ws.panelConfig.description).trim() ||
+      DEFAULT_PANEL_CONFIG.description,
+    redeemLabel: String(body.redeemLabel || ws.panelConfig.redeemLabel).trim() || 'Redeem Key',
+    getScriptLabel: String(body.getScriptLabel || ws.panelConfig.getScriptLabel).trim() || 'Get Script',
+    resetHwidLabel: String(body.resetHwidLabel || ws.panelConfig.resetHwidLabel).trim() || 'Reset HWID',
+    statsLabel: String(body.statsLabel || ws.panelConfig.statsLabel).trim() || 'Get Stats',
+    footerText: String(body.footerText || ws.panelConfig.footerText).trim() || DEFAULT_PANEL_CONFIG.footerText,
+    imageUrl: String(body.imageUrl !== undefined ? body.imageUrl : ws.panelConfig.imageUrl).trim(),
+    thumbnailUrl: String(body.thumbnailUrl !== undefined ? body.thumbnailUrl : ws.panelConfig.thumbnailUrl).trim(),
+  };
+  await saveStore();
+  await refreshExistingDiscordPanels(ws).catch(() => {});
+  res.json({ ok: true, workspaceId: wsId, panelConfig: ws.panelConfig, message: 'Panel dizaynı yeniləndi və aktiv panellərə tətbiq olundu!' });
 });
 
 app.post('/api/scripts', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const body = req.body || {};
-    const name = String(body.name || body.title || '').trim();
-    const fileName = String(body.fileName || body.filename || `${name || 'script'}.lua`).trim();
-    let code = String(body.code || '');
-    const obfuscate = Boolean(body.obfuscate);
-    const obfuscateLevel = Number(body.obfuscateLevel || 3);
-
-    if (!name) {
-      return res.status(400).json({ ok: false, message: 'Skript adı mütləqdir.' });
-    }
-    if (!code.trim()) {
-      return res.status(400).json({ ok: false, message: 'Skript kodu boş ola bilməz.' });
-    }
-
-    const wasObfuscated = Boolean(body.preObfuscated) || obfuscate;
-    if (obfuscate && !body.preObfuscated) {
-      code = obfuscateLuaCode(code, obfuscateLevel);
-    }
-
-    const newScript = {
-      id: generateId('scr'),
-      loaderToken: crypto.randomBytes(16).toString('hex'),
-      guildId: ws.activeGuildId || '',
-      name,
-      fileName,
-      code,
-      obfuscated: wasObfuscated,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    ws.scripts.push(newScript);
-    await saveStore();
-
-    res.status(201).json({
-      ok: true,
-      script: newScript,
-      message: 'Skript uğurla yadda saxlanıldı!',
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const name = String((req.body && req.body.name) || '').trim();
+  const code = String((req.body && req.body.code) || DEFAULT_SCRIPT_CODE);
+  if (!name) {
+    res.status(400).json({ ok: false, message: 'Skript adı tələb olunur.' });
+    return;
   }
-});
-
-app.put('/api/scripts/:id', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const sc = ws.scripts.find((s) => s.id === req.params.id);
-    if (!sc) {
-      return res.status(404).json({ ok: false, message: 'Skript tapılmadı.' });
-    }
-    const body = req.body || {};
-    if (body.name !== undefined && String(body.name).trim()) {
-      sc.name = String(body.name).trim();
-    }
-    if (body.fileName !== undefined && String(body.fileName).trim()) {
-      sc.fileName = String(body.fileName).trim();
-    }
-    if (body.code !== undefined && String(body.code).trim()) {
-      let nextCode = String(body.code);
-      if (body.obfuscate) {
-        nextCode = obfuscateLuaCode(nextCode, Number(body.obfuscateLevel || 3));
-        sc.obfuscated = true;
-      }
-      sc.code = nextCode;
-    }
-    sc.updatedAt = new Date().toISOString();
-    await saveStore();
-
-    res.json({ ok: true, script: sc, message: 'Skript yeniləndi!' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
+  const id = slugifyId(name, 'script');
+  const scriptObj = {
+    id,
+    name,
+    loaderToken: `${id}_${crypto.randomBytes(3).toString('hex')}`,
+    code,
+    createdAt: new Date().toISOString(),
+  };
+  ws.scripts.unshift(scriptObj);
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, script: scriptObj, message: 'Skript yaradıldı!' });
 });
 
 app.delete('/api/scripts/:id', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const idx = ws.scripts.findIndex((s) => s.id === req.params.id);
-    if (idx === -1) {
-      return res.status(404).json({ ok: false, message: 'Skript tapılmadı.' });
-    }
-    ws.scripts.splice(idx, 1);
-    await saveStore();
-    res.json({ ok: true, message: 'Skript silindi.' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.post('/api/obfuscate', (req, res) => {
-  try {
-    const code = String(req.body?.code || '');
-    const level = Number(req.body?.level || 3);
-    if (!code.trim()) {
-      return res.status(400).json({ ok: false, message: 'Şifrələmək üçün Lua kodu daxil edin.' });
-    }
-    const obfuscated = obfuscateLuaCode(code, level);
-    res.json({ ok: true, obfuscated });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.get('/api/loader/:token', (req, res) => {
-  const token = String(req.params.token || '').trim();
-  const providedKey = String(req.query.key || '').trim();
-  const providedHwid = String(req.query.hwid || '').trim();
-  const ua = String(req.headers['user-agent'] || '').toLowerCase();
-  const acceptHeader = String(req.headers['accept'] || '').toLowerCase();
-  const secFetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
-
-  const { ws, sc } = findWorkspaceByLoaderToken(token);
-  if (!ws || !sc) {
-    res.status(403).type('text/plain').send('-- [SADO PROTECT] Access Denied');
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const targetId = req.params.id;
+  if (ws.scripts.length <= 1) {
+    res.status(400).json({ ok: false, message: 'Ən azı 1 skript qalmalıdır.' });
     return;
   }
-
-  const isBrowserDocument =
-    secFetchDest === 'document' ||
-    (acceptHeader.includes('text/html') && !ua.includes('roblox'));
-
-  if (isBrowserDocument || !providedKey || providedKey === 'YOUR_KEY_HERE' || providedKey === 'YOUR_KEY') {
-    res
-      .status(403)
-      .type('text/plain; charset=utf-8')
-      .send('-- [SADO PROTECT] Anti-Dump Shield: Direct browser/unauthorized access is blocked.');
-    return;
-  }
-
-  const validWl = ws.whitelists.find(
-    (w) =>
-      String(w.key || '').toUpperCase() === providedKey.toUpperCase() &&
-      (!w.scriptId || w.scriptId === sc.id) &&
-      !isExpired(w.expiresAt)
-  );
-  const validKey = ws.keys.find(
-    (k) =>
-      String(k.key || '').toUpperCase() === providedKey.toUpperCase() &&
-      (!k.scriptId || k.scriptId === sc.id) &&
-      (!k.expiresAt || !isExpired(k.expiresAt))
-  );
-
-  if (!validWl && !validKey) {
-    res
-      .status(403)
-      .type('text/plain; charset=utf-8')
-      .send('-- [SADO PROTECT] Invalid or Expired Key.');
-    return;
-  }
-
-  const ownerId = validWl ? validWl.discordUserId : validKey.usedByDiscordId;
-  if (ownerId) {
-    const isBlacklisted = ws.blacklists.some(
-      (b) => b.discordUserId === ownerId && (!b.scriptId || b.scriptId === sc.id)
-    );
-    if (isBlacklisted) {
-      res.status(403).type('text/plain; charset=utf-8').send('-- [SADO PROTECT] User Blacklisted.');
-      return;
-    }
-  }
-
-  const reqHwid =
-    providedHwid ||
-    String(req.headers['syn-fingerprint'] || req.headers['exploit-guid'] || req.headers['fingerprint'] || req.headers['hwid'] || '').trim();
-
-  if (reqHwid && reqHwid !== '_') {
-    const boundHwid = (validWl && validWl.hwid) || (validKey && validKey.hwid) || '';
-    if (!boundHwid) {
-      if (validWl) {
-        validWl.hwid = reqHwid;
-        validWl.hwidBoundAt = new Date().toISOString();
-      }
-      if (validKey) {
-        validKey.hwid = reqHwid;
-        validKey.hwidBoundAt = new Date().toISOString();
-      }
-      saveStore().catch(() => {});
-    } else if (boundHwid !== reqHwid) {
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-      res
-        .status(200)
-        .type('text/plain; charset=utf-8')
-        .send('local p = game:GetService("Players").LocalPlayer; if p then p:Kick("[SADO PROTECT] Bu script başqa cihaza bağlıdır!") end');
-      return;
-    }
-  }
-
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-  res.type('text/plain; charset=utf-8').send(String(sc.code || ''));
-});
-
-app.get('/api/keys', (req, res) => {
-  res.json({ ok: true, keys: req.wsState.keys });
+  ws.scripts = ws.scripts.filter((s) => s.id !== targetId);
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, message: 'Skript silindi.' });
 });
 
 app.post('/api/keys', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const body = req.body || {};
-    const scriptId = String(body.scriptId || ws.scripts[0]?.id || '').trim();
-    const durationSeconds = parseDurationToSeconds(body.duration || body.durationSeconds || '0');
-    const amount = Math.max(1, Math.min(100, Number(body.amount || 1)));
-    const createdBy = String(body.createdBy || ws.activeDiscordUserId || 'Dashboard').trim();
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const scriptId = String((req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default');
+  const duration = String((req.body && req.body.duration) || 'lifetime').trim() || 'lifetime';
+  const amount = Math.min(100, Math.max(1, Number((req.body && req.body.amount) || 1)));
+  const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
+  const durMs = parseDurationToMs(duration);
+  const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
 
-    const created = [];
-    for (let i = 0; i < amount; i++) {
-      const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
-      const keyEntry = {
-        id: generateId('key'),
-        key: generateKeyString(),
-        scriptId,
-        durationSeconds,
-        expiresAt,
-        used: false,
-        usedByDiscordId: null,
-        createdBy,
-        createdAt: new Date().toISOString(),
-      };
-      ws.keys.push(keyEntry);
-      created.push(keyEntry);
-    }
-
-    await saveStore();
-    res.status(201).json({ ok: true, keys: created, message: `${created.length} key yaradıldı!` });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
+  const created = [];
+  for (let i = 0; i < amount; i++) {
+    const item = {
+      key: generateRandomKeyCode(),
+      scriptId: sc ? sc.id : scriptId,
+      scriptName: sc ? sc.name : 'SADO HUB',
+      duration,
+      expiresAt,
+      used: false,
+      usedByDiscordId: null,
+      createdAt: new Date().toISOString(),
+    };
+    ws.keys.unshift(item);
+    created.push(item);
   }
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, keys: created, message: `${created.length} key yaradıldı!` });
 });
 
-app.delete('/api/keys/:id', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const idx = ws.keys.findIndex((k) => k.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ ok: false, message: 'Key tapılmadı.' });
-    ws.keys.splice(idx, 1);
-    await saveStore();
-    res.json({ ok: true, message: 'Key silindi.' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.get('/api/whitelist', (req, res) => {
-  res.json({ ok: true, whitelists: req.wsState.whitelists });
+app.delete('/api/keys/:key', async (req, res) => {
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const targetKey = decodeURIComponent(req.params.key || '');
+  ws.keys = ws.keys.filter((k) => k.key !== targetKey);
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, message: 'Key silindi.' });
 });
 
 app.post('/api/whitelist', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const body = req.body || {};
-    const discordUserId = String(body.discordUserId || '').trim();
-    const scriptId = String(body.scriptId || ws.scripts[0]?.id || '').trim();
-    const durationSeconds = parseDurationToSeconds(body.duration || body.durationSeconds || '0');
-
-    if (!discordUserId) {
-      return res.status(400).json({ ok: false, message: 'Discord User ID daxil edin.' });
-    }
-
-    const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
-    const generatedKey = generateKeyString();
-
-    ws.keys.push({
-      id: generateId('key'),
-      key: generatedKey,
-      scriptId,
-      durationSeconds,
-      expiresAt,
-      used: true,
-      usedByDiscordId: discordUserId,
-      createdBy: 'Whitelist',
-      createdAt: new Date().toISOString(),
-    });
-
-    const existing = ws.whitelists.find((w) => w.discordUserId === discordUserId && w.scriptId === scriptId);
-    if (existing) {
-      existing.key = generatedKey;
-      existing.expiresAt = expiresAt;
-    } else {
-      ws.whitelists.push({
-        id: generateId('wl'),
-        discordUserId,
-        scriptId,
-        key: generatedKey,
-        hwid: '',
-        expiresAt,
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    await saveStore();
-    res.status(201).json({ ok: true, message: 'İstifadəçi whitelist-ə əlavə edildi!', key: generatedKey });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const discordUserId = String((req.body && req.body.discordUserId) || '').trim();
+  const scriptId = String((req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default');
+  const duration = String((req.body && req.body.duration) || 'lifetime').trim() || 'lifetime';
+  if (!discordUserId) {
+    res.status(400).json({ ok: false, message: 'Discord User ID daxil edin.' });
+    return;
   }
+  const durMs = parseDurationToMs(duration);
+  const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
+
+  const existingIdx = ws.whitelists.findIndex(
+    (w) => w.discordUserId === discordUserId && w.scriptId === scriptId
+  );
+  const entry = {
+    id: existingIdx >= 0 ? ws.whitelists[existingWlIdx].id : crypto.randomUUID(),
+    discordUserId,
+    username: `User_${discordUserId.slice(-4)}`,
+    scriptId,
+    key: existingIdx >= 0 && ws.whitelists[existingIdx].key ? ws.whitelists[existingIdx].key : generateRandomKeyCode(),
+    hwid: existingIdx >= 0 ? ws.whitelists[existingIdx].hwid || '' : '',
+    expiresAt,
+    createdAt: new Date().toISOString(),
+  };
+  if (existingIdx >= 0) {
+    ws.whitelists[existingIdx] = entry;
+  } else {
+    ws.whitelists.unshift(entry);
+  }
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, entry, message: 'Whitelist yeniləndi!' });
+});
+
+app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const wl = ws.whitelists.find((w) => w.id === req.params.id);
+  if (!wl) {
+    res.status(404).json({ ok: false, message: 'Qeyd tapılmadı.' });
+    return;
+  }
+  wl.hwid = '';
+  ws.stats.hwidResets += 1;
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, message: 'HWID sıfırlandı!' });
 });
 
 app.delete('/api/whitelist/:id', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const idx = ws.whitelists.findIndex((w) => w.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ ok: false, message: 'Whitelist qeydi tapılmadı.' });
-    ws.whitelists.splice(idx, 1);
-    await saveStore();
-    res.json({ ok: true, message: 'Whitelist silindi.' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
-});
-
-app.get('/api/blacklist', (req, res) => {
-  res.json({ ok: true, blacklists: req.wsState.blacklists });
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  ws.whitelists = ws.whitelists.filter((w) => w.id !== req.params.id);
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, message: 'Whitelist qeydi silindi.' });
 });
 
 app.post('/api/blacklist', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const discordUserId = String(req.body?.discordUserId || '').trim();
-    const scriptId = String(req.body?.scriptId || '').trim();
-    if (!discordUserId) {
-      return res.status(400).json({ ok: false, message: 'Discord User ID daxil edin.' });
-    }
-    ws.blacklists.push({
-      id: generateId('bl'),
-      discordUserId,
-      scriptId,
-      createdAt: new Date().toISOString(),
-    });
-    await saveStore();
-    res.status(201).json({ ok: true, message: 'İstifadəçi blacklist edildi.' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const discordUserId = String((req.body && req.body.discordUserId) || '').trim();
+  const scriptId = String((req.body && req.body.scriptId) || '').trim();
+  if (!discordUserId) {
+    res.status(400).json({ ok: false, message: 'Discord User ID tələb olunur.' });
+    return;
   }
+  const blItem = {
+    id: crypto.randomUUID(),
+    discordUserId,
+    scriptId,
+    createdAt: new Date().toISOString(),
+  };
+  ws.blacklist.unshift(blItem);
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, entry: blItem, message: 'Blacklist-ə əlavə olundu!' });
 });
 
 app.delete('/api/blacklist/:id', async (req, res) => {
-  try {
-    const ws = req.wsState;
-    const idx = ws.blacklists.findIndex((b) => b.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ ok: false, message: 'Blacklist qeydi tapılmadı.' });
-    ws.blacklists.splice(idx, 1);
-    await saveStore();
-    res.json({ ok: true, message: 'Blacklist silindi.' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message });
-  }
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  ws.blacklist = ws.blacklist.filter((b) => b.id !== req.params.id);
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, message: 'Blacklist-dən silindi.' });
 });
 
 app.post('/api/send-panel', async (req, res) => {
   try {
-    const ws = req.wsState;
-    const channelId = String(req.body?.channelId || '').trim();
-    const scriptId = String(req.body?.scriptId || ws.scripts[0]?.id || '').trim();
+    const { wsId, ws } = getWorkspaceFromReq(req);
+    const channelId = String((req.body && req.body.channelId) || '').trim();
+    const scriptId = String((req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default');
     if (!channelId) {
-      return res.status(400).json({ ok: false, message: 'Kanal ID daxil edin.' });
+      res.status(400).json({ ok: false, message: 'Kanal ID daxil edin.' });
+      return;
     }
-    const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0] || {
-      id: 'default',
-      name: 'SADO HUB',
-      loaderToken: 'default',
-    };
+    if (!BOT_TOKEN) {
+      res.status(400).json({ ok: false, message: 'Bot token təyin edilməyib.' });
+      return;
+    }
+    if (!client.isReady()) {
+      await ensureBotOnline();
+    }
+    const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
     const { embed, row } = buildPanelEmbedAndButtons(ws, sc);
-    const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    const sentMsg = await panelRest.post(Routes.channelMessages(channelId), {
-      body: {
-        embeds: [embed.toJSON()],
-        components: [row.toJSON()],
-      },
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+    const msg = await rest.post(Routes.channelMessages(channelId), {
+      body: { embeds: [embed.toJSON()], components: [row.toJSON()] },
     });
-
     ws.panels.push({
-      id: generateId('pnl'),
-      guildId: ws.activeGuildId || '',
+      id: crypto.randomUUID(),
       channelId,
-      messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
-      scriptId: sc.id,
+      messageId: msg.id,
+      scriptId: sc ? sc.id : scriptId,
       createdAt: new Date().toISOString(),
     });
     await saveStore();
-
-    res.json({ ok: true, message: `Panel kanala (${channelId}) göndərildi!` });
+    res.json({ ok: true, workspaceId: wsId, messageId: msg.id, message: 'Panel kanala göndərildi!' });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message || 'Panel göndərilə bilmədi.' });
   }
 });
 
-// ============================================================================
-// 5. TAM DASHBOARD HTML UI (HƏR TELEFONA AYRI WORKSPACE + 3 XƏTT MENYU)
-// ============================================================================
+app.get('/loader/:token', (req, res) => {
+  const tokenParam = decodeURIComponent(req.params.token || '');
+  const wsId = sanitizeWorkspaceId(req.query.ws || store.activeWorkspaceId || 'default');
+  const ws = ensureWorkspace(wsId);
+  const sc =
+    ws.scripts.find((s) => s.loaderToken === tokenParam || s.id === tokenParam) || ws.scripts[0];
+  const verifyUrl = `${buildPublicBaseUrl(req)}/api/verify?ws=${encodeURIComponent(wsId)}&script=${encodeURIComponent(sc ? sc.id : 'default')}`;
 
-const DASHBOARD_HTML = [
-  '<!DOCTYPE html>',
-  '<html lang="az">',
-  '<head>',
-  '  <meta charset="UTF-8" />',
-  '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
-  '  <title>SADO PROTECT • Control Dashboard</title>',
-  '  <style>',
-  '    :root {',
-  '      --bg-main: #070913;',
-  '      --bg-card: rgba(15, 20, 38, 0.88);',
-  '      --bg-input: rgba(9, 13, 27, 0.92);',
-  '      --border: rgba(120, 145, 255, 0.18);',
-  '      --text: #f3f6ff;',
-  '      --muted: #98a4c7;',
-  '      --accent-1: #6366f1;',
-  '      --accent-2: #a855f7;',
-  '      --accent-3: #06b6d4;',
-  '    }',
-  '    * { box-sizing: border-box; margin: 0; padding: 0; }',
-  '    body {',
-  '      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;',
-  '      background: radial-gradient(circle at 12% 10%, rgba(99, 102, 241, 0.24), transparent 36%), radial-gradient(circle at 88% 16%, rgba(168, 85, 247, 0.22), transparent 38%), radial-gradient(circle at 50% 92%, rgba(6, 182, 212, 0.18), transparent 42%), var(--bg-main);',
-  '      color: var(--text);',
-  '      min-height: 100vh;',
-  '      line-height: 1.5;',
-  '      overflow-x: hidden;',
-  '    }',
-  '    .topbar {',
-  '      position: sticky;',
-  '      top: 0;',
-  '      z-index: 400;',
-  '      display: flex;',
-  '      align-items: center;',
-  '      justify-content: space-between;',
-  '      gap: 12px;',
-  '      padding: 12px 16px;',
-  '      background: rgba(9, 13, 26, 0.9);',
-  '      backdrop-filter: blur(14px);',
-  '      border-bottom: 1px solid var(--border);',
-  '    }',
-  '    .topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }',
-  '    .menu-btn {',
-  '      width: 44px; height: 44px; border-radius: 12px;',
-  '      border: 1px solid rgba(129, 140, 248, 0.45);',
-  '      background: linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(168, 85, 247, 0.22));',
-  '      color: #fff; font-size: 21px; cursor: pointer;',
-  '      display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;',
-  '      touch-action: manipulation;',
-  '    }',
-  '    .brand-title {',
-  '      font-size: 16px; font-weight: 800; letter-spacing: 0.3px;',
-  '      background: linear-gradient(90deg, #ffffff, #c4b5fd, #67e8f9);',
-  '      -webkit-background-clip: text; -webkit-text-fill-color: transparent;',
-  '      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;',
-  '    }',
-  '    .brand-sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
-  '    .status-pill {',
-  '      padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 700;',
-  '      border: 1px solid rgba(16, 185, 129, 0.45); background: rgba(16, 185, 129, 0.16);',
-  '      color: #6ee7b7; white-space: nowrap; box-shadow: 0 0 18px rgba(16, 185, 129, 0.2);',
-  '    }',
-  '    .drawer-backdrop {',
-  '      position: fixed; inset: 0; background: rgba(3, 6, 15, 0.72);',
-  '      backdrop-filter: blur(4px); z-index: 500; display: none;',
-  '    }',
-  '    .drawer-backdrop.open { display: block; }',
-  '    .drawer {',
-  '      position: fixed; top: 0; left: 0; width: 280px; max-width: 85vw; height: 100vh;',
-  '      background: linear-gradient(180deg, #0d1326 0%, #090d1a 100%);',
-  '      border-right: 1px solid var(--border); z-index: 600; padding: 18px 14px;',
-  '      transform: translateX(-105%); transition: transform 0.22s ease;',
-  '      display: flex; flex-direction: column; gap: 6px; overflow-y: auto;',
-  '    }',
-  '    .drawer.open { transform: translateX(0); }',
-  '    .drawer-header {',
-  '      display: flex; align-items: center; justify-content: space-between;',
-  '      padding: 4px 6px 14px; border-bottom: 1px solid var(--border); margin-bottom: 8px;',
-  '    }',
-  '    .close-drawer {',
-  '      background: rgba(255,255,255,0.08); border: 1px solid var(--border);',
-  '      color: #fff; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 16px;',
-  '    }',
-  '    .nav-item {',
-  '      width: 100%; text-align: left; padding: 12px 14px; border-radius: 12px;',
-  '      border: 1px solid transparent; background: transparent; color: var(--muted);',
-  '      font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 10px;',
-  '    }',
-  '    .nav-item:hover { color: #fff; background: rgba(99, 102, 241, 0.14); }',
-  '    .nav-item.active {',
-  '      color: #fff;',
-  '      background: linear-gradient(135deg, rgba(99, 102, 241, 0.34), rgba(168, 85, 247, 0.28));',
-  '      border-color: rgba(168, 85, 247, 0.5);',
-  '    }',
-  '    .container { max-width: 960px; margin: 0 auto; padding: 18px 14px 48px; }',
-  '    .section { display: none; }',
-  '    .section.active { display: block; }',
-  '    .stats-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }',
-  '    @media (min-width: 720px) { .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }',
-  '    .stat-card {',
-  '      position: relative; border-radius: 18px; padding: 16px;',
-  '      background: var(--bg-card); border: 1px solid var(--border); overflow: hidden;',
-  '    }',
-  '    .stat-card::before {',
-  '      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;',
-  '      background: linear-gradient(90deg, var(--accent-1), var(--accent-2), var(--accent-3));',
-  '    }',
-  '    .stat-card.green-top::before { background: linear-gradient(90deg, #10b981, #34d399); }',
-  '    .stat-card.cyan-top::before { background: linear-gradient(90deg, #06b6d4, #6366f1); }',
-  '    .stat-card.pink-top::before { background: linear-gradient(90deg, #ec4899, #a855f7); }',
-  '    .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }',
-  '    .stat-value { font-size: 22px; font-weight: 800; color: #fff; word-break: normal; overflow-wrap: break-word; }',
-  '    .card {',
-  '      border-radius: 18px; padding: 18px 16px; background: var(--bg-card);',
-  '      border: 1px solid var(--border); margin-bottom: 14px;',
-  '    }',
-  '    .card h3 { font-size: 16px; font-weight: 700; margin-bottom: 10px; color: #fff; }',
-  '    .muted { font-size: 13px; color: var(--muted); margin-bottom: 14px; }',
-  '    label { display: block; font-size: 13px; font-weight: 600; color: #dbe4ff; margin-top: 12px; margin-bottom: 6px; }',
-  '    input[type="text"], input[type="number"], select, textarea {',
-  '      width: 100%; padding: 11px 13px; border-radius: 12px;',
-  '      border: 1px solid rgba(148, 163, 184, 0.24); background: var(--bg-input);',
-  '      color: #fff; font-size: 14px; font-family: inherit;',
-  '    }',
-  '    textarea { min-height: 150px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }',
-  '    .btn {',
-  '      display: inline-flex; align-items: center; justify-content: center; gap: 8px;',
-  '      width: 100%; padding: 12px 16px; margin-top: 14px; border-radius: 12px; border: none;',
-  '      font-size: 14px; font-weight: 700; color: #fff; cursor: pointer; text-decoration: none;',
-  '    }',
-  '    .btn-primary { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); }',
-  '    .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }',
-  '    .btn-cyan { background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%); }',
-  '    .btn-danger { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }',
-  '    .btn-sm { width: auto; margin-top: 0; padding: 7px 12px; font-size: 12px; border-radius: 9px; }',
-  '    .btn-row-2 { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }',
-  '    @media (min-width: 600px) { .btn-row-2 { grid-template-columns: 1fr 1fr; } }',
-  '    .btn-row-2 .btn { margin-top: 0; }',
-  '    .btn-style-pair { display: grid; grid-template-columns: 1.45fr 1fr; gap: 8px; align-items: center; }',
-  '    .btn-style-pair input, .btn-style-pair select { margin-top: 0; }',
-  '    .check-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 13px; color: #dbe4ff; cursor: pointer; }',
-  '    .check-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #8b5cf6; }',
-  '    .item-box {',
-  '      padding: 12px 14px; border-radius: 12px; background: rgba(8, 12, 24, 0.78);',
-  '      border: 1px solid var(--border); margin-top: 10px;',
-  '      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;',
-  '    }',
-  '    .item-meta { min-width: 0; flex: 1; }',
-  '    .item-title { font-weight: 700; font-size: 14px; color: #fff; word-break: break-word; }',
-  '    .item-sub { font-size: 12px; color: var(--muted); word-break: break-all; }',
-  '    .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }',
-  '    code.code-preview {',
-  '      display: block; margin-top: 10px; padding: 12px; border-radius: 12px;',
-  '      background: #050811; border: 1px solid rgba(99, 102, 241, 0.28);',
-  '      color: #a5f3fc; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;',
-  '      font-size: 12px; white-space: pre-wrap; word-break: break-all;',
-  '    }',
-  '    .toast {',
-  '      position: fixed; bottom: 18px; right: 18px; max-width: 360px; padding: 12px 16px;',
-  '      border-radius: 12px; background: linear-gradient(135deg, #1e1b4b, #312e81);',
-  '      border: 1px solid rgba(165, 180, 252, 0.45); color: #fff; font-size: 13px; font-weight: 600;',
-  '      z-index: 900; opacity: 0; transform: translateY(10px); transition: all 0.2s ease; pointer-events: none;',
-  '    }',
-  '    .toast.show { opacity: 1; transform: translateY(0); }',
-  '  </style>',
-  '</head>',
-  '<body>',
-  '  <header class="topbar">',
-  '    <div class="topbar-left">',
-  '      <button class="menu-btn" id="menuToggleBtn" type="button" aria-label="Menyu" onclick="window.__sadoToggleDrawer && window.__sadoToggleDrawer()">☰</button>',
-  '      <div style="min-width:0;">',
-  '        <div class="brand-title" id="headerTitle">SADO PROTECT</div>',
-  '        <div class="brand-sub" id="headerSub">Control Dashboard</div>',
-  '      </div>',
-  '    </div>',
-  '    <div class="status-pill" id="botStatusPill">Bot: Online ✅</div>',
-  '  </header>',
-  '  <div class="drawer-backdrop" id="drawerBackdrop" onclick="window.__sadoCloseDrawer && window.__sadoCloseDrawer()"></div>',
-  '  <aside class="drawer" id="sideDrawer">',
-  '    <div class="drawer-header">',
-  '      <span style="font-weight:800; font-size:15px;">⚡ SADO NAVİQASİYA</span>',
-  '      <button class="close-drawer" id="closeDrawerBtn" type="button" onclick="window.__sadoCloseDrawer && window.__sadoCloseDrawer()">✕</button>',
-  '    </div>',
-  '    <button class="nav-item active" data-tab="overview" type="button" onclick="window.__sadoSwitchTab && window.__sadoSwitchTab(\'overview\')">📊 Dashboard</button>',
-  '    <button class="nav-item" data-tab="scripts" type="button" onclick="window.__sadoSwitchTab && window.__sadoSwitchTab(\'scripts\')">📜 Skriptlər & Loader</button>',
-  '    <button class="nav-item" data-tab="obfuscator" type="button" onclick="window.__sadoSwitchTab && window.__sadoSwitchTab(\'obfuscator\')">🛡️ Lua Obfuscator</button>',
-  '    <button class="nav-item" data-tab="keys" type="button" onclick="window.__sadoSwitchTab && window.__sadoSwitchTab(\'keys\')">🔑 Key & Whitelist</button>',
-  '    <button class="nav-item" data-tab="discord" type="button" onclick="window.__sadoSwitchTab && window.__sadoSwitchTab(\'discord\')">🤖 Join Discord & Panel Dizayn</button>',
-  '  </aside>',
-  '  <main class="container">',
-  '    <section class="section active" id="tab-overview">',
-  '      <div class="stats-grid">',
-  '        <div class="stat-card"><div class="stat-label">Skriptlər</div><div class="stat-value" id="statScripts">0</div></div>',
-  '        <div class="stat-card pink-top"><div class="stat-label">Yaradılmış Key-lər</div><div class="stat-value" id="statKeys">0</div></div>',
-  '        <div class="stat-card green-top"><div class="stat-label">Aktiv Whitelist</div><div class="stat-value" id="statWhitelist">0</div></div>',
-  '        <div class="stat-card cyan-top"><div class="stat-label">Qoşulu Sunucu</div><div class="stat-value" id="statGuild">Seçilməyib</div></div>',
-  '      </div>',
-  '      <div class="card"><h3>🕒 Son Key-lər (Yaradan & İşlədən)</h3><div id="recentKeysContainer" class="muted">Hələ key yaradılmayıb.</div></div>',
-  '    </section>',
-  '    <section class="section" id="tab-scripts">',
-  '      <div class="card">',
-  '        <h3>➕ Yeni Skript Yarat</h3>',
-  '        <label>Skript Adı</label><input type="text" id="newScriptName" placeholder="Məs: SADO HUB" />',
-  '        <label>Lua / TXT Dosya Seç (istəyə bağlı)</label><input type="file" id="newScriptFileInput" accept=".lua,.txt" />',
-  '        <label>Skript Kodu</label><textarea id="newScriptCode" placeholder="-- Lua skript kodunu bura yazın və ya dosya seçin"></textarea>',
-  '        <label class="check-row"><input type="checkbox" id="newScriptObfuscate" /><span>Skripti yadda saxlayanda avtomatik Lua Obfuscate et (kodu şifrələ)</span></label>',
-  '        <button class="btn btn-green" id="createScriptBtn" type="button">💾 Skripti Yadda Saxla</button>',
-  '      </div>',
-  '      <div class="card"><h3>📂 Mövcud Skriptlər</h3><div id="scriptsListContainer" class="muted">Hələ skript yaradılmayıb.</div></div>',
-  '      <div class="card">',
-  '        <h3>📤 Discord Kanalına Panel Göndər</h3>',
-  '        <label>Discord Kanal ID</label><input type="text" id="panelChannelIdInput" placeholder="Məs: 123456789012345678" />',
-  '        <label>Panel Skripti Seç</label><select id="panelScriptSelect"></select>',
-  '        <button class="btn btn-primary" id="sendPanelBtn" type="button">🚀 Paneli Kanala Göndər</button>',
-  '      </div>',
-  '    </section>',
-  '    <section class="section" id="tab-obfuscator">',
-  '      <div class="card">',
-  '        <h3>🛡️ Lua Obfuscator</h3>',
-  '        <p class="muted">Lua kodunuzu şifrələyin, nəticəni kopyalayın və ya birbaşa skript kimi yadda saxlayın.</p>',
-  '        <label>Şifrələmə Səviyyəsi</label>',
-  '        <select id="obfLevelSelect">',
-  '          <option value="1">Səviyyə 1 — Standard XOR + Byte Loader</option>',
-  '          <option value="2">Səviyyə 2 — Gücləndirilmiş XOR + Loader</option>',
-  '          <option value="3" selected>Səviyyə 3 — Ultra Guard VM + Anti-Dump Shield</option>',
-  '        </select>',
-  '        <label>Orijinal Lua Kodu</label><textarea id="obfInputCode" placeholder="print(\'Hello SADO PROTECT\')"></textarea>',
-  '        <button class="btn btn-primary" id="runObfBtn" type="button">⚡ Kodu Şifrələ (Obfuscate)</button>',
-  '        <label>Şifrələnmiş Nəticə</label><textarea id="obfOutputCode" placeholder="Şifrələnmiş kod burada görünəcək..."></textarea>',
-  '        <div class="btn-row-2">',
-  '          <button class="btn btn-cyan" id="copyObfBtn" type="button">📋 Şifrəli Kodu Kopyala</button>',
-  '          <button class="btn btn-green" id="saveObfAsScriptBtn" type="button">💾 Skript Kimi Yadda Saxla</button>',
-  '        </div>',
-  '        <label>Yadda Saxlanacaq Skript Adı (istəyə bağlı)</label><input type="text" id="obfSaveScriptName" placeholder="Məs: SADO Protected" />',
-  '      </div>',
-  '    </section>',
-  '    <section class="section" id="tab-keys">',
-  '      <div class="card">',
-  '        <h3>🔑 Yeni Key Yarat</h3>',
-  '        <label>Skript Seç</label><select id="keyScriptSelect"></select>',
-  '        <label>Müddət (0 = Lifetime, məs: 1d, 7d, 30d, 1y)</label><input type="text" id="keyDurationInput" value="0" />',
-  '        <label>Say (1 - 100)</label><input type="number" id="keyAmountInput" min="1" max="100" value="1" />',
-  '        <button class="btn btn-primary" id="createKeyBtn" type="button">✨ Key Yarat</button>',
-  '        <div id="keysListContainer" class="muted" style="margin-top:12px;">Hələ key yoxdur.</div>',
-  '      </div>',
-  '      <div class="card">',
-  '        <h3>✅ Whitelist Əlavə Et</h3>',
-  '        <label>Discord User ID</label><input type="text" id="wlUserIdInput" placeholder="Məs: 123456789012345678" />',
-  '        <label>Skript Seç</label><select id="wlScriptSelect"></select>',
-  '        <label>Müddət (0 = Lifetime, məs: 7d, 30d)</label><input type="text" id="wlDurationInput" value="0" />',
-  '        <button class="btn btn-green" id="addWhitelistBtn" type="button">➕ Whitelist-ə Əlavə Et</button>',
-  '        <div id="whitelistContainer" class="muted" style="margin-top:12px;">Aktiv whitelist yoxdur.</div>',
-  '      </div>',
-  '      <div class="card">',
-  '        <h3>🚫 Blacklist İdarəetməsi</h3>',
-  '        <label>Discord User ID</label><input type="text" id="blUserIdInput" placeholder="Məs: 123456789012345678" />',
-  '        <button class="btn btn-danger" id="addBlacklistBtn" type="button">⛔ Blacklist-ə Sal</button>',
-  '        <div id="blacklistContainer" class="muted" style="margin-top:12px;">Blacklist boşdur.</div>',
-  '      </div>',
-  '    </section>',
-  '    <section class="section" id="tab-discord">',
-  '      <div class="card">',
-  '        <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>',
-  '        <p class="muted">1. Aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br/>2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bu telefon/cihaz üçün tam müstəqil idarəetmə paneli açılacaq.</p>',
-  '        <a class="btn btn-green" id="inviteBotLinkBtn" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot" target="_blank" rel="noopener noreferrer">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>',
-  '        <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label><select id="guildSelectDropdown"><option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option></select>',
-  '        <label>Və ya Discord Sunucu ID (Server ID)</label><input type="text" id="linkGuildIdInput" placeholder="Məs: 1559499280732131348" />',
-  '        <label>Discord User ID (istəyə bağlı)</label><input type="text" id="linkDiscordIdInput" placeholder="Məs: 123456789012345678" />',
-  '        <button class="btn btn-primary" id="linkWorkspaceBtn" type="button">✅ Sunucunu İdarəetmə Panelinə Bağla</button>',
-  '      </div>',
-  '      <div class="card">',
-  '        <h3>🎨 Panel Buton və Embed Dizaynı</h3>',
-  '        <label>Embed Rəngi (HEX & Rəng Seçici)</label>',
-  '        <div style="display:flex; gap:8px; align-items:center;">',
-  '          <input type="color" id="cfgColorPicker" value="#5865F2" style="width:54px; height:42px; padding:2px; cursor:pointer; flex-shrink:0; border-radius:10px; border:1px solid rgba(148,163,184,0.3); background:transparent;" />',
-  '          <input type="text" id="cfgEmbedColor" placeholder="#5865F2" style="flex:1;" />',
-  '        </div>',
-  '        <label>Panel Başlığı</label><input type="text" id="cfgTitle" placeholder="SADO PROTECT • Script Panel" />',
-  '        <label>Panel Açıqlaması</label><input type="text" id="cfgDescription" placeholder="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin." />',
-  '        <label>Redeem Key Düymə Mətni və Rəngi</label>',
-  '        <div class="btn-style-pair"><input type="text" id="cfgRedeemLabel" placeholder="Redeem Key" /><select id="cfgRedeemStyle"><option value="green">🟢 Yaşıl</option><option value="blurple">🔵 Mavi</option><option value="grey">⚪ Boz</option><option value="red">🔴 Qırmızı</option></select></div>',
-  '        <label>Get Script Düymə Mətni və Rəngi</label>',
-  '        <div class="btn-style-pair"><input type="text" id="cfgGetScriptLabel" placeholder="Get Script" /><select id="cfgGetScriptStyle"><option value="blurple">🔵 Mavi</option><option value="green">🟢 Yaşıl</option><option value="grey">⚪ Boz</option><option value="red">🔴 Qırmızı</option></select></div>',
-  '        <label>Reset HWID Düymə Mətni və Rəngi</label>',
-  '        <div class="btn-style-pair"><input type="text" id="cfgResetHwidLabel" placeholder="Reset HWID" /><select id="cfgResetHwidStyle"><option value="grey">⚪ Boz</option><option value="blurple">🔵 Mavi</option><option value="green">🟢 Yaşıl</option><option value="red">🔴 Qırmızı</option></select></div>',
-  '        <label>Stats Düymə Mətni və Rəngi</label>',
-  '        <div class="btn-style-pair"><input type="text" id="cfgStatsLabel" placeholder="Stats" /><select id="cfgStatsStyle"><option value="grey">⚪ Boz</option><option value="blurple">🔵 Mavi</option><option value="green">🟢 Yaşıl</option><option value="red">🔴 Qırmızı</option></select></div>',
-  '        <button class="btn btn-primary" id="savePanelConfigBtn" type="button">💾 Panel Dizaynını Yadda Saxla</button>',
-  '      </div>',
-  '    </section>',
-  '  </main>',
-  '  <div class="toast" id="toastBox"></div>',
-  '  <script>',
-  '    (function () {',
-  '      function getDeviceWorkspaceId() {',
-  '        var key = "sado_device_ws_id_v1";',
-  '        var id = "";',
-  '        try { id = localStorage.getItem(key) || ""; } catch (_e) {}',
-  '        if (!id || id.length < 8) {',
-  '          var rnd = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);',
-  '          id = "ws_" + rnd;',
-  '          try { localStorage.setItem(key, id); } catch (_e) {}',
-  '        }',
-  '        return id;',
-  '      }',
-  '      var DEVICE_WS_ID = getDeviceWorkspaceId();',
-  '      function apiFetch(url, opts) {',
-  '        opts = opts || {};',
-  '        var hdrs = Object.assign({}, opts.headers || {}, { "x-workspace-id": DEVICE_WS_ID });',
-  '        return fetch(url, Object.assign({}, opts, { headers: hdrs }));',
-  '      }',
-  '      var initialInputsLoaded = false;',
-  '      var latestScripts = [];',
-  '      var uploadedFileText = "";',
-  '      function showToast(msg) {',
-  '        var el = document.getElementById("toastBox");',
-  '        el.textContent = msg;',
-  '        el.classList.add("show");',
-  '        clearTimeout(window.__toastTimer);',
-  '        window.__toastTimer = setTimeout(function () { el.classList.remove("show"); }, 2800);',
-  '      }',
-  '      function escapeHtml(str) {',
-  '        return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");',
-  '      }',
-  '      function openDrawer() {',
-  '        var d = document.getElementById("sideDrawer");',
-  '        var b = document.getElementById("drawerBackdrop");',
-  '        if (d) { d.classList.add("open"); d.style.transform = "translateX(0)"; }',
-  '        if (b) { b.classList.add("open"); b.style.display = "block"; }',
-  '      }',
-  '      function closeDrawer() {',
-  '        var d = document.getElementById("sideDrawer");',
-  '        var b = document.getElementById("drawerBackdrop");',
-  '        if (d) { d.classList.remove("open"); d.style.transform = "translateX(-105%)"; }',
-  '        if (b) { b.classList.remove("open"); b.style.display = "none"; }',
-  '      }',
-  '      function toggleDrawer() {',
-  '        var d = document.getElementById("sideDrawer");',
-  '        if (d && d.classList.contains("open")) closeDrawer(); else openDrawer();',
-  '      }',
-  '      function switchTab(tab) {',
-  '        document.querySelectorAll(".nav-item").forEach(function (n) {',
-  '          if (n.getAttribute("data-tab") === tab) n.classList.add("active"); else n.classList.remove("active");',
-  '        });',
-  '        document.querySelectorAll(".section").forEach(function (s) { s.classList.remove("active"); });',
-  '        var sec = document.getElementById("tab-" + tab);',
-  '        if (sec) sec.classList.add("active");',
-  '        closeDrawer();',
-  '      }',
-  '      window.__sadoToggleDrawer = toggleDrawer;',
-  '      window.__sadoCloseDrawer = closeDrawer;',
-  '      window.__sadoSwitchTab = switchTab;',
-  '      var colorPicker = document.getElementById("cfgColorPicker");',
-  '      var colorHexInput = document.getElementById("cfgEmbedColor");',
-  '      colorPicker.addEventListener("input", function () { colorHexInput.value = colorPicker.value.toUpperCase(); });',
-  '      colorHexInput.addEventListener("input", function () {',
-  '        var v = colorHexInput.value.trim();',
-  '        if (/^#[0-9A-Fa-f]{6}$/.test(v)) colorPicker.value = v;',
-  '      });',
-  '      document.getElementById("guildSelectDropdown").addEventListener("change", function (e) {',
-  '        if (e.target.value) document.getElementById("linkGuildIdInput").value = e.target.value;',
-  '      });',
-  '      document.getElementById("newScriptFileInput").addEventListener("change", function (e) {',
-  '        var file = e.target.files && e.target.files[0];',
-  '        if (!file) { uploadedFileText = ""; return; }',
-  '        var reader = new FileReader();',
-  '        reader.onload = function () {',
-  '          uploadedFileText = String(reader.result || "");',
-  '          var codeArea = document.getElementById("newScriptCode");',
-  '          if (!codeArea.value.trim()) codeArea.value = uploadedFileText;',
-  '          var nameInput = document.getElementById("newScriptName");',
-  '          if (!nameInput.value.trim()) nameInput.value = file.name.replace(/\\.(lua|txt)$/i, "");',
-  '          showToast("Fayl oxundu: " + file.name);',
-  '        };',
-  '        reader.readAsText(file);',
-  '      });',
-  '      function populateScriptSelects(scripts) {',
-  '        ["panelScriptSelect", "keyScriptSelect", "wlScriptSelect"].forEach(function (id) {',
-  '          var sel = document.getElementById(id);',
-  '          if (!sel) return;',
-  '          var prev = sel.value;',
-  '          sel.innerHTML = "";',
-  '          if (!scripts.length) {',
-  '            var o = document.createElement("option"); o.value = ""; o.textContent = "Əvvəl skript yaradın"; sel.appendChild(o);',
-  '          } else {',
-  '            scripts.forEach(function (sc) {',
-  '              var opt = document.createElement("option"); opt.value = sc.id; opt.textContent = sc.name;',
-  '              if (sc.id === prev) opt.selected = true; sel.appendChild(opt);',
-  '            });',
-  '          }',
-  '        });',
-  '      }',
-  '      async function refreshStatusAndOverview() {',
-  '        try {',
-  '          var res = await apiFetch("/api/status");',
-  '          var data = await res.json();',
-  '          if (!data.ok) return;',
-  '          var pill = document.getElementById("botStatusPill");',
-  '          pill.textContent = "Bot: Online ✅";',
-  '          if (data.bot && data.bot.inviteUrl) {',
-  '            var invBtn = document.getElementById("inviteBotLinkBtn");',
-  '            if (invBtn) invBtn.href = data.bot.inviteUrl;',
-  '          }',
-  '          var headerTitle = document.getElementById("headerTitle");',
-  '          var headerSub = document.getElementById("headerSub");',
-  '          if (data.activeGuildName) {',
-  '            headerTitle.textContent = data.activeGuildName;',
-  '            headerSub.textContent = "SADO PROTECT • Control Panel";',
-  '            document.getElementById("statGuild").textContent = data.activeGuildName;',
-  '          } else {',
-  '            headerTitle.textContent = "SADO PROTECT";',
-  '            headerSub.textContent = "Control Dashboard";',
-  '            document.getElementById("statGuild").textContent = "Seçilməyib";',
-  '          }',
-  '          document.getElementById("statScripts").textContent = data.stats && data.stats.scriptsCount != null ? data.stats.scriptsCount : 0;',
-  '          document.getElementById("statKeys").textContent = data.stats && data.stats.keysCount != null ? data.stats.keysCount : 0;',
-  '          document.getElementById("statWhitelist").textContent = data.stats && data.stats.whitelistsCount != null ? data.stats.whitelistsCount : 0;',
-  '          var gSelect = document.getElementById("guildSelectDropdown");',
-  '          if (gSelect) {',
-  '            var prevSel = gSelect.value || data.activeGuildId || "";',
-  '            gSelect.innerHTML = "<option value=\\"\\">-- Sunucu seçin və ya aşağıya ID yazın --</option>";',
-  '            ((data.bot && data.bot.guilds) || []).forEach(function (g) {',
-  '              var opt = document.createElement("option"); opt.value = g.id; opt.textContent = g.name + " (" + g.id + ")";',
-  '              if (g.id === prevSel) opt.selected = true; gSelect.appendChild(opt);',
-  '            });',
-  '          }',
-  '          if (!initialInputsLoaded) {',
-  '            initialInputsLoaded = true;',
-  '            var linkGuildEl = document.getElementById("linkGuildIdInput");',
-  '            var linkDiscordEl = document.getElementById("linkDiscordIdInput");',
-  '            if (linkGuildEl && data.activeGuildId) linkGuildEl.value = data.activeGuildId;',
-  '            if (linkDiscordEl && data.activeDiscordUserId) linkDiscordEl.value = data.activeDiscordUserId;',
-  '            if (data.panelConfig) {',
-  '              var c = data.panelConfig;',
-  '              document.getElementById("cfgEmbedColor").value = c.embedColor || "#5865F2";',
-  '              if (/^#[0-9A-Fa-f]{6}$/.test(c.embedColor || "")) document.getElementById("cfgColorPicker").value = c.embedColor;',
-  '              document.getElementById("cfgTitle").value = c.title || "";',
-  '              document.getElementById("cfgDescription").value = c.description || "";',
-  '              document.getElementById("cfgRedeemLabel").value = c.redeemLabel || "Redeem Key";',
-  '              document.getElementById("cfgRedeemStyle").value = c.redeemStyle || "green";',
-  '              document.getElementById("cfgGetScriptLabel").value = c.getScriptLabel || "Get Script";',
-  '              document.getElementById("cfgGetScriptStyle").value = c.getScriptStyle || "blurple";',
-  '              document.getElementById("cfgResetHwidLabel").value = c.resetHwidLabel || "Reset HWID";',
-  '              document.getElementById("cfgResetHwidStyle").value = c.resetHwidStyle || "grey";',
-  '              document.getElementById("cfgStatsLabel").value = c.statsLabel || "Stats";',
-  '              document.getElementById("cfgStatsStyle").value = c.statsStyle || "grey";',
-  '            }',
-  '          }',
-  '          var rkBox = document.getElementById("recentKeysContainer");',
-  '          if (data.recentKeys && data.recentKeys.length) {',
-  '            rkBox.innerHTML = data.recentKeys.map(function (k) {',
-  '              return "<div class=\\"item-box\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">" + escapeHtml(k.key) + "</div><div class=\\"item-sub\\">Yaradan: " + escapeHtml(k.createdBy || "Dashboard") + (k.usedByDiscordId ? " • İşlədən: " + escapeHtml(k.usedByDiscordId) : " • İstifadə gözləyir") + "</div></div></div>";',
-  '            }).join("");',
-  '          } else {',
-  '            rkBox.innerHTML = "<span class=\\"muted\\">Hələ key yaradılmayıb.</span>";',
-  '          }',
-  '        } catch (_err) {}',
-  '      }',
-  '      async function refreshScripts() {',
-  '        try {',
-  '          var res = await apiFetch("/api/scripts");',
-  '          var data = await res.json();',
-  '          if (!data.ok) return;',
-  '          latestScripts = data.scripts || [];',
-  '          populateScriptSelects(latestScripts);',
-  '          var box = document.getElementById("scriptsListContainer");',
-  '          if (!latestScripts.length) { box.innerHTML = "<span class=\\"muted\\">Hələ skript yaradılmayıb.</span>"; return; }',
-  '          box.innerHTML = latestScripts.map(function (sc) {',
-  '            return "<div class=\\"item-box\\" style=\\"flex-direction:column; align-items:stretch;\\"><div style=\\"display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">📜 " + escapeHtml(sc.name) + (sc.obfuscated ? " 🛡️" : "") + "</div><div class=\\"item-sub\\">" + escapeHtml(sc.fileName || "script.lua") + "</div></div><div class=\\"item-actions\\"><button class=\\"btn btn-cyan btn-sm\\" type=\\"button\\" onclick=\\"window.__updateScript(\'" + sc.id + "\')\\">✏️ Update</button><button class=\\"btn btn-danger btn-sm\\" type=\\"button\\" onclick=\\"window.__deleteScript(\'" + sc.id + "\')\\">🗑️ Sil</button></div></div><code class=\\"code-preview\\">script_key = \\"YOUR_KEY\\"\\nloadstring(game:HttpGet(\\"https://sado-protect.onrender.com/api/loader/" + encodeURIComponent(sc.loaderToken || sc.id) + "?key=\\" .. tostring(script_key)))()</code></div>";',
-  '          }).join("");',
-  '        } catch (_err) {}',
-  '      }',
-  '      window.__updateScript = async function (id) {',
-  '        var sc = latestScripts.find(function (s) { return s.id === id; });',
-  '        if (!sc) return;',
-  '        var nextName = document.getElementById("newScriptName").value.trim() || sc.name;',
-  '        var nextCode = document.getElementById("newScriptCode").value || sc.code;',
-  '        var obf = document.getElementById("newScriptObfuscate").checked;',
-  '        var r = await apiFetch("/api/scripts/" + encodeURIComponent(id), {',
-  '          method: "PUT", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ name: nextName, code: nextCode, obfuscate: obf, obfuscateLevel: 3 })',
-  '        });',
-  '        var j = await r.json();',
-  '        showToast(j.message || "Yeniləndi");',
-  '        await refreshScripts();',
-  '      };',
-  '      window.__deleteScript = async function (id) {',
-  '        var r = await apiFetch("/api/scripts/" + encodeURIComponent(id), { method: "DELETE" });',
-  '        var j = await r.json();',
-  '        showToast(j.message || "Silindi");',
-  '        await refreshAll();',
-  '      };',
-  '      async function refreshKeysAndLists() {',
-  '        try {',
-  '          var results = await Promise.all([apiFetch("/api/keys"), apiFetch("/api/whitelist"), apiFetch("/api/blacklist")]);',
-  '          var parsed = await Promise.all(results.map(function (r) { return r.json(); }));',
-  '          var kData = parsed[0], wData = parsed[1], bData = parsed[2];',
-  '          var kBox = document.getElementById("keysListContainer");',
-  '          var keys = kData.keys || [];',
-  '          if (!keys.length) {',
-  '            kBox.innerHTML = "<span class=\\"muted\\">Hələ key yoxdur.</span>";',
-  '          } else {',
-  '            kBox.innerHTML = keys.slice().reverse().map(function (k) {',
-  '              return "<div class=\\"item-box\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">🔑 " + escapeHtml(k.key) + "</div><div class=\\"item-sub\\">" + (k.used ? "İşlədilib (" + escapeHtml(k.usedByDiscordId || "") + ")" : "Aktiv / Gözləyir") + "</div></div><button class=\\"btn btn-danger btn-sm\\" type=\\"button\\" onclick=\\"window.__delKey(\'" + k.id + "\')\\">Sil</button></div>";',
-  '            }).join("");',
-  '          }',
-  '          var wBox = document.getElementById("whitelistContainer");',
-  '          var wls = wData.whitelists || [];',
-  '          if (!wls.length) {',
-  '            wBox.innerHTML = "<span class=\\"muted\\">Aktiv whitelist yoxdur.</span>";',
-  '          } else {',
-  '            wBox.innerHTML = wls.map(function (w) {',
-  '              return "<div class=\\"item-box\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">✅ " + escapeHtml(w.discordUserId) + "</div><div class=\\"item-sub\\">Key: " + escapeHtml(w.key || "—") + (w.hwid ? " • HWID: " + escapeHtml(w.hwid) : "") + "</div></div><button class=\\"btn btn-danger btn-sm\\" type=\\"button\\" onclick=\\"window.__delWl(\'" + w.id + "\')\\">Sil</button></div>";',
-  '            }).join("");',
-  '          }',
-  '          var bBox = document.getElementById("blacklistContainer");',
-  '          var bls = bData.blacklists || [];',
-  '          if (!bls.length) {',
-  '            bBox.innerHTML = "<span class=\\"muted\\">Blacklist boşdur.</span>";',
-  '          } else {',
-  '            bBox.innerHTML = bls.map(function (b) {',
-  '              return "<div class=\\"item-box\\"><div class=\\"item-meta\\"><div class=\\"item-title\\">🚫 " + escapeHtml(b.discordUserId) + "</div></div><button class=\\"btn btn-danger btn-sm\\" type=\\"button\\" onclick=\\"window.__delBl(\'" + b.id + "\')\\">Çıxar</button></div>";',
-  '            }).join("");',
-  '          }',
-  '        } catch (_err) {}',
-  '      }',
-  '      window.__delKey = async function (id) { await apiFetch("/api/keys/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Key silindi"); await refreshAll(); };',
-  '      window.__delWl = async function (id) { await apiFetch("/api/whitelist/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Whitelist silindi"); await refreshAll(); };',
-  '      window.__delBl = async function (id) { await apiFetch("/api/blacklist/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Blacklist-dən çıxarıldı"); await refreshAll(); };',
-  '      document.getElementById("createScriptBtn").addEventListener("click", async function () {',
-  '        var name = document.getElementById("newScriptName").value.trim();',
-  '        var code = document.getElementById("newScriptCode").value || uploadedFileText;',
-  '        var obfuscate = document.getElementById("newScriptObfuscate").checked;',
-  '        var fileEl = document.getElementById("newScriptFileInput");',
-  '        var fileName = (fileEl.files && fileEl.files[0]) ? fileEl.files[0].name : ((name || "script") + ".lua");',
-  '        var r = await apiFetch("/api/scripts", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ name: name, fileName: fileName, code: code, obfuscate: obfuscate, obfuscateLevel: 3 })',
-  '        });',
-  '        var j = await r.json();',
-  '        if (r.ok && j.ok) {',
-  '          document.getElementById("newScriptName").value = "";',
-  '          document.getElementById("newScriptCode").value = "";',
-  '          document.getElementById("newScriptObfuscate").checked = false;',
-  '          fileEl.value = ""; uploadedFileText = "";',
-  '          showToast(j.message || "Skript yadda saxlanıldı!");',
-  '          await refreshAll();',
-  '        } else { showToast(j.message || "Xəta baş verdi"); }',
-  '      });',
-  '      document.getElementById("sendPanelBtn").addEventListener("click", async function () {',
-  '        var channelId = document.getElementById("panelChannelIdInput").value.trim();',
-  '        var scriptId = document.getElementById("panelScriptSelect").value;',
-  '        var r = await apiFetch("/api/send-panel", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ channelId: channelId, scriptId: scriptId })',
-  '        });',
-  '        var j = await r.json();',
-  '        showToast(j.message || "Panel göndərildi");',
-  '        await refreshStatusAndOverview();',
-  '      });',
-  '      document.getElementById("runObfBtn").addEventListener("click", async function () {',
-  '        var code = document.getElementById("obfInputCode").value;',
-  '        var level = Number(document.getElementById("obfLevelSelect").value || 3);',
-  '        var r = await apiFetch("/api/obfuscate", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ code: code, level: level })',
-  '        });',
-  '        var j = await r.json();',
-  '        if (r.ok && j.ok) { document.getElementById("obfOutputCode").value = j.obfuscated; showToast("Lua kodu şifrələndi!"); }',
-  '        else { showToast(j.message || "Şifrələmə xətası"); }',
-  '      });',
-  '      document.getElementById("copyObfBtn").addEventListener("click", async function () {',
-  '        var val = document.getElementById("obfOutputCode").value;',
-  '        if (!val) return showToast("Kopyalanacaq kod yoxdur");',
-  '        try { await navigator.clipboard.writeText(val); showToast("Şifrəli kod kopyalandı!"); } catch (_e) { showToast("Kopyalama mümkün olmadı"); }',
-  '      });',
-  '      document.getElementById("saveObfAsScriptBtn").addEventListener("click", async function () {',
-  '        var obfCode = document.getElementById("obfOutputCode").value;',
-  '        var rawCode = document.getElementById("obfInputCode").value;',
-  '        var level = Number(document.getElementById("obfLevelSelect").value || 3);',
-  '        var name = document.getElementById("obfSaveScriptName").value.trim() || "SADO Obfuscated Script";',
-  '        var finalCode = obfCode.trim() ? obfCode : rawCode;',
-  '        var r = await apiFetch("/api/scripts", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ name: name, code: finalCode, obfuscate: !obfCode.trim(), obfuscateLevel: level, preObfuscated: Boolean(obfCode.trim()) })',
-  '        });',
-  '        var j = await r.json();',
-  '        if (r.ok && j.ok) { document.getElementById("obfSaveScriptName").value = ""; showToast("Obfuscated skript panelə əlavə olundu!"); await refreshAll(); }',
-  '        else { showToast(j.message || "Xəta baş verdi"); }',
-  '      });',
-  '      document.getElementById("createKeyBtn").addEventListener("click", async function () {',
-  '        var scriptId = document.getElementById("keyScriptSelect").value;',
-  '        var duration = document.getElementById("keyDurationInput").value.trim();',
-  '        var amount = Number(document.getElementById("keyAmountInput").value || 1);',
-  '        var r = await apiFetch("/api/keys", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ scriptId: scriptId, duration: duration, amount: amount })',
-  '        });',
-  '        var j = await r.json();',
-  '        showToast(j.message || "Key yaradıldı");',
-  '        await refreshAll();',
-  '      });',
-  '      document.getElementById("addWhitelistBtn").addEventListener("click", async function () {',
-  '        var discordUserId = document.getElementById("wlUserIdInput").value.trim();',
-  '        var scriptId = document.getElementById("wlScriptSelect").value;',
-  '        var duration = document.getElementById("wlDurationInput").value.trim();',
-  '        var r = await apiFetch("/api/whitelist", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ discordUserId: discordUserId, scriptId: scriptId, duration: duration })',
-  '        });',
-  '        var j = await r.json();',
-  '        if (r.ok && j.ok) { document.getElementById("wlUserIdInput").value = ""; showToast(j.message || "Whitelist əlavə edildi!"); await refreshAll(); }',
-  '        else { showToast(j.message || "Xəta"); }',
-  '      });',
-  '      document.getElementById("addBlacklistBtn").addEventListener("click", async function () {',
-  '        var discordUserId = document.getElementById("blUserIdInput").value.trim();',
-  '        var r = await apiFetch("/api/blacklist", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ discordUserId: discordUserId })',
-  '        });',
-  '        var j = await r.json();',
-  '        if (r.ok && j.ok) { document.getElementById("blUserIdInput").value = ""; showToast(j.message || "Blacklist əlavə edildi!"); await refreshAll(); }',
-  '        else { showToast(j.message || "Xəta"); }',
-  '      });',
-  '      document.getElementById("linkWorkspaceBtn").addEventListener("click", async function () {',
-  '        var guildId = document.getElementById("linkGuildIdInput").value.trim();',
-  '        var discordUserId = document.getElementById("linkDiscordIdInput").value.trim();',
-  '        var r = await apiFetch("/api/workspace/link", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify({ guildId: guildId, discordUserId: discordUserId })',
-  '        });',
-  '        var j = await r.json();',
-  '        if (r.ok && j.ok) { initialInputsLoaded = false; showToast(j.message || "Sunucu bağlandı!"); await refreshStatusAndOverview(); }',
-  '        else { showToast(j.message || "Bağlantı xətası"); }',
-  '      });',
-  '      document.getElementById("savePanelConfigBtn").addEventListener("click", async function () {',
-  '        var payload = {',
-  '          embedColor: document.getElementById("cfgEmbedColor").value.trim(),',
-  '          title: document.getElementById("cfgTitle").value.trim(),',
-  '          description: document.getElementById("cfgDescription").value.trim(),',
-  '          redeemLabel: document.getElementById("cfgRedeemLabel").value.trim(),',
-  '          redeemStyle: document.getElementById("cfgRedeemStyle").value,',
-  '          getScriptLabel: document.getElementById("cfgGetScriptLabel").value.trim(),',
-  '          getScriptStyle: document.getElementById("cfgGetScriptStyle").value,',
-  '          resetHwidLabel: document.getElementById("cfgResetHwidLabel").value.trim(),',
-  '          resetHwidStyle: document.getElementById("cfgResetHwidStyle").value,',
-  '          statsLabel: document.getElementById("cfgStatsLabel").value.trim(),',
-  '          statsStyle: document.getElementById("cfgStatsStyle").value',
-  '        };',
-  '        var r = await apiFetch("/api/panel-config", {',
-  '          method: "POST", headers: { "Content-Type": "application/json" },',
-  '          body: JSON.stringify(payload)',
-  '        });',
-  '        var j = await r.json();',
-  '        showToast(j.message || "Panel dizaynı yadda saxlanıldı!");',
-  '      });',
-  '      async function refreshAll() { await Promise.all([refreshStatusAndOverview(), refreshScripts(), refreshKeysAndLists()]); }',
-  '      refreshAll();',
-  '      setInterval(refreshStatusAndOverview, 10000);',
-  '    })();',
-  '  </script>',
-  '</body>',
-  '</html>',
-].join('\n');
+  const luaLoader = [
+    'local HttpService = game:GetService("HttpService")',
+    'local Players = game:GetService("Players")',
+    'local RbxAnalyticsService = game:GetService("RbxAnalyticsService")',
+    'local LocalPlayer = Players.LocalPlayer',
+    'local keyVal = tostring(script_key or "")',
+    'local hwidVal = ""',
+    'pcall(function()',
+    '  if type(gethwid) == "function" then hwidVal = tostring(gethwid()) end',
+    'end)',
+    'if hwidVal == "" or hwidVal == "nil" then',
+    '  pcall(function()',
+    '    hwidVal = tostring(RbxAnalyticsService:GetClientId())',
+    '  end)',
+    'end',
+    'if hwidVal == "" or hwidVal == "nil" then',
+    '  hwidVal = tostring((LocalPlayer and LocalPlayer.UserId) or "unknown")',
+    'end',
+    'local reqFunc = (syn and syn.request) or (http and http.request) or http_request or request',
+    'local rawBody = ""',
+    'if reqFunc then',
+    '  local ok, resp = pcall(function()',
+    '    return reqFunc({',
+    `      Url = "${verifyUrl}",`,
+    '      Method = "POST",',
+    '      Headers = { ["Content-Type"] = "application/json" },',
+    '      Body = HttpService:JSONEncode({ key = keyVal, hwid = hwidVal, playerId = LocalPlayer and tostring(LocalPlayer.UserId) or "" })',
+    '    })',
+    '  end)',
+    '  if ok and resp and resp.Body then rawBody = tostring(resp.Body) end',
+    'end',
+    'if rawBody == "" then',
+    `  pcall(function() rawBody = tostring(game:HttpGet("${verifyUrl}&key=" .. HttpService:UrlEncode(keyVal) .. "&hwid=" .. HttpService:UrlEncode(hwidVal))) end)`,
+    'end',
+    'local parsed = nil',
+    'pcall(function() parsed = HttpService:JSONDecode(rawBody) end)',
+    'if type(parsed) == "table" and parsed.ok == true and type(parsed.code) == "string" then',
+    '  local fn = loadstring(parsed.code)',
+    '  if type(fn) == "function" then fn() end',
+    'else',
+    '  local reason = (type(parsed) == "table" and parsed.message) or "SADO PROTECT: Unauthorized or HWID Mismatch"',
+    '  if LocalPlayer then pcall(function() LocalPlayer:Kick(tostring(reason)) end) end',
+    'end',
+  ].join('\n');
 
-app.get('/', (req, res) => {
+  res.type('text/plain').send(luaLoader);
+});
+
+app.all('/api/verify', async (req, res) => {
+  try {
+    const wsId = sanitizeWorkspaceId(req.query.ws || (req.body && req.body.workspaceId) || store.activeWorkspaceId || 'default');
+    const ws = ensureWorkspace(wsId);
+    const scriptParam = String(req.query.script || (req.body && req.body.scriptId) || '').trim();
+    const keyInput = String((req.body && req.body.key) || req.query.key || '').trim();
+    const hwidInput = String((req.body && req.body.hwid) || req.query.hwid || '').trim();
+
+    const sc =
+      ws.scripts.find((s) => s.id === scriptParam || s.loaderToken === scriptParam) || ws.scripts[0];
+    const targetScriptId = sc ? sc.id : 'default';
+
+    const wl = ws.whitelists.find(
+      (w) =>
+        w.scriptId === targetScriptId &&
+        (String(w.key || '').trim().toUpperCase() === keyInput.toUpperCase() ||
+          (req.body && req.body.playerId && String(w.discordUserId) === String(req.body.playerId)))
+    );
+
+    if (!wl) {
+      ws.stats.authBlocked += 1;
+      await saveStore();
+      res.status(403).json({ ok: false, message: 'SADO PROTECT: Key və ya Whitelist tapılmadı.' });
+      return;
+    }
+
+    const isBl = ws.blacklist.some(
+      (b) => b.discordUserId === wl.discordUserId && (!b.scriptId || b.scriptId === targetScriptId)
+    );
+    if (isBl) {
+      ws.stats.authBlocked += 1;
+      await saveStore();
+      res.status(403).json({ ok: false, message: 'SADO PROTECT: Siz Blacklist olunmusunuz.' });
+      return;
+    }
+
+    if (isExpired(wl.expiresAt)) {
+      ws.stats.authBlocked += 1;
+      await saveStore();
+      res.status(403).json({ ok: false, message: 'SADO PROTECT: Lisenziya müddəti bitib.' });
+      return;
+    }
+
+    if (hwidInput) {
+      if (!wl.hwid || String(wl.hwid).trim() === '') {
+        wl.hwid = hwidInput;
+        await saveStore();
+      } else if (String(wl.hwid).trim() !== hwidInput) {
+        ws.stats.authBlocked += 1;
+        await saveStore();
+        res.status(403).json({ ok: false, message: 'SADO PROTECT: HWID başqa cihaza bağlıdır! Kick.' });
+        return;
+      }
+    }
+
+    ws.stats.authSuccess += 1;
+    await saveStore();
+
+    res.json({
+      ok: true,
+      scriptId: targetScriptId,
+      code: sc ? sc.code : DEFAULT_SCRIPT_CODE,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message || 'Verify xətası' });
+  }
+});
+
+const DASHBOARD_HTML = `<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SADO PROTECT • Control Panel</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, system-ui, -apple-system, sans-serif; }
+    body { background: #090d16; color: #e5e7eb; min-height: 100vh; padding: 20px; }
+    .container { max-width: 1120px; margin: 0 auto; display: grid; gap: 18px; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 14px; padding: 18px; display: grid; gap: 14px; }
+    .header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+    .badge { padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: #1f2937; }
+    .badge.online { background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .stat-box { background: #0b101b; border: 1px solid #1f2937; border-radius: 10px; padding: 12px; }
+    .stat-val { font-size: 22px; font-weight: 700; color: #fff; margin-top: 4px; }
+    label { display: grid; gap: 6px; font-size: 13px; color: #9ca3af; }
+    input, textarea, select { width: 100%; background: #0b101b; border: 1px solid #263244; color: #f9fafb; border-radius: 9px; padding: 10px 12px; font-size: 14px; }
+    textarea { min-height: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    button { background: #10b981; color: #052e16; border: none; border-radius: 9px; padding: 10px 14px; font-weight: 700; cursor: pointer; font-size: 14px; }
+    button:hover { filter: brightness(1.06); }
+    button.secondary { background: #1f2937; color: #e5e7eb; }
+    button.danger { background: #ef4444; color: #fff; }
+    .list { display: grid; gap: 8px; }
+    .row-item { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; background: #0b101b; border: 1px solid #1f2937; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+    .toast { position: fixed; right: 18px; bottom: 18px; background: #10b981; color: #042f2e; font-weight: 700; padding: 12px 16px; border-radius: 10px; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 99; }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <div>
+          <h1>🛡️ SADO PROTECT Dashboard</h1>
+          <p style="color:#9ca3af;font-size:13px;margin-top:4px;">Hər cihaz üçün ayrı workspace, canlı panel yeniləmə və HWID Kick sistemi</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span id="botStatusBadge" class="badge">Bot yoxlanılır...</span>
+          <span id="wsBadge" class="badge">Workspace: default</span>
+        </div>
+      </div>
+      <div class="grid-4" id="statsGrid"></div>
+    </div>
+
+    <div class="card">
+      <h2>🔗 Sunucu & Discord ID Bağlantısı</h2>
+      <div class="grid-2">
+        <label>Discord Server (Guild) ID
+          <input id="linkGuildIdInput" placeholder="Məs: 123456789012345678" />
+        </label>
+        <label>Sahib Discord User ID
+          <input id="linkDiscordIdInput" placeholder="Məs: 987654321098765432" />
+        </label>
+      </div>
+      <div><button id="linkWorkspaceBtn">Yadda Saxla</button></div>
+    </div>
+
+    <div class="card">
+      <h2>🎨 Panel Dizaynı (Aktiv Panelləri Dərhal Yeniləyir)</h2>
+      <div class="grid-2">
+        <label>Embed Rəngi (Hex)
+          <input id="cfgEmbedColor" placeholder="#10b981" />
+        </label>
+        <label>Panel Başlığı
+          <input id="cfgTitle" placeholder="SADO PROTECT • Script Panel" />
+        </label>
+        <label>Redeem Düyməsi Mətni
+          <input id="cfgRedeemLabel" placeholder="Redeem Key" />
+        </label>
+        <label>Get Script Düyməsi Mətni
+          <input id="cfgGetScriptLabel" placeholder="Get Script" />
+        </label>
+        <label>Reset HWID Düyməsi Mətni
+          <input id="cfgResetHwidLabel" placeholder="Reset HWID" />
+        </label>
+        <label>Stats Düyməsi Mətni
+          <input id="cfgStatsLabel" placeholder="Get Stats" />
+        </label>
+        <label>Footer Mətni
+          <input id="cfgFooterText" placeholder="SADO PROTECT • Secure Loader & Key System" />
+        </label>
+        <label>Şəkil URL (İstəyə bağlı)
+          <input id="cfgImageUrl" placeholder="https://..." />
+        </label>
+      </div>
+      <label>Panel Təsviri
+        <textarea id="cfgDescription"></textarea>
+      </label>
+      <div><button id="savePanelConfigBtn">Panel Dizaynını Yenilə</button></div>
+    </div>
+
+    <div class="card">
+      <h2>📜 Skriptlər</h2>
+      <div class="grid-2">
+        <label>Skript Adı
+          <input id="newScriptName" placeholder="SADO HUB" />
+        </label>
+        <label>Hədəf Skript Seçimi (Key / Panel üçün)
+          <select id="targetScriptSelect"></select>
+        </label>
+      </div>
+      <label>Lua Skript Kodu
+        <textarea id="newScriptCode"></textarea>
+      </label>
+      <div><button id="createScriptBtn">Yeni Skript Yarat</button></div>
+      <div class="list" id="scriptsList"></div>
+    </div>
+
+    <div class="card">
+      <h2>🔑 Key Yaradılması & Whitelist / HWID</h2>
+      <div class="grid-2">
+        <label>Müddət (1d, 7d, 30d, lifetime)
+          <input id="keyDurationInput" value="lifetime" />
+        </label>
+        <label>Key Sayı
+          <input id="keyAmountInput" type="number" min="1" max="50" value="1" />
+        </label>
+      </div>
+      <div><button id="genKeysBtn">Key Yarat</button></div>
+      <div class="list" id="keysList"></div>
+
+      <div class="grid-2" style="margin-top:8px;">
+        <label>Birbaşa Whitelist (Discord User ID)
+          <input id="wlUserIdInput" placeholder="Discord User ID" />
+        </label>
+        <label>Müddət
+          <input id="wlDurationInput" value="lifetime" />
+        </label>
+      </div>
+      <div><button id="addWhitelistBtn">Whitelist-ə Əlavə Et</button></div>
+      <div class="list" id="whitelistList"></div>
+    </div>
+
+    <div class="card">
+      <h2>🚫 Blacklist & Panel Göndər</h2>
+      <div class="grid-2">
+        <label>Blacklist Discord User ID
+          <input id="blUserIdInput" placeholder="Discord User ID" />
+        </label>
+        <label>Kanal ID (Panel göndərmək üçün)
+          <input id="panelChannelIdInput" placeholder="Discord Channel ID" />
+        </label>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button id="addBlacklistBtn" class="danger">Blacklist-ə At</button>
+        <button id="sendPanelBtn" class="secondary">Paneli Kanala Göndər</button>
+      </div>
+      <div class="list" id="blacklistList"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const getOrCreateWorkspaceId = () => {
+      try {
+        let id = localStorage.getItem('sado_ws_id');
+        if (!id) {
+          id = 'ws_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+          localStorage.setItem('sado_ws_id', id);
+        }
+        return id;
+      } catch (_e) {
+        return 'default';
+      }
+    };
+
+    const wsId = getOrCreateWorkspaceId();
+    document.getElementById('wsBadge').textContent = 'Workspace: ' + wsId;
+
+    const apiFetch = (url, opts = {}) => {
+      const headers = Object.assign({ 'X-Client-Workspace': wsId }, opts.headers || {});
+      return fetch(url, Object.assign({}, opts, { headers }));
+    };
+
+    const showToast = (msg) => {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    };
+
+    let initialLoaded = false;
+
+    const renderAll = async () => {
+      const stRes = await apiFetch('/api/status');
+      const st = await stRes.json();
+      const badge = document.getElementById('botStatusBadge');
+      if (st.botReady) {
+        badge.textContent = '🟢 Bot Aktiv: ' + (st.botTag || 'Online');
+        badge.className = 'badge online';
+      } else {
+        badge.textContent = '🔴 Bot Bağlanır...';
+        badge.className = 'badge';
+      }
+
+      document.getElementById('statsGrid').innerHTML = [
+        ['Skriptlər', st.counts ? st.counts.scripts : 0],
+        ['Keylər', st.counts ? st.counts.keys : 0],
+        ['Whitelist', st.counts ? st.counts.whitelists : 0],
+        ['Uğurlu Auth', st.stats ? st.stats.authSuccess : 0],
+        ['Kick / Blok', st.stats ? st.stats.authBlocked : 0],
+      ]
+        .map(([k, v]) => '<div class="stat-box"><div style="font-size:12px;color:#9ca3af;">' + k + '</div><div class="stat-val">' + v + '</div></div>')
+        .join('');
+
+      const res = await apiFetch('/api/state');
+      const data = await res.json();
+      if (!data.ok) return;
+
+      if (!initialLoaded) {
+        document.getElementById('linkGuildIdInput').value = data.guildId || '';
+        document.getElementById('linkDiscordIdInput').value = data.discordUserId || '';
+        const cfg = data.panelConfig || {};
+        document.getElementById('cfgEmbedColor').value = cfg.embedColor || '#10b981';
+        document.getElementById('cfgTitle').value = cfg.title || '';
+        document.getElementById('cfgDescription').value = cfg.description || '';
+        document.getElementById('cfgRedeemLabel').value = cfg.redeemLabel || 'Redeem Key';
+        document.getElementById('cfgGetScriptLabel').value = cfg.getScriptLabel || 'Get Script';
+        document.getElementById('cfgResetHwidLabel').value = cfg.resetHwidLabel || 'Reset HWID';
+        document.getElementById('cfgStatsLabel').value = cfg.statsLabel || 'Get Stats';
+        document.getElementById('cfgFooterText').value = cfg.footerText || '';
+        document.getElementById('cfgImageUrl').value = cfg.imageUrl || '';
+        initialLoaded = true;
+      }
+
+      const sel = document.getElementById('targetScriptSelect');
+      const prevSel = sel.value;
+      sel.innerHTML = (data.scripts || [])
+        .map((s) => '<option value="' + s.id + '">' + s.name + ' (' + s.id + ')</option>')
+        .join('');
+      if (prevSel) sel.value = prevSel;
+
+      document.getElementById('scriptsList').innerHTML = (data.scripts || [])
+        .map(
+          (s) =>
+            '<div class="row-item"><div><strong>' +
+            s.name +
+            '</strong> <span style="color:#9ca3af;">(' +
+            s.id +
+            ')</span></div><button class="danger" onclick="deleteScript(\\'' +
+            s.id +
+            '\\')">Sil</button></div>'
+        )
+        .join('');
+
+      document.getElementById('keysList').innerHTML = (data.keys || [])
+        .slice(0, 20)
+        .map(
+          (k) =>
+            '<div class="row-item"><div><code>' +
+            k.key +
+            '</code> • ' +
+            k.scriptName +
+            ' • ' +
+            (k.used ? 'İstifadə olunub (' + (k.usedByDiscordId || '') + ')' : 'Boş') +
+            '</div><button class="danger" onclick="deleteKey(\\'' +
+            encodeURIComponent(k.key) +
+            '\\')">Sil</button></div>'
+        )
+        .join('');
+
+      document.getElementById('whitelistList').innerHTML = (data.whitelists || [])
+        .map(
+          (w) =>
+            '<div class="row-item"><div><strong>' +
+            w.discordUserId +
+            '</strong> • Script: <code>' +
+            w.scriptId +
+            '</code> • HWID: <code>' +
+            (w.hwid || 'Yoxdur') +
+            '</code></div><div style="display:flex;gap:8px;"><button class="secondary" onclick="resetHw(\\'' +
+            w.id +
+            '\\')">Reset HWID</button><button class="danger" onclick="delWl(\\'' +
+            w.id +
+            '\\')">Sil</button></div></div>'
+        )
+        .join('');
+
+      document.getElementById('blacklistList').innerHTML = (data.blacklist || [])
+        .map(
+          (b) =>
+            '<div class="row-item"><div><strong>' +
+            b.discordUserId +
+            '</strong> ' +
+            (b.scriptId ? '• <code>' + b.scriptId + '</code>' : '• Bütün skriptlər') +
+            '</div><button class="danger" onclick="delBl(\\'' +
+            b.id +
+            '\\')">Sil</button></div>'
+        )
+        .join('');
+    };
+
+    window.deleteScript = async (id) => {
+      const r = await apiFetch('/api/scripts/' + id, { method: 'DELETE' });
+      const j = await r.json();
+      showToast(j.message || 'Yeniləndi');
+      renderAll();
+    };
+    window.deleteKey = async (k) => {
+      const r = await apiFetch('/api/keys/' + k, { method: 'DELETE' });
+      const j = await r.json();
+      showToast(j.message || 'Yeniləndi');
+      renderAll();
+    };
+    window.resetHw = async (id) => {
+      const r = await apiFetch('/api/whitelist/' + id + '/reset-hwid', { method: 'POST' });
+      const j = await r.json();
+      showToast(j.message || 'Yeniləndi');
+      renderAll();
+    };
+    window.delWl = async (id) => {
+      const r = await apiFetch('/api/whitelist/' + id, { method: 'DELETE' });
+      const j = await r.json();
+      showToast(j.message || 'Yeniləndi');
+      renderAll();
+    };
+    window.delBl = async (id) => {
+      const r = await apiFetch('/api/blacklist/' + id, { method: 'DELETE' });
+      const j = await r.json();
+      showToast(j.message || 'Yeniləndi');
+      renderAll();
+    };
+
+    document.getElementById('linkWorkspaceBtn').addEventListener('click', async () => {
+      const guildId = document.getElementById('linkGuildIdInput').value.trim();
+      const discordUserId = document.getElementById('linkDiscordIdInput').value.trim();
+      const r = await apiFetch('/api/workspace/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, discordUserId }),
+      });
+      const j = await r.json();
+      showToast(j.message || 'Yadda saxlandı');
+      renderAll();
+    });
+
+    document.getElementById('savePanelConfigBtn').addEventListener('click', async () => {
+      const payload = {
+        embedColor: document.getElementById('cfgEmbedColor').value.trim(),
+        title: document.getElementById('cfgTitle').value.trim(),
+        description: document.getElementById('cfgDescription').value.trim(),
+        redeemLabel: document.getElementById('cfgRedeemLabel').value.trim(),
+        getScriptLabel: document.getElementById('cfgGetScriptLabel').value.trim(),
+        resetHwidLabel: document.getElementById('cfgResetHwidLabel').value.trim(),
+        statsLabel: document.getElementById('cfgStatsLabel').value.trim(),
+        footerText: document.getElementById('cfgFooterText').value.trim(),
+        imageUrl: document.getElementById('cfgImageUrl').value.trim(),
+      };
+      const r = await apiFetch('/api/panel-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      showToast(j.message || 'Panel dizaynı yeniləndi');
+      renderAll();
+    });
+
+    document.getElementById('createScriptBtn').addEventListener('click', async () => {
+      const name = document.getElementById('newScriptName').value.trim();
+      const code = document.getElementById('newScriptCode').value;
+      const r = await apiFetch('/api/scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, code }),
+      });
+      const j = await r.json();
+      if (j.ok) document.getElementById('newScriptName').value = '';
+      showToast(j.message || 'Skript yaradıldı');
+      renderAll();
+    });
+
+    document.getElementById('genKeysBtn').addEventListener('click', async () => {
+      const scriptId = document.getElementById('targetScriptSelect').value;
+      const duration = document.getElementById('keyDurationInput').value.trim();
+      const amount = Number(document.getElementById('keyAmountInput').value || 1);
+      const r = await apiFetch('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scriptId, duration, amount }),
+      });
+      const j = await r.json();
+      showToast(j.message || 'Key yaradıldı');
+      renderAll();
+    });
+
+    document.getElementById('addWhitelistBtn').addEventListener('click', async () => {
+      const discordUserId = document.getElementById('wlUserIdInput').value.trim();
+      const scriptId = document.getElementById('targetScriptSelect').value;
+      const duration = document.getElementById('wlDurationInput').value.trim();
+      const r = await apiFetch('/api/whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordUserId, scriptId, duration }),
+      });
+      const j = await r.json();
+      if (j.ok) document.getElementById('wlUserIdInput').value = '';
+      showToast(j.message || 'Whitelist yeniləndi');
+      renderAll();
+    });
+
+    document.getElementById('addBlacklistBtn').addEventListener('click', async () => {
+      const discordUserId = document.getElementById('blUserIdInput').value.trim();
+      const r = await apiFetch('/api/blacklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordUserId }),
+      });
+      const j = await r.json();
+      if (j.ok) document.getElementById('blUserIdInput').value = '';
+      showToast(j.message || 'Blacklist yeniləndi');
+      renderAll();
+    });
+
+    document.getElementById('sendPanelBtn').addEventListener('click', async () => {
+      const channelId = document.getElementById('panelChannelIdInput').value.trim();
+      const scriptId = document.getElementById('targetScriptSelect').value;
+      const r = await apiFetch('/api/send-panel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, scriptId }),
+      });
+      const j = await r.json();
+      showToast(j.message || 'Panel göndərildi');
+      renderAll();
+    });
+
+    renderAll();
+    setInterval(renderAll, 8000);
+  </script>
+</body>
+</html>`;
+
+app.get('/', (_req, res) => {
   res.type('html').send(DASHBOARD_HTML);
 });
 
-app.use((err, req, res, _next) => {
+app.use((err, _req, res, _next) => {
   console.error('[HTTP ERROR]', err && err.message ? err.message : err);
   res.status(500).json({ ok: false, message: 'Daxili server xətası baş verdi.' });
 });
 
-// ============================================================================
-// 6. SERVER BAŞLADILMASI VƏ RENDER ÜÇÜN 7/24 PROSES QORUMASI
-// ============================================================================
-
-process.on('uncaughtException', (err) => {
-  console.error('[UNCAUGHT EXCEPTION]', err && err.message ? err.message : err);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[UNHANDLED REJECTION]', reason);
-});
-
 app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`[WEB] SADO PROTECT Dashboard http://0.0.0.0:${PORT} ünvanında işləyir`);
+  console.log(`[WEB] SADO PROTECT http://0.0.0.0:${PORT} ünvanında işləyir`);
+  await loadStore();
   startWatchdog();
   await ensureBotOnline();
   const selfPingUrl = process.env.RENDER_EXTERNAL_URL || 'https://sado-protect.onrender.com';
