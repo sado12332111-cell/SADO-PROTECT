@@ -86,21 +86,7 @@ const resolveProtectedBotToken = () => {
   }
   const segA = ['MTU2', 'MjA4', 'MDY1', 'NDI4', 'MjE5', 'OTEy', 'MQ=='].join('');
   const segB = ['RzhD', 'dUp1', 'Lg=='].join('');
-  const segC = [
-    'OFVL',
-    'OXdK',
-    'Q29f',
-    'cm50',
-    'bktu',
-    'cWx_',
-    'eDIx',
-    'aWFJ',
-    'WS1T',
-    'Z3Nu',
-    'SHVK',
-    'RmVz',
-    'MA=='
-  ].join('');
+  const segC = ['OFVL', 'OXdK', 'Q29f', 'cm50', 'bktu', 'cWx_', 'eDIx', 'aWFJ', 'WS1T', 'Z3Nu', 'SHVK', 'RmVz', 'MA=='].join('');
   try {
     const part1 = Buffer.from(segA, 'base64').toString('utf8').trim();
     const part2 = Buffer.from(segB, 'base64').toString('utf8').trim();
