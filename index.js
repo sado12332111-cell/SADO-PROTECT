@@ -1222,6 +1222,7 @@ app.post('/api/blacklist', async (req, res) => {
         addedAt: new Date().toISOString()
       });
       saveDatabase();
+    }
     appendActivityLog('BLACKLIST_ADD', `Blacklist əlavə edildi: ${discordId} (${reason})`);
     return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
   } catch (err) {
