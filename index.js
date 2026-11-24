@@ -1697,7 +1697,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="bot-pill" id="botBadge">Bot: Online ✅</div>
   </header>
 
-  <nav class="drawer-nav open" id="drawerNav">
+  <nav class="drawer-nav" id="drawerNav">
     <button type="button" class="nav-chip active" data-page="secOverview" onclick="openPage('secOverview')">📊 Overview</button>
     <button type="button" class="nav-chip" data-page="secCharts" onclick="openPage('secCharts')">📈 Qrafiklər</button>
     <button type="button" class="nav-chip" data-page="secScripts" onclick="openPage('secScripts')">📜 Skriptlər</button>
@@ -1981,11 +1981,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     const openPage = (pageId) => {
       const pages = Array.from(document.querySelectorAll('.page-section'));
       const chips = Array.from(document.querySelectorAll('.nav-chip'));
+      const nav = document.getElementById('drawerNav');
       const setActive = uiFlags.activePage = pageId;
       const hidePages = pages.map((p) => p.classList.toggle('active-page', p.id === pageId));
       const markChips = chips.map((c) => c.classList.toggle('active', c.getAttribute('data-page') === pageId));
+      const closeNav = nav.classList.remove('open');
       const topScroll = window.scrollTo({ top: 0, behavior: 'smooth' });
-      return { setActive, hidePages, markChips, topScroll };
+      return { setActive, hidePages, markChips, closeNav, topScroll };
     };
 
     const syncPickerFromHex = (val) => {
@@ -2449,9 +2451,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         sendPanelToChannel,
         savePanelDesign,
       });
+      const wireClicks = () => {
+        const menuBtn = document.querySelector('.menu-btn');
+        const onMenu = menuBtn ? (menuBtn.onclick = toggleMenu) : null;
+        const navChips = Array.from(document.querySelectorAll('.nav-chip'));
+        const onChips = navChips.map((chip) => {
+          const targetPage = chip.getAttribute('data-page');
+          const handler = () => openPage(targetPage);
+          const bound = chip.onclick = handler;
+          return bound;
+        });
+        return { onMenu, onChips };
+      };
+      const wired = wireClicks();
       const first = renderAll();
       const poll = setInterval(renderAll, 8000);
-      return { bindGlobals, first, poll };
+      return { bindGlobals, wired, first, poll };
     };
 
     const bootUi = startDashboardLoop();
