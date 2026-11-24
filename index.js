@@ -60,43 +60,6 @@ const resolveProtectedBotToken = (customToken = null) => {
   }
 };
 
-const resolveConnectedGuildInfo = () => {
-  try {
-    const targetGuildId = String(appState.db.botConfig.guildId || '').trim();
-    if (!discordClient.isReady()) {
-      return {
-        guildId: targetGuildId,
-        guildName: 'Bağlı Deyil'
-      };
-    }
-    if (targetGuildId) {
-      const matched = discordClient.guilds.cache.get(targetGuildId);
-      if (matched) {
-        return {
-          guildId: matched.id,
-          guildName: matched.name
-        };
-      }
-    }
-    const firstGuild = discordClient.guilds.cache.first();
-    if (firstGuild) {
-      return {
-        guildId: firstGuild.id,
-        guildName: firstGuild.name
-      };
-    }
-    return {
-      guildId: targetGuildId,
-      guildName: 'Sunucu Tapılmadı'
-    };
-  } catch (_err) {
-    return {
-      guildId: '',
-      guildName: 'Naməlum Sunucu'
-    };
-  }
-};
-
 const DEFAULT_PANEL_DESIGN = Object.freeze({
   title: '🛡️ SADO PROTECT — SCRIPT & KEY PANEL',
   description:
@@ -266,6 +229,8 @@ const appState = {
     username: null,
     userId: null,
     guildCount: 0,
+    connectedGuildId: '',
+    connectedGuildName: 'Bağlı Deyil',
     lastError: null,
     lastConnectedAt: null
   }
@@ -447,6 +412,43 @@ const discordClient = new Client({
   ],
   partials: [Partials.Channel, Partials.Message]
 });
+
+const resolveConnectedGuildInfo = () => {
+  try {
+    const targetGuildId = String(appState.db.botConfig.guildId || '').trim();
+    if (!discordClient.isReady()) {
+      return {
+        guildId: targetGuildId,
+        guildName: 'Bağlı Deyil'
+      };
+    }
+    if (targetGuildId) {
+      const matched = discordClient.guilds.cache.get(targetGuildId);
+      if (matched) {
+        return {
+          guildId: matched.id,
+          guildName: matched.name
+        };
+      }
+    }
+    const firstGuild = discordClient.guilds.cache.first();
+    if (firstGuild) {
+      return {
+        guildId: firstGuild.id,
+        guildName: firstGuild.name
+      };
+    }
+    return {
+      guildId: targetGuildId,
+      guildName: 'Sunucu Tapılmadı'
+    };
+  } catch (_err) {
+    return {
+      guildId: '',
+      guildName: 'Naməlum Sunucu'
+    };
+  }
+};
 
 const mapButtonStyle = (styleName) => {
   switch (String(styleName || 'Secondary')) {
@@ -875,6 +877,25 @@ discordClient.on(Events.InteractionCreate, async (interaction) => {
       keyObj.usageCount = (keyObj.usageCount || 0) + 1;
       saveDatabase();
       appendActivityLog('REDEEM', `${keyObj.key} redeem edildi -> ${interaction.user.tag}`);
+
+      await interaction.reply({
+        content: `✅ Key uğurla aktivləşdirildi: \`${keyObj.key}\`${enteredHwid ? `\n• HWID: \`${enteredHwid}\`` : ''}`,
+        flags: MessageFlags.Ephemeral
+      });
+    }
+  } catch (err) {
+    console.log(`[INTERACTION ERROR] ${err.message}`);
+  }
+});
+
+/* ============================================================================
+ * 5. EXPRESS SERVER & REST API ROUTES (CONST)
+ * ============================================================================ */
+
+const app = express();
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+
 const getDashboardSnapshot = () => {
   const guildInfo = resolveConnectedGuildInfo();
   return {
@@ -1701,6 +1722,7 @@ const DASHBOARD_HTML = [
   '        <div class="card">',
   '          <h3 class="card-title">🔑 Key, ✅ Whitelist (Auto Key) & ⛔ Blacklist</h3>',
   '          <div class="field-group"><label class="field-label">Key Prefix & Say</label><div style="display:flex;gap:8px;"><input type="text" id="keyPrefixInput" class="input" value="SADO" /><input type="number" id="keyCountInput" class="input" value="1" min="1" max="50" /></div></div>',
+  '          <div class="field-group"><label class="field-label">Sahib Discord ID (İstəyə bağlı)</label><input type="text" id="keyOwnerInput" class="input" placeholder="Discord ID" /></div>',
   '          <div class="btn-row"><button type="button" id="generateKeysBtn" class="btn btn-primary">Key Yarat</button></div>',
   '          <div id="keysListBox" style="margin-top:10px;"></div>',
   '          <hr style="border-color:var(--border-subtle);margin:14px 0;" />',
