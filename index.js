@@ -104,8 +104,7 @@ const resolveProtectedBotToken = () => {
 const discordClient = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildMessages
   ]
 });
 
@@ -699,18 +698,16 @@ const connectDiscordBot = async () => {
   appState.botStatus.connecting = true;
   appState.botStatus.lastError = null;
 
-  const loginGuardTimer = setTimeout(() => {
-    if (appState.botStatus.connecting && !discordClient.isReady()) {
-      appState.botStatus.connecting = false;
-      appState.botStatus.lastError = 'Bağlantı vaxtı bitdi, yenidən cəhd edilir...';
-    }
-  }, 15000);
-
   try {
-    await discordClient.login(tokenToUse);
-    clearTimeout(loginGuardTimer);
+    await Promise.race([
+      discordClient.login(tokenToUse),
+      new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error('Discord login timeout (12s)')), 12000);
+      })
+    ]);
+
     const guildInfo = await resolveConnectedGuildInfo();
-    appState.botStatus.connected = true;
+    appState.botStatus.connected = Boolean(discordClient.isReady() || discordClient.user);
     appState.botStatus.connecting = false;
     appState.botStatus.username = discordClient.user ? discordClient.user.tag : 'SADO PROTECT';
     appState.botStatus.userId = discordClient.user ? discordClient.user.id : null;
@@ -730,10 +727,10 @@ const connectDiscordBot = async () => {
 
     return { ok: true, botStatus: appState.botStatus };
   } catch (err) {
-    clearTimeout(loginGuardTimer);
     appState.botStatus.connected = false;
     appState.botStatus.connecting = false;
     appState.botStatus.lastError = err.message;
+    console.log(`[BOT CONNECT ERROR] ${err.message}`);
     appendActivityLog('BOT_ERROR', `Bot bağlantı xətası: ${err.message}`);
     return { ok: false, error: err.message };
   }
@@ -820,10 +817,10 @@ discordClient.on(Events.MessageCreate, async (message) => {
           createdBy: 'DiscordWL',
           createdAt: new Date().toISOString(),
           lastUsedAt: null,
-          usageCount: 0
-        });
-        saveDatabase();
-        await message.reply({ content: `✅ Whitelist əlavə edildi: \`${targetId}\` | Auto Key: \`${autoKey}\`` });
+      if (dot && statusText) {
+        dot.classList.toggle("online", isOnline);
+        const errSuffix = (!isOnline && snap.botStatus && snap.botStatus.lastError) ? (" (" + snap.botStatus.lastError + ")") : "";
+        statusText.textContent = isOnline ? ("Bot: " + (snap.botStatus.username || "Aktiv")) : ("Bot: Aktivləşdirilir..." + errSuffix);
       }
       return;
     }
