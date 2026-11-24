@@ -1349,6 +1349,160 @@ app.post('/api/whitelist/:id/toggle-lock', async (req, res) => {
 });
 
 app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const wl = ws.whitelists.find((w) => w.id === req.params.id);
+  if (!wl) {
+    res.status(404).json({ ok: false, message: 'Qeyd tapılmadı.' });
+    return;
+  }
+  wl.hwid = '';
+  ws.stats.hwidResets = ws.stats.hwidResets + 1;
+  await saveStore();
+  res.json({ ok: true, workspaceId: wsId, message: 'HWID sıfırlandı!' });
+});
+
+app.delete('/api/whitelist/:id', async (req, res) => {
+  const { wsId, ws } = getWorkspaceFromReq(req);
+  const before = ws.whitelists.length;
+  ws.whitelists = ws.whitelists.filter((w) => w.id !== req.params.id);
+  await saveStore();
+  res.json({
+    ok: true,
+    workspaceId: wsId,
+    removed: before - ws.whitelists.length,
+    message: 'Whitelist-dən çıxarıldı.',
+  });
+});
+
+app.post('/api/send-panel', async (req, res) => {
+  try {
+    const { wsId, ws } = getWorkspaceFromReq(req);
+    const channelId = String((req.body && req.body.channelId) || '').trim();
+    const scriptId = String(
+      (req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default'
+    );
+    if (!channelId) {
+      res.status(400).json({ ok: false, message: 'Discord Channel ID daxil edin.' });
+      return;
+    }
+    if (!BOT_TOKEN) {
+      res.status(400).json({ ok: false, message: 'Bot token təyin edilməyib.' });
+      return;
+    }
+    const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
+    const { embed, row } = buildPanelEmbedAndButtons(ws, sc);
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+    const sentMsg = await rest.post(Routes.channelMessages(channelId), {
+      body: { embeds: [embed.toJSON()], components: [row.toJSON()] },
+    });
+    ws.panels.push({
+      id: crypto.randomUUID(),
+      channelId,
+      messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
+      scriptId: sc ? sc.id : 'default',
+      title: ws.panelConfig.title,
+      createdAt: new Date().toISOString(),
+    });
+    await saveStore();
+    res.json({ ok: true, workspaceId: wsId, message: 'Panel kanala göndərildi!' });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message || 'Panel göndərilə bilmədi.' });
+  }
+});
+
+const handleLoaderRequest = async (req, res) => {
+  try {
+    const tokenOrId = decodeURIComponent(req.params.token || '');
+    const { wsId, ws } = getWorkspaceFromReq(req);
+    let targetWsId = wsId;
+    let targetWs = ws;
+    let sc =
+      targetWs.scripts.find((s) => s.loaderToken === tokenOrId || s.id === tokenOrId) || null;
+
+    if (!sc) {
+      for (const item of getAllWorkspacesList()) {
+        const found = item.ws.scripts.find((s) => s.loaderToken === tokenOrId || s.id === tokenOrId);
+        if (found) {
+          targetWsId = item.wsId;
+          targetWs = item.ws;
+          sc = found;
+          break;
+        }
+      }
+    }
+
+    if (!sc) {
+      sc = targetWs.scripts[0] || { id: 'default', code: DEFAULT_SCRIPT_CODE };
+    }
+
+    const baseUrl = buildPublicBaseUrl(req);
+    const verifyUrl = `${baseUrl}/api/verify?ws=${encodeURIComponent(
+      targetWsId
+    )}&scriptId=${encodeURIComponent(sc.id)}`;
+
+    const luaLoader = [
+      'local _key = tostring(script_key or "")',
+      'local _hwid = tostring((gethwid and gethwid()) or (game:GetService("RbxAnalyticsService"):GetClientId()) or "UNKNOWN_HWID")',
+      `local _url = "${verifyUrl}&key=" .. _key .. "&hwid=" .. _hwid`,
+      'local _ok, _res = pcall(function() return game:HttpGet(_url) end)',
+      'if not _ok or not _res then warn("SADO PROTECT: Server bağlantısı alınmadı") return end',
+      'local _fn = loadstring(_res)',
+      'if type(_fn) == "function" then _fn() else warn("SADO PROTECT: " .. tostring(_res)) end',
+    ].join('\n');
+
+    res.type('text/plain').send(luaLoader);
+  } catch (err) {
+    res.status(500).type('text/plain').send(`warn("SADO PROTECT Loader Error: ${err.message}")`);
+  }
+};
+
+app.get('/loader/:token', handleLoaderRequest);
+app.get('/api/loader/:token', handleLoaderRequest);
+
+app.get('/api/verify', async (req, res) => {
+  try {
+    const keyInput = String((req.query && req.query.key) || '').trim();
+    const hwidInput = String((req.query && req.query.hwid) || '').trim();
+    const requestedScriptId = String((req.query && req.query.scriptId) || '').trim();
+    const { ws } = getWorkspaceFromReq(req);
+
+    if (!keyInput) {
+      res.status(401).type('text/plain').send('return warn("SADO PROTECT: Key daxil edilməyib!")');
+      return;
+    }
+
+    const wl = ws.whitelists.find(
+      (w) =>
+        String(w.key || '').toUpperCase() === keyInput.toUpperCase() &&
+        (!requestedScriptId || w.scriptId === requestedScriptId)
+    );
+
+    if (!wl) {
+      ws.stats.authBlocked = ws.stats.authBlocked + 1;
+      await saveStore();
+      res.status(403).type('text/plain').send('return warn("SADO PROTECT: Key etibarsızdır və ya whitelist-də deyil!")');
+      return;
+    }
+
+    if (isExpired(wl.expiresAt)) {
+      ws.stats.authBlocked = ws.stats.authBlocked + 1;
+      await saveStore();
+      res.status(403).type('text/plain').send('return warn("SADO PROTECT: Key/Whitelist müddəti bitib!")');
+      return;
+    }
+
+    const isBl = ws.blacklist.some(
+      (b) =>
+        b.discordUserId === wl.discordUserId &&
+        (!b.scriptId || b.scriptId === wl.scriptId)
+    );
+    if (isBl) {
+      ws.stats.authBlocked = ws.stats.authBlocked + 1;
+      await saveStore();
+      res.status(403).type('text/plain').send('return warn("SADO PROTECT: İstifadəçi blacklist-dədir!")');
+      return;
+    }
+
     if (hwidInput && wl.hwidLocked !== false) {
       if (!wl.hwid || String(wl.hwid).trim() === '') {
         wl.hwid = hwidInput;
@@ -1356,21 +1510,19 @@ app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
       } else if (String(wl.hwid).trim() !== hwidInput) {
         ws.stats.authBlocked = ws.stats.authBlocked + 1;
         await saveStore();
-        res.status(403).json({ ok: false, message: 'SADO PROTECT: HWID başqa cihaza bağlıdır! Kick.' });
+        res.status(403).type('text/plain').send('return warn("SADO PROTECT: HWID başqa cihaza bağlıdır! Kick.")');
         return;
       }
     }
 
+    const targetScriptId = requestedScriptId || wl.scriptId || 'default';
+    const sc = ws.scripts.find((s) => s.id === targetScriptId) || ws.scripts[0];
     ws.stats.authSuccess = ws.stats.authSuccess + 1;
     await saveStore();
 
-    res.json({
-      ok: true,
-      scriptId: targetScriptId,
-      code: sc ? sc.code : DEFAULT_SCRIPT_CODE,
-    });
+    res.status(200).type('text/plain').send(sc ? sc.code : DEFAULT_SCRIPT_CODE);
   } catch (err) {
-    res.status(500).json({ ok: false, message: err.message || 'Verify xətası' });
+    res.status(500).type('text/plain').send(`return warn("SADO PROTECT Verify Error: ${err.message}")`);
   }
 });
 
