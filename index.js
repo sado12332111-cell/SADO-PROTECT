@@ -955,8 +955,12 @@ const getDashboardSnapshot = async () => {
     }
   }
 
-  // Yalnız sunucu ID-yə bağlı sunucunun adını göstərir (ID əlavə etmir)
-  const displayGuild = guildName && guildName !== "Sado Protect Hub" ? guildName : "Sunucu seçilməyib";
+  const displayGuild =
+    guildName && guildName !== "Sado Protect Hub"
+      ? guildName
+      : guildId
+      ? `Sunucu (${guildId})`
+      : "Sunucu seçilməyib";
 
   return {
     stats: {
@@ -1101,10 +1105,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     .status-dot.online {
       background: var(--success);
-    }
-
-    .status-dot.connecting {
-      background: var(--accent);
     }
 
     .layout-shell {
@@ -1306,6 +1306,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       gap: 12px;
     }
 
+    .item-title {
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .item-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      word-break: break-all;
+      margin-top: 2px;
+    }
+
     .button-config-card {
       background: var(--bg-card-2);
       border: 1px solid var(--border);
@@ -1422,15 +1434,30 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="layout-shell">
     <aside class="sidebar" id="sidebarNav">
       <button type="button" class="nav-btn active" data-tab="overview" onclick="window.sadoSelectTab('overview')">📊 İdarəetmə</button>
+      <button type="button" class="nav-btn" data-tab="scripts" onclick="window.sadoSelectTab('scripts')">📜 Scriptlər</button>
+      <button type="button" class="nav-btn" data-tab="keys" onclick="window.sadoSelectTab('keys')">🔑 Keylər</button>
       <button type="button" class="nav-btn" data-tab="design" onclick="window.sadoSelectTab('design')">🎨 Panel Dizaynı</button>
+      <button type="button" class="nav-btn" data-tab="lists" onclick="window.sadoSelectTab('lists')">🛡️ Whitelist / Blacklist</button>
     </aside>
 
     <main class="main-content">
       <div class="tab-section active" id="tab-overview">
         <section class="stats-grid">
           <div class="stat-card">
+            <div class="stat-label">Aktiv Scriptlər</div>
+            <div class="stat-value" id="statActiveScripts">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Yaradılan Keylər</div>
+            <div class="stat-value" id="statTotalKeys">0</div>
+          </div>
+          <div class="stat-card">
             <div class="stat-label">Bağlanan Sunucu</div>
             <div class="stat-value" id="statGuildName">Sunucu seçilməyib</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Whitelist / Blacklist</div>
+            <div class="stat-value" id="statListCounts">0 / 0</div>
           </div>
         </section>
 
@@ -1450,6 +1477,58 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           <div class="btn-row">
             <button type="button" class="btn btn-amber" id="connectGuildBotBtn">Botu Bağla və Paneli Yenilə</button>
           </div>
+        </div>
+      </div>
+
+      <div class="tab-section" id="tab-scripts">
+        <div class="panel-card">
+          <div class="panel-heading">📜 Yeni Script Yarat</div>
+          <div class="form-grid">
+            <div>
+              <label for="scriptNameInput">Script Adı</label>
+              <input type="text" id="scriptNameInput" placeholder="Məs: Sado Hub" />
+            </div>
+            <div>
+              <label for="scriptLoaderInput">Loader URL</label>
+              <input type="text" id="scriptLoaderInput" placeholder="https://example.com/loader.lua" />
+            </div>
+            <div>
+              <label for="scriptFileInput">Dosya Əlavə Et (.lua / .txt)</label>
+              <input type="file" id="scriptFileInput" accept=".lua,.txt,.json,.js" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-amber" id="createScriptBtn">Script Yarat</button>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-heading">📦 Mövcud Scriptlər</div>
+          <div class="list-stack" id="scriptsListContainer"></div>
+        </div>
+      </div>
+
+      <div class="tab-section" id="tab-keys">
+        <div class="panel-card">
+          <div class="panel-heading">🔑 Yeni Key Yarat</div>
+          <div class="form-grid">
+            <div>
+              <label for="keyScriptSelect">Script Seçin</label>
+              <select id="keyScriptSelect"></select>
+            </div>
+            <div>
+              <label for="customKeyInput">Xüsusi Key (İstəyə bağlı)</label>
+              <input type="text" id="customKeyInput" placeholder="Boş buraxsanız avtomatik yaranır" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-green" id="generateKeyBtn">Key Yarat</button>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-heading">🗝️ Yaradılan Keylər</div>
+          <div class="list-stack" id="keysListContainer"></div>
         </div>
       </div>
 
@@ -1481,6 +1560,29 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           <div class="btn-row" style="margin-top:14px;">
             <button type="button" class="btn btn-amber" id="saveDesignBtn">💾 Ayarları Yadda Saxla</button>
           </div>
+        </div>
+      </div>
+
+      <div class="tab-section" id="tab-lists">
+        <div class="panel-card">
+          <div class="panel-heading">🛡️ Whitelist / Blacklist İdarəetməsi</div>
+          <div class="form-grid">
+            <div>
+              <label for="listTypeSelect">Siyahı Növü</label>
+              <select id="listTypeSelect">
+                <option value="whitelist">Whitelist</option>
+                <option value="blacklist">Blacklist</option>
+              </select>
+            </div>
+            <div>
+              <label for="listTargetInput">İstifadəçi ID və ya HWID</label>
+              <input type="text" id="listTargetInput" placeholder="ID və ya HWID daxil edin" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-amber" id="addListEntryBtn">Əlavə Et</button>
+          </div>
+          <div class="list-stack" id="listsContainer"></div>
         </div>
       </div>
     </main>
@@ -1570,15 +1672,106 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }));
     };
 
+    const renderScriptsAndKeys = (data) => {
+      const scriptsContainer = document.getElementById("scriptsListContainer");
+      const selectEl = document.getElementById("keyScriptSelect");
+      const scripts = data.scripts || [];
+
+      if (selectEl) {
+        const prevVal = selectEl.value;
+        selectEl.innerHTML = '<option value="Ümumi / Default">Ümumi / Default</option>';
+        scripts.forEach((sc) => {
+          const opt = document.createElement("option");
+          opt.value = sc.name;
+          opt.textContent = sc.name;
+          selectEl.appendChild(opt);
+        });
+        if (prevVal) selectEl.value = prevVal;
+      }
+
+      if (scriptsContainer) {
+        if (scripts.length === 0) {
+          scriptsContainer.innerHTML = '<div class="item-sub">Hələ script əlavə edilməyib.</div>';
+        } else {
+          scriptsContainer.innerHTML = scripts
+            .map((sc) => {
+              const encName = encodeURIComponent(sc.name || "");
+              const encUrl = encodeURIComponent(sc.loaderUrl || "");
+              return (
+                '<div class="list-item">' +
+                '<div>' +
+                '<div class="item-title">' + (sc.name || "Script") + '</div>' +
+                '<div class="item-sub">' + (sc.loaderUrl || "URL yoxdur") + (sc.fileName ? (" • Dosya: " + sc.fileName) : "") + '</div>' +
+                '</div>' +
+                '<div class="btn-row">' +
+                '<button type="button" class="btn btn-ghost" onclick="window.updateScriptPrompt(\'' + sc.id + "', '" + encName + "', '" + encUrl + '\')">Düzəliş</button>' +
+                '<button type="button" class="btn btn-red" onclick="window.deleteScriptItem(\'' + sc.id + '\')">Sil</button>' +
+                '</div>' +
+                '</div>'
+              );
+            })
+            .join("");
+        }
+      }
+
+      const keysContainer = document.getElementById("keysListContainer");
+      const keys = data.keys || [];
+      if (keysContainer) {
+        if (keys.length === 0) {
+          keysContainer.innerHTML = '<div class="item-sub">Hələ key yaradılmayıb.</div>';
+        } else {
+          keysContainer.innerHTML = keys
+            .map((k) => (
+              '<div class="list-item">' +
+              '<div>' +
+              '<div class="item-title">' + k.key + '</div>' +
+              '<div class="item-sub">Script: ' + (k.scriptName || "Global") + ' • HWID: ' + (k.hwid || "Sıfır / Yoxdur") + '</div>' +
+              '</div>' +
+              '<button type="button" class="btn btn-red" onclick="window.deleteKeyItem(\'' + k.id + '\')">Sil</button>' +
+              '</div>'
+            ))
+            .join("");
+        }
+      }
+
+      const listsContainer = document.getElementById("listsContainer");
+      if (listsContainer) {
+        const wl = (data.whitelist || []).map((x) => ({ ...x, listType: "whitelist", label: "Whitelist" }));
+        const bl = (data.blacklist || []).map((x) => ({ ...x, listType: "blacklist", label: "Blacklist" }));
+        const combined = [...wl, ...bl];
+        if (combined.length === 0) {
+          listsContainer.innerHTML = '<div class="item-sub">Siyahı boşdur.</div>';
+        } else {
+          listsContainer.innerHTML = combined
+            .map((item) => (
+              '<div class="list-item">' +
+              '<div>' +
+              '<div class="item-title">[' + item.label + '] ' + item.value + '</div>' +
+              '</div>' +
+              '<button type="button" class="btn btn-red" onclick="window.removeListItem(\'' + item.listType + "', '" + item.id + '\')">Sil</button>' +
+              '</div>'
+            ))
+            .join("");
+        }
+      }
+    };
+
     const renderSnapshot = (data) => {
       if (!data) return;
       snapshotCache = data;
 
       const guildDisplayName = data.stats?.guildName || "Sunucu seçilməyib";
 
+      const statScriptsEl = document.getElementById("statActiveScripts");
+      const statKeysEl = document.getElementById("statTotalKeys");
       const statGuildEl = document.getElementById("statGuildName");
-      if (statGuildEl) {
-        statGuildEl.textContent = guildDisplayName;
+      const statListsEl = document.getElementById("statListCounts");
+
+      if (statScriptsEl) statScriptsEl.textContent = String(data.stats?.activeScripts ?? 0);
+      if (statKeysEl) statKeysEl.textContent = String(data.stats?.totalKeys ?? 0);
+      if (statGuildEl) statGuildEl.textContent = guildDisplayName;
+      if (statListsEl) {
+        statListsEl.textContent = (data.stats?.whitelistCount ?? 0) + " / " + (data.stats?.blacklistCount ?? 0);
       }
 
       const guildBannerEl = document.getElementById("connectedGuildBanner");
@@ -1614,6 +1807,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (footerInput && document.activeElement !== footerInput) footerInput.value = data.design?.footer || "";
 
       renderButtonsEditor(data.design?.buttons || []);
+      renderScriptsAndKeys(data);
     };
 
     window.updateScriptPrompt = async (id, encName, encLoader) => {
@@ -1696,6 +1890,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     document.getElementById("createScriptBtn").addEventListener("click", () =>
       handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput")
     );
+
+    document.getElementById("generateKeyBtn").addEventListener("click", async () => {
+      const scriptName = document.getElementById("keyScriptSelect").value;
+      const customKey = document.getElementById("customKeyInput").value.trim();
+      const res = await callApi("/api/keys", "POST", { scriptName, customKey });
+      if (res.data) {
+        renderSnapshot(res.data);
+        document.getElementById("customKeyInput").value = "";
+      }
+      showToast(res.ok ? "Key yaradıldı!" : ("Xəta: " + res.error));
+    });
 
     const connectGuildBotBtn = document.getElementById("connectGuildBotBtn");
     if (connectGuildBotBtn) {
