@@ -2698,7 +2698,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       btn.addEventListener('click', handleSelect);
       btn.addEventListener('touchend', handleSelect, { passive: false });
     });
-    });
 
     document.getElementById('scFileInput').addEventListener('change', (ev) => {
       const f = ev.target && ev.target.files && ev.target.files[0];
