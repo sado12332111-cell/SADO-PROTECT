@@ -1860,8 +1860,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <button type="button" class="nav-chip" data-page="scripts">📜 Skriptlər</button>
       <button type="button" class="nav-chip" data-page="panel">📤 Panel Göndər</button>
       <button type="button" class="nav-chip" data-page="obf">🛡️ Obfuscator</button>
-      <button type="button" class="nav-chip" data-page="keys">🔑 Key & Whitelist</button>
-      <button type="button" class="nav-chip" data-page="discord">🤖 Join Discord & Server</button>
+      <button type="button" class="nav-chip" data-page="keys">🔑 Key &amp; Whitelist</button>
+      <button type="button" class="nav-chip" data-page="discord">🤖 Join Discord &amp; Server</button>
       <button type="button" class="nav-chip" data-page="design">🎨 Panel Dizaynı</button>
     </div>
 
@@ -2103,11 +2103,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     const toggleMenu = (forceState) => {
       const nav = document.getElementById('drawerNav');
-      const nextOpen = typeof forceState === 'boolean' ? forceState : !uiState.menuOpen;
+      if (!nav) return;
+      const isCurrentlyOpen = nav.classList.contains('open');
+      const nextOpen = typeof forceState === 'boolean' ? forceState : !isCurrentlyOpen;
       uiState.menuOpen = nextOpen;
-      if (nav) {
-        nav.classList.toggle('open', nextOpen);
-      }
+      nav.classList.toggle('open', nextOpen);
     };
 
     const openPage = (pageId) => {
@@ -2666,6 +2666,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     });
 
     document.addEventListener('click', (ev) => {
+      const clickedBtn = ev.target && ev.target.closest ? ev.target.closest('#menuToggleBtn, button') : null;
+      if (clickedBtn && clickedBtn.id === 'menuToggleBtn') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleMenu();
+        return;
+      }
       const target = ev.target && ev.target.closest ? ev.target.closest('button') : null;
       if (!target) return;
       if (target.hasAttribute('data-copy-code')) {
