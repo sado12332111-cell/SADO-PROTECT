@@ -1354,10 +1354,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         display: none;
         border-right: none;
         border-bottom: 1px solid var(--border);
+        position: relative;
+        z-index: 35;
       }
 
       .sidebar.open {
-        display: flex;
+        display: flex !important;
       }
     }
   </style>
@@ -1850,18 +1852,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         }
       };
 
-      if (mobileMenuBtn && sidebarNav && !mobileMenuBtn.dataset.bound) {
-        mobileMenuBtn.dataset.bound = "true";
-        mobileMenuBtn.addEventListener("click", (ev) => {
+      const toggleMobileDrawer = (ev) => {
+        if (ev) {
           ev.preventDefault();
           ev.stopPropagation();
-          sidebarNav.classList.toggle("open");
-        });
+        }
+        const navEl = document.getElementById("sidebarNav");
+        if (navEl) {
+          navEl.classList.toggle("open");
+        }
+      };
+
+      if (mobileMenuBtn && !mobileMenuBtn.dataset.bound) {
+        mobileMenuBtn.dataset.bound = "true";
+        mobileMenuBtn.onclick = toggleMobileDrawer;
+        mobileMenuBtn.addEventListener("click", toggleMobileDrawer);
       }
 
       navButtons.forEach((btn) => {
         if (!btn.dataset.bound) {
           btn.dataset.bound = "true";
+          btn.onclick = () => activateTab(btn.dataset.tab);
           btn.addEventListener("click", () => {
             activateTab(btn.dataset.tab);
           });
@@ -1872,7 +1883,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (res.data) renderSnapshot(res.data);
     };
 
-    initDashboard();
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initDashboard);
+    } else {
+      initDashboard();
+    }
     setInterval(initDashboard, 12000);
   </script>
 </body>
