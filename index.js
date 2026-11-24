@@ -115,8 +115,6 @@ const resolveProtectedBotToken = () => {
   }
 };
 
-const DEFAULT_TOKEN = resolveProtectedBotToken();
-
 const discordClient = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -459,7 +457,7 @@ const resolveConnectedGuildInfo = async () => {
     if (!discordClient.isReady()) {
       return {
         guildId: targetGuildId,
-        guildName: targetGuildId ? `Sunucu (${targetGuildId})` : 'Bağlı Deyil'
+        guildName: targetGuildId ? `Sunucu #${targetGuildId}` : 'Bağlı Deyil'
       };
     }
 
@@ -704,6 +702,7 @@ const connectDiscordBot = async () => {
     appState.botStatus.guildCount = discordClient.guilds.cache.size;
     appState.botStatus.connectedGuildId = guildInfo.guildId;
     appState.botStatus.connectedGuildName = guildInfo.guildName;
+    appState.botStatus.lastError = null;
     return { ok: true, botStatus: appState.botStatus };
   }
 
@@ -733,6 +732,7 @@ const connectDiscordBot = async () => {
     appState.botStatus.connectedGuildId = guildInfo.guildId;
     appState.botStatus.connectedGuildName = guildInfo.guildName;
     appState.botStatus.lastConnectedAt = new Date().toISOString();
+    appState.botStatus.lastError = null;
     appendActivityLog(
       'BOT',
       `Bot aktivdir: ${appState.botStatus.username} | Sunucu: ${guildInfo.guildName}`
