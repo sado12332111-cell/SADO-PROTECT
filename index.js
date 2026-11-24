@@ -1559,7 +1559,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             <input type="text" id="designFooterInput" />
           </div>
 
-          <div class="panel-heading">🎛️ Panel Butonları (Adını, Emojisini və Yerini Dəyişin)</div>
+          <div class="panel-heading">🎛️ Panel Butonları (Adını, Emojisini, Rəngini və Yerini Dəyişin)</div>
           <div id="buttonsEditorContainer"></div>
 
           <div class="btn-row" style="margin-top:14px;">
@@ -1961,8 +1961,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     }
 
     document.getElementById("buttonsEditorContainer").addEventListener("click", (ev) => {
-      const upAttr = ev.target.dataset.moveUp;
-      const downAttr = ev.target.dataset.moveDown;
+      const moveUpBtn = ev.target.closest("[data-move-up]");
+      const moveDownBtn = ev.target.closest("[data-move-down]");
+      const upAttr = moveUpBtn ? moveUpBtn.getAttribute("data-move-up") : undefined;
+      const downAttr = moveDownBtn ? moveDownBtn.getAttribute("data-move-down") : undefined;
       const idx = upAttr !== undefined ? Number(upAttr) : downAttr !== undefined ? Number(downAttr) : -1;
       if (idx < 0) return;
 
