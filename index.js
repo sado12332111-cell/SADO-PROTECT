@@ -2211,8 +2211,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     const copyText = (txt) => {
-      const tagName = 'text' + 'area';
-      const ta = document.createElement(tagName);
+      const ta = document.createElement('textarea');
       const body = document.body;
       const setV = ta.value = txt;
       const app = body.appendChild(ta);
@@ -2453,12 +2452,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       });
       const wireClicks = () => {
         const menuBtn = document.querySelector('.menu-btn');
-        const onMenu = menuBtn ? (menuBtn.onclick = toggleMenu) : null;
+        const onMenu = menuBtn ? menuBtn.addEventListener('click', toggleMenu) : null;
         const navChips = Array.from(document.querySelectorAll('.nav-chip'));
         const onChips = navChips.map((chip) => {
           const targetPage = chip.getAttribute('data-page');
           const handler = () => openPage(targetPage);
-          const bound = chip.onclick = handler;
+          const bound = chip.addEventListener('click', handler);
           return bound;
         });
         return { onMenu, onChips };
