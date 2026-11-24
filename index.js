@@ -651,7 +651,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
 
         const created = [];
-        for (let i = 0; i < amount; i++) {
+        for (let i = 0; i < amount; i = i + 1) {
           const newKey = {
             key: generateRandomKeyCode(),
             scriptId: sc ? sc.id : 'default',
@@ -741,10 +741,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const w of ws.whitelists) {
           if (w.discordUserId === targetUser.id && (!selectedScriptArg || w.scriptId === selectedScriptArg)) {
             w.hwid = '';
-            resetCount++;
+            resetCount = resetCount + 1;
           }
         }
-        ws.stats.hwidResets += resetCount;
+        ws.stats.hwidResets = ws.stats.hwidResets + resetCount;
         await saveStore();
 
         await interaction.editReply({
@@ -824,7 +824,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           return;
         }
-        ws.stats.scriptFetches += 1;
+        ws.stats.scriptFetches = ws.stats.scriptFetches + 1;
         await saveStore();
 
         const snippet = buildLoaderSnippet(wsId, sc, wl, buildPublicBaseUrl());
@@ -864,7 +864,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (const w of matching) {
           w.hwid = '';
         }
-        ws.stats.hwidResets += matching.length;
+        ws.stats.hwidResets = ws.stats.hwidResets + matching.length;
         await saveStore();
 
         await interaction.editReply({
@@ -956,7 +956,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } else {
           ws.whitelists.unshift(wlRecord);
         }
-        ws.stats.redeems += 1;
+        ws.stats.redeems = ws.stats.redeems + 1;
         await saveStore();
 
         await interaction.editReply({
@@ -1143,7 +1143,7 @@ app.post('/api/keys', async (req, res) => {
   const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
 
   const created = [];
-  for (let i = 0; i < amount; i++) {
+  for (let i = 0; i < amount; i = i + 1) {
     const item = {
       key: generateRandomKeyCode(),
       scriptId: sc ? sc.id : scriptId,
@@ -1216,7 +1216,7 @@ app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
     return;
   }
   wl.hwid = '';
-  ws.stats.hwidResets += 1;
+  ws.stats.hwidResets = ws.stats.hwidResets + 1;
   await saveStore();
   res.json({ ok: true, workspaceId: wsId, message: 'HWID sıfırlandı!' });
 });
@@ -1333,7 +1333,7 @@ app.get('/loader/:token', (req, res) => {
     'end)',
     'if rawBody == "" then',
     `  pcall(function() rawBody = tostring(game:HttpGet("${verifyUrl}&key=" .. HttpService:UrlEncode(keyVal) .. "&hwid=" .. HttpService:UrlEncode(hwidVal))) end)`,
-    'end',
+    'end)',
     'local parsed = nil',
     'pcall(function() parsed = HttpService:JSONDecode(rawBody) end)',
     'if type(parsed) == "table" and parsed.ok == true and type(parsed.code) == "string" then',
@@ -1370,7 +1370,7 @@ app.all('/api/verify', async (req, res) => {
     );
 
     if (!wl) {
-      ws.stats.authBlocked += 1;
+      ws.stats.authBlocked = ws.stats.authBlocked + 1;
       await saveStore();
       res.status(403).json({ ok: false, message: 'SADO PROTECT: Key və ya Whitelist tapılmadı.' });
       return;
@@ -1380,14 +1380,14 @@ app.all('/api/verify', async (req, res) => {
       (b) => b.discordUserId === wl.discordUserId && (!b.scriptId || b.scriptId === targetScriptId)
     );
     if (isBl) {
-      ws.stats.authBlocked += 1;
+      ws.stats.authBlocked = ws.stats.authBlocked + 1;
       await saveStore();
       res.status(403).json({ ok: false, message: 'SADO PROTECT: Siz Blacklist olunmusunuz.' });
       return;
     }
 
     if (isExpired(wl.expiresAt)) {
-      ws.stats.authBlocked += 1;
+      ws.stats.authBlocked = ws.stats.authBlocked + 1;
       await saveStore();
       res.status(403).json({ ok: false, message: 'SADO PROTECT: Lisenziya müddəti bitib.' });
       return;
@@ -1398,14 +1398,14 @@ app.all('/api/verify', async (req, res) => {
         wl.hwid = hwidInput;
         await saveStore();
       } else if (String(wl.hwid).trim() !== hwidInput) {
-        ws.stats.authBlocked += 1;
+        ws.stats.authBlocked = ws.stats.authBlocked + 1;
         await saveStore();
         res.status(403).json({ ok: false, message: 'SADO PROTECT: HWID başqa cihaza bağlıdır! Kick.' });
         return;
       }
     }
 
-    ws.stats.authSuccess += 1;
+    ws.stats.authSuccess = ws.stats.authSuccess + 1;
     await saveStore();
 
     res.json({
@@ -1895,8 +1895,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   const obfuscateLuaSource = (src, level) => {
     const bytes = [];
     const shift = level === 'level3' ? 7 : level === 'level2' ? 3 : 1;
-    for (let i = 0; i < src.length; i += 1) {
-      bytes.push((src.charCodeAt(i) + shift) % 256);
+    let idx = 0;
+    while (idx < src.length) {
+      bytes.push((src.charCodeAt(idx) + shift) % 256);
+      idx = idx + 1;
     }
     return [
       `-- SADO PROTECT Obfuscated (${level})`,
