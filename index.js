@@ -1,11 +1,10 @@
 /**
  * SADO PROTECT - Control Dashboard & Discord Bot (index.js)
  * Tam və müstəqil Node.js tətbiqi:
- * - Sabit const bot tokeni (7/24 həmişə online)
- * - Discord.js v14 botu (/panel, /whitelist, Redeem Key, Get Script + Skripti Kopyala, Reset HWID, Stats)
- * - Express web serveri (Dashboard UI + REST API + Protected Loader)
+ * - Sabit const bot tokeni (7/24 həmişə online + Render self-ping yuxu qoruması)
+ * - Discord.js v14 botu (/panel, /whitelist, /unwhitelist, /genkey, Redeem Key, Get Script, Reset HWID, Stats)
+ * - Express web serveri (Dashboard UI + REST API + HWID kilidli Protected Loader)
  * - Script idarəetməsi, Lua fayl yükləmə və Ultra Lua Obfuscator
- * - Key yaratma, Whitelist/Blacklist, Join Discord & Sunucu/User ID bağlama
  */
 
 const fs = require('fs');
@@ -96,7 +95,7 @@ function loadStore() {
         ...base.panelConfig,
         ...(parsed && parsed.panelConfig && typeof parsed.panelConfig === 'object' ? parsed.panelConfig : {}),
       },
-      scripts: Array.isArray(parsed?.scripts) ? parsed.scripts : [],
+      scripts: Array.isArray(parsed?.scripts) ? parsed : [],
       keys: Array.isArray(parsed?.keys) ? parsed.keys : [],
       whitelists: Array.isArray(parsed?.whitelists) ? parsed.whitelists : [],
       blacklists: Array.isArray(parsed?.blacklists) ? parsed.blacklists : [],
@@ -970,6 +969,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const userId = interaction.user.id;
 
       if (cid.startsWith('sado_copyscript_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_copyscript_', '');
         const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
         const wl = state.whitelists.find(
@@ -993,10 +993,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           )
           .setFooter({ text: 'SADO PROTECT • Script Copy Panel' });
 
-        await interaction.reply({
+        await interaction.editReply({
           content: snippet,
           embeds: [copyEmbed],
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -1020,11 +1019,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (cid.startsWith('sado_getscript_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_getscript_', '');
         const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
 
         if (!sc) {
-          await interaction.reply({ content: '❌ Bu panel üçün aktiv skript tapılmadı.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '❌ Bu panel üçün aktiv skript tapılmadı.' });
           return;
         }
 
@@ -1032,7 +1032,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           (b) => b.discordUserId === userId && (!b.scriptId || b.scriptId === sc.id)
         );
         if (isBl) {
-          await interaction.reply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.' });
           return;
         }
 
@@ -1041,10 +1041,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         if (!wl) {
-          await interaction.reply({
+          await interaction.editReply({
             content:
               '⚠️ Sizin bu skript üçün aktiv whitelist/key qeydiniz yoxdur. Əvvəl **Redeem Key** düyməsi ilə key aktivləşdirin.',
-            flags: MessageFlags.Ephemeral,
           });
           return;
         }
@@ -1074,22 +1073,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
             .setStyle(ButtonStyle.Success)
         );
 
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [scriptPanelEmbed],
           components: [copyActionRow],
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       if (cid.startsWith('sado_resethwid_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_resethwid_', '');
         const matchingWl = state.whitelists.filter(
           (w) => w.discordUserId === userId && (scriptId === 'default' || !w.scriptId || w.scriptId === scriptId)
         );
 
         if (!matchingWl.length) {
-          await interaction.reply({ content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.' });
           return;
         }
 
@@ -1104,14 +1103,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         saveStore().catch(() => {});
 
-        await interaction.reply({
+        await interaction.editReply({
           content: `🔄 HWID uğurla sıfırlandı (${matchingWl.length} qeyd yeniləndi). Yeni girişdə yeni HWID bağlanacaq.`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       if (cid.startsWith('sado_stats_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const userKeys = state.keys.filter((k) => k.usedByDiscordId === userId);
         const userWl = state.whitelists.filter((w) => w.discordUserId === userId && !isExpired(w.expiresAt));
 
@@ -1129,7 +1128,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           )
           .setTimestamp();
 
-        await interaction.reply({ embeds: [statsEmbed], flags: MessageFlags.Ephemeral });
+        await interaction.editReply({ embeds: [statsEmbed] });
         return;
       }
     }
@@ -1137,6 +1136,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isModalSubmit()) {
       const cid = interaction.customId || '';
       if (cid.startsWith('sado_modal_redeem_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_modal_redeem_', '');
         const keyInput = interaction.fields.getTextInputValue('redeem_key_value').trim();
         const userId = interaction.user.id;
@@ -1146,21 +1146,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           (b) => b.discordUserId === userId && (!targetScript || !b.scriptId || b.scriptId === targetScript.id)
         );
         if (isBl) {
-          await interaction.reply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '🚫 Siz bu skriptdən blacklist olunmusunuz.' });
           return;
         }
 
         const keyObj = state.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
         if (!keyObj) {
-          await interaction.reply({ content: '❌ Daxil edilən key tapılmadı.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '❌ Daxil edilən key tapılmadı.' });
           return;
         }
         if (keyObj.used && keyObj.usedByDiscordId && keyObj.usedByDiscordId !== userId) {
-          await interaction.reply({ content: '⚠️ Bu key artıq başqa istifadəçi tərəfindən işlədilib.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '⚠️ Bu key artıq başqa istifadəçi tərəfindən işlədilib.' });
           return;
         }
         if (keyObj.expiresAt && isExpired(keyObj.expiresAt)) {
-          await interaction.reply({ content: '⌛ Bu key-in vaxtı bitib.', flags: MessageFlags.Ephemeral });
+          await interaction.editReply({ content: '⌛ Bu key-in vaxtı bitib.' });
           return;
         }
 
@@ -1194,9 +1194,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         saveStore().catch(() => {});
-        await interaction.reply({
+        await interaction.editReply({
           content: `✅ Key uğurla aktivləşdirildi! **${keyObj.key}** — Müddət: **${formatExpiry(keyObj.expiresAt || expiresAt)}**.`,
-          flags: MessageFlags.Ephemeral,
         });
       }
     }
@@ -1224,6 +1223,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   next();
+});
+
+app.get('/health', (_req, res) => {
+  res.status(200).json({ ok: true, botReady: client.isReady(), uptime: process.uptime() });
 });
 
 app.get('/api/status', async (req, res) => {
@@ -2407,4 +2410,11 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[WEB] SADO PROTECT Dashboard http://0.0.0.0:${PORT} ünvanında işləyir`);
   startWatchdog();
   await ensureBotOnline();
+  const selfPingUrl = process.env.RENDER_EXTERNAL_URL || 'https://sado-protect.onrender.com';
+  setInterval(() => {
+    fetch(`${selfPingUrl}/health`).catch(() => {});
+    if (!client.isReady() && !isConnectingNow) {
+      ensureBotOnline().catch(() => {});
+    }
+  }, 4 * 60 * 1000);
 });
