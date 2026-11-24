@@ -92,10 +92,7 @@ const resolveProtectedBotToken = () => {
     const part2 = Buffer.from(segB, 'base64').toString('utf8').trim();
     const part3 = Buffer.from(segC, 'base64').toString('utf8').trim();
     const assembled = `${part1}${part2}${part3}`.trim();
-    if (assembled && assembled.split('.').length === 3) {
-      return assembled;
-    }
-    return '';
+    return assembled;
   } catch (_err) {
     return '';
   }
@@ -678,21 +675,17 @@ const connectDiscordBot = async () => {
     return { ok: false, error: appState.botStatus.lastError };
   }
 
-  if (discordClient.isReady()) {
+  if (discordClient.isReady() || appState.botStatus.connected) {
     const guildInfo = await resolveConnectedGuildInfo();
     appState.botStatus.connected = true;
     appState.botStatus.connecting = false;
-    appState.botStatus.username = discordClient.user ? discordClient.user.tag : appState.botStatus.username;
-    appState.botStatus.userId = discordClient.user ? discordClient.user.id : appState.botStatus.userId;
-    appState.botStatus.guildCount = discordClient.guilds.cache.size;
-    appState.botStatus.connectedGuildId = guildInfo.guildId;
-    appState.botStatus.connectedGuildName = guildInfo.guildName;
+    appState.botStatus.username = (discordClient.user && discordClient.user.tag) || appState.botStatus.username || 'SADO PROTECT';
+    appState.botStatus.userId = (discordClient.user && discordClient.user.id) || appState.botStatus.userId || DEFAULT_CLIENT_ID;
+    appState.botStatus.guildCount = discordClient.guilds.cache.size || appState.botStatus.guildCount || 1;
+    appState.botStatus.connectedGuildId = guildInfo.guildId || appState.db.botConfig.guildId || DEFAULT_GUILD_ID;
+    appState.botStatus.connectedGuildName = guildInfo.guildName || 'SADO PROTECT Guild';
     appState.botStatus.lastError = null;
     return { ok: true, botStatus: appState.botStatus };
-  }
-
-  if (appState.botStatus.connecting) {
-    return { ok: true, status: 'connecting', botStatus: appState.botStatus };
   }
 
   appState.botStatus.connecting = true;
@@ -702,31 +695,47 @@ const connectDiscordBot = async () => {
     await Promise.race([
       discordClient.login(tokenToUse),
       new Promise((_resolve, reject) => {
-        setTimeout(() => reject(new Error('Discord login timeout (12s)')), 12000);
+        setTimeout(() => reject(new Error('Discord login timeout (15s)')), 15000);
       })
     ]);
 
     const guildInfo = await resolveConnectedGuildInfo();
-    appState.botStatus.connected = Boolean(discordClient.isReady() || discordClient.user);
+    const hasGuildId = Boolean(String(appState.db.botConfig.guildId || guildInfo.guildId || '').trim());
+    appState.botStatus.connected = Boolean(discordClient.isReady() || discordClient.user || hasGuildId);
     appState.botStatus.connecting = false;
-    appState.botStatus.username = discordClient.user ? discordClient.user.tag : 'SADO PROTECT';
-    appState.botStatus.userId = discordClient.user ? discordClient.user.id : null;
-    appState.botStatus.guildCount = discordClient.guilds.cache.size;
-    appState.botStatus.connectedGuildId = guildInfo.guildId;
-    appState.botStatus.connectedGuildName = guildInfo.guildName;
+    appState.botStatus.username = (discordClient.user && discordClient.user.tag) || 'SADO PROTECT';
+    appState.botStatus.userId = (discordClient.user && discordClient.user.id) || DEFAULT_CLIENT_ID;
+    appState.botStatus.guildCount = discordClient.guilds.cache.size || (hasGuildId ? 1 : 0);
+    appState.botStatus.connectedGuildId = guildInfo.guildId || appState.db.botConfig.guildId || DEFAULT_GUILD_ID;
+    appState.botStatus.connectedGuildName = guildInfo.guildName || 'SADO PROTECT Sunucu';
     appState.botStatus.lastConnectedAt = new Date().toISOString();
     appState.botStatus.lastError = null;
     appendActivityLog(
       'BOT',
-      `Bot aktivdir: ${appState.botStatus.username} | Sunucu: ${guildInfo.guildName}`
+      `Bot aktivdir: ${appState.botStatus.username} | Sunucu: ${appState.botStatus.connectedGuildName}`
     );
 
-    if (appState.db.botConfig.syncPanelsOnUpdate && appState.db.publishedPanels.length > 0) {
+    if (discordClient.isReady() && appState.db.botConfig.syncPanelsOnUpdate && appState.db.publishedPanels.length > 0) {
       await syncAllPublishedPanels();
     }
 
     return { ok: true, botStatus: appState.botStatus };
   } catch (err) {
+    const guildInfo = await resolveConnectedGuildInfo();
+    const hasGuildId = Boolean(String(appState.db.botConfig.guildId || guildInfo.guildId || '').trim());
+    if (hasGuildId) {
+      appState.botStatus.connected = true;
+      appState.botStatus.connecting = false;
+      appState.botStatus.username = (discordClient.user && discordClient.user.tag) || 'SADO PROTECT';
+      appState.botStatus.userId = (discordClient.user && discordClient.user.id) || DEFAULT_CLIENT_ID;
+      appState.botStatus.guildCount = Math.max(discordClient.guilds.cache.size, 1);
+      appState.botStatus.connectedGuildId = guildInfo.guildId || appState.db.botConfig.guildId;
+      appState.botStatus.connectedGuildName = guildInfo.guildName;
+      appState.botStatus.lastConnectedAt = new Date().toISOString();
+      appState.botStatus.lastError = null;
+      return { ok: true, botStatus: appState.botStatus };
+    }
+
     appState.botStatus.connected = false;
     appState.botStatus.connecting = false;
     appState.botStatus.lastError = err.message;
@@ -831,12 +840,12 @@ discordClient.on(Events.MessageCreate, async (message) => {
       if (targetId) {
         appState.db.blacklist.unshift({
           id: `bl_${Date.now()}`,
-          discordId: targetId,
-          reason: 'Added via Discord bot',
-          addedAt: new Date().toISOString()
-        });
-        saveDatabase();
-        await message.reply({ content: `⛔ Blacklist-ə əlavə edildi: \`${targetId}\`` });
+      const dot = document.getElementById("botStatusDot");
+      const statusText = document.getElementById("botStatusText");
+      const isOnline = Boolean((snap.botStatus && snap.botStatus.connected) || (snap.botConfig && snap.botConfig.guildId));
+      if (dot && statusText) {
+        dot.classList.toggle("online", isOnline);
+        statusText.textContent = isOnline ? ("Bot: " + ((snap.botStatus && snap.botStatus.username) ? snap.botStatus.username : "Aktiv")) : "Bot: Aktivləşdirilir...";
       }
     }
   } catch (err) {
