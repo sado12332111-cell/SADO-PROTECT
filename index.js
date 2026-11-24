@@ -1074,8 +1074,7 @@ app.post('/api/obfuscate', (req, res) => {
     appendActivityLog('OBFUSCATE', `Script obfuscate edildi (${settings.mode}).`);
     return res.status(200).json({
       ok: true,
-      obfuscatedCode,
-      data: await getDashboardSnapshot()
+      obfuscatedCode
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
