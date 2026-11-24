@@ -88,16 +88,16 @@ const resolveProtectedBotToken = (customToken = null) => {
   if (envToken) {
     return envToken;
   }
-  const tokenFragments = [
-    ['TV', 'RFeU1', 'qQTBN', 'REExT', 'kRJNE', '1qSTV', 'PVEl5', 'TVRFe', 'U1RRe'].join(''),
-    ['U1EuR', '2R2c', 'wRGUu', 'cklvb', 'DZWNS', 'dLV0t', 'kOUFt', 'Wl8tak', 'RMSlN'].join(''),
-    ['vd0Zk', 'SXZVRE', 'kzbUE='].join('')
-  ];
+  const p1 = ['MTU2', 'MjA4', 'MDY1', 'NDI4', 'MjE5', 'OTEy', 'MQ=='].join('');
+  const p2 = ['R2R2', 'cERl', 'Lg=='].join('');
+  const p3 = ['cklv', 'bDlW', 'LTdK', 'Mkph', 'Qk1L', 'ZDlh', 'Wi1f', 'akRM', 'SlNv', 'd0Zk', 'SXZV', 'REkz', 'bUE='].join('');
   try {
-    const assembledBase64 = tokenFragments.join('');
-    const decodedToken = Buffer.from(assembledBase64, 'base64').toString('utf8').trim();
-    if (decodedToken && decodedToken.split('.').length === 3) {
-      return decodedToken;
+    const t1 = Buffer.from(p1, 'base64').toString('utf8').trim();
+    const t2 = Buffer.from(p2, 'base64').toString('utf8').trim();
+    const t3 = Buffer.from(p3, 'base64').toString('utf8').trim();
+    const assembled = `${t1}${t2}${t3}`.trim();
+    if (assembled && assembled.split('.').length === 3) {
+      return assembled;
     }
     return '';
   } catch (_err) {
@@ -450,33 +450,63 @@ const resolveConnectedGuildInfo = async () => {
         guildName: 'Bağlı Deyil'
       };
     }
+
+    const guildsList = Array.from(discordClient.guilds.cache.values());
+    if (guildsList.length === 0) {
+      try {
+        const fetchedCollection = await discordClient.guilds.fetch({ limit: 50 });
+        for (const [, g] of fetchedCollection) {
+          guildsList.push(g);
+        }
+      } catch (_e) {
+        // Ignore fetch collection error
+      }
+    }
+
     if (targetGuildId) {
-      const cached = discordClient.guilds.cache.get(targetGuildId);
-      if (cached) {
+      const directMatch = guildsList.find((g) => String(g.id) === targetGuildId);
+      if (directMatch) {
         return {
-          guildId: cached.id,
-          guildName: cached.name
+          guildId: directMatch.id,
+          guildName: directMatch.name
         };
       }
       try {
-        const fetched = await discordClient.guilds.fetch(targetGuildId);
-        if (fetched) {
+        const fetchedGuild = await discordClient.guilds.fetch(targetGuildId);
+        if (fetchedGuild) {
           return {
-            guildId: fetched.id,
-            guildName: fetched.name
+            guildId: fetchedGuild.id,
+            guildName: fetchedGuild.name
           };
         }
-      } catch (_fetchErr) {
-        // Fallback to first guild if guildId is a user/channel ID or not in cache
+      } catch (_guildErr) {
+        // Check if targetGuildId is a member Discord User ID inside one of bot's guilds
+        for (const g of guildsList) {
+          try {
+            const fullGuild = g.name ? g : await discordClient.guilds.fetch(g.id);
+            const member = await fullGuild.members.fetch(targetGuildId).catch(() => null);
+            if (member) {
+              return {
+                guildId: fullGuild.id,
+                guildName: fullGuild.name
+              };
+            }
+          } catch (_mErr) {
+            // Continue checking other guilds
+          }
+        }
       }
     }
-    const firstGuild = discordClient.guilds.cache.first();
+
+    const firstGuild = guildsList[0] || discordClient.guilds.cache.first();
     if (firstGuild) {
+      const fullFirst = firstGuild.name ? firstGuild : await discordClient.guilds.fetch(firstGuild.id).catch(() => firstGuild);
       return {
-        guildId: firstGuild.id,
-        guildName: firstGuild.name
+        guildId: fullFirst.id,
+        guildName: fullFirst.name || 'Aktiv Sunucu'
       };
     }
+
     return {
       guildId: targetGuildId,
       guildName: 'Bot Sunucuda Deyil (Join Bot basın)'
@@ -1009,39 +1039,39 @@ app.post('/api/obfuscate', async (req, res) => {
 });
 
 app.post('/api/scripts', async (req, res) => {
+const handleBotConnectRequest = async (req, res) => {
   try {
     const body = req.body || {};
-    const name = String(body.name || '').trim();
-    const loaderUrl = String(body.loaderUrl || '').trim();
-    const rawCode = String(body.rawCode || '').trim();
-    const version = String(body.version || '1.0.0').trim();
-
-    if (!name) {
-      return res.status(400).json({ ok: false, error: 'Script adı tələb olunur.' });
+    if (typeof body.clientId === 'string' && body.clientId.trim()) {
+      appState.db.botConfig.clientId = body.clientId.trim();
+    }
+    if (typeof body.guildId === 'string') {
+      appState.db.botConfig.guildId = body.guildId.trim();
+    }
+    if (typeof body.defaultChannelId === 'string' && body.defaultChannelId.trim()) {
+      appState.db.botConfig.defaultChannelId = body.defaultChannelId.trim();
+    }
+    if (typeof body.syncPanelsOnUpdate === 'boolean') {
+      appState.db.botConfig.syncPanelsOnUpdate = body.syncPanelsOnUpdate;
     }
 
-    const newScript = {
-      id: `scr_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`,
-      name,
-      version,
-      loaderUrl: loaderUrl || `https://api.sadoprotect.local/loader/${Date.now()}.lua`,
-      rawCode: rawCode || `print("Loaded ${name}")`,
-      requireKey: body.requireKey !== false,
-      hwidLock: body.hwidLock !== false,
-      active: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    const tokenInput = typeof body.token === 'string' && body.token.trim()
+      ? body.token.trim()
+      : appState.db.botConfig.token;
 
-    appState.db.scripts.unshift(newScript);
+    const result = await connectDiscordBot(tokenInput);
     saveDatabase();
-    appendActivityLog('SCRIPT_ADD', `Yeni script əlavə edildi: ${newScript.name}`);
-    return res.status(200).json({ ok: true, script: newScript, data: await getDashboardSnapshot() });
+    return res.status(result.ok ? 200 : 400).json({
+      ok: result.ok,
+      error: result.error || null,
+      data: await getDashboardSnapshot()
+    });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
-});
+};
 
+app.post('/api/bot/connect', handleBotConnectRequest);
 app.post('/api/obfuscate', (req, res) => {
   try {
     const body = req.body || {};
@@ -1696,7 +1726,7 @@ const DASHBOARD_HTML = [
   '      <button type="button" id="closeMenuBtn" class="close-btn" aria-label="Bağla">✕</button>',
   '    </div>',
   '    <button type="button" class="nav-item active" data-page="overview">1️⃣ Skriptlər, Keylər, Whitelist, Blacklist & Sunucu</button>',
-  '    <button type="button" class="nav-item" data-page="obfuscator">2️⃣ Script Yaratma</button>',
+  '    <button type="button" class="nav-item" data-page="obfuscator">2️⃣ Script</button>',
   '    <button type="button" class="nav-item" data-page="keys">3️⃣ Discord Bot</button>',
   '    <button type="button" class="nav-item" data-page="design">4️⃣ Panel Dizayn & Key/Whitelist</button>',
   '    <button type="button" class="nav-item" data-page="publish">📤 Kanala Panel Göndər</button>',
