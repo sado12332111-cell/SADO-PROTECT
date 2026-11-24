@@ -1897,17 +1897,20 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     const shift = level === 'level3' ? 7 : level === 'level2' ? 3 : 1;
     let idx = 0;
     while (idx < src.length) {
-      bytes.push((src.charCodeAt(idx) + shift) % 256);
+      const codeVal = src.charCodeAt(idx);
+      const encVal = (codeVal + shift) % 256;
+      bytes.push(encVal);
       idx = idx + 1;
     }
-    return [
-      `-- SADO PROTECT Obfuscated (${level})`,
-      `local _b = {${bytes.join(',')}}`,
-      `local _out = {}`,
-      `for _i = 1, #_b do _out[_i] = string.char((_b[_i] - ${shift}) % 256) end`,
-      `local _fn = loadstring(table.concat(_out))`,
-      `if type(_fn) == "function" then return _fn() end`,
-    ].join('\n');
+    const lines = [
+      '-- SADO PROTECT Obfuscated (' + level + ')',
+      'local _b = {' + bytes.join(',') + '}',
+      'local _out = {}',
+      'for _i = 1, #_b do _out[_i] = string.char((_b[_i] - ' + shift + ') % 256) end',
+      'local _fn = loadstring(table.concat(_out))',
+      'if type(_fn) == "function" then return _fn() end',
+    ];
+    return lines.join('\n');
   };
 
   document.getElementById('pickFileBtn').addEventListener('click', () => {
