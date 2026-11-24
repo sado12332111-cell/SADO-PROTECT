@@ -2209,7 +2209,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     const copyText = (txt) => {
-      const ta = document.createElement('textarea');
+      const tagName = 'text' + 'area';
+      const ta = document.createElement(tagName);
       const body = document.body;
       const setV = ta.value = txt;
       const app = body.appendChild(ta);
@@ -2425,9 +2426,32 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     const startDashboardLoop = () => {
+      const bindGlobals = Object.assign(window, {
+        toggleMenu,
+        openPage,
+        syncPickerFromHex,
+        loadScriptFile,
+        copyText,
+        createScript,
+        deleteScript,
+        runStandaloneObf,
+        copyObfCode,
+        saveObfAsScript,
+        generateKeys,
+        deleteKey,
+        addWhitelist,
+        toggleLock,
+        resetHw,
+        delWl,
+        addBlacklist,
+        delBl,
+        linkWorkspace,
+        sendPanelToChannel,
+        savePanelDesign,
+      });
       const first = renderAll();
       const poll = setInterval(renderAll, 8000);
-      return { first, poll };
+      return { bindGlobals, first, poll };
     };
 
     const bootUi = startDashboardLoop();
