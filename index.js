@@ -1624,32 +1624,35 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       snapshotCache = data;
 
       const guildDisplayName = data.stats?.guildName || "Seçilməyib";
-      document.getElementById("statScriptsCount").textContent = data.stats?.activeScripts ?? 0;
-      document.getElementById("statKeysCount").textContent = data.stats?.totalKeys ?? 0;
-      document.getElementById("statGuildName").textContent = guildDisplayName;
-      document.getElementById("statListsCount").textContent =
-        \`\${data.stats?.whitelistCount ?? 0} / \${data.stats?.blacklistCount ?? 0}\`;
+    document.getElementById("statScriptsCount").textContent = data.stats?.activeScripts ?? 0;
+    document.getElementById("statKeysCount").textContent = data.stats?.totalKeys ?? 0;
+    document.getElementById("statGuildName").textContent = guildDisplayName;
+    document.getElementById("statListsCount").textContent =
+      `${data.stats?.whitelistCount ?? 0} / ${data.stats?.blacklistCount ?? 0}`;
 
-      document.getElementById("connectedGuildBanner").textContent =
-        \`Bağlanan Sunucu: \${guildDisplayName}\`;
+    const guildBannerEl = document.getElementById("connectedGuildBanner");
+    if (guildBannerEl) {
+      guildBannerEl.textContent = `Bağlanan Sunucu: ${guildDisplayName}`;
+    }
 
-      const guildInput = document.getElementById("guildIdInput");
-      if (document.activeElement !== guildInput) {
-        guildInput.value = data.botConfig?.guildId || "";
-      }
+    const guildInput = document.getElementById("guildIdInput");
+    if (guildInput && document.activeElement !== guildInput) {
+      guildInput.value = data.botConfig?.guildId || "";
+    }
 
-      const channelInput = document.getElementById("panelChannelIdInput");
-      if (document.activeElement !== channelInput) {
-        channelInput.value = data.botConfig?.panelChannelId || "";
-      }
+    const channelInput = document.getElementById("panelChannelIdInput");
+    if (channelInput && document.activeElement !== channelInput) {
+      channelInput.value = data.botConfig?.panelChannelId || "";
+    }
 
-      const dotEl = document.getElementById("topBotStatusDot");
-      const labelEl = document.getElementById("topBotStatusLabel");
-      const botState = "online";
+    const dotEl = document.getElementById("topBotStatusDot");
+    const labelEl = document.getElementById("topBotStatusLabel");
+    if (dotEl && labelEl) {
       dotEl.className = "status-dot online";
-      labelEl.textContent = \`Bot: Aktiv (\${guildDisplayName})\`;
+      labelEl.textContent = `Bot: Aktiv (${guildDisplayName})`;
+    }
 
-      const scriptsContainer = document.getElementById("scriptsListContainer");
+    const scriptsContainer = document.getElementById("scriptsListContainer");
       scriptsContainer.innerHTML = "";
       const scriptSelect = document.getElementById("keyScriptSelect");
       scriptSelect.innerHTML = '<option value="">Ümumi / Default</option>';
@@ -1865,6 +1868,41 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     });
 
     const initDashboard = async () => {
+      const mobileMenuBtn = document.getElementById("mobileMenuBtn");
+      const sidebarNav = document.getElementById("sidebarNav");
+      const navButtons = [...document.querySelectorAll(".nav-btn[data-tab]")];
+      const tabSections = [...document.querySelectorAll(".tab-section")];
+
+      const activateTab = (tabName) => {
+        navButtons.forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.tab === tabName);
+        });
+        tabSections.forEach((sec) => {
+          sec.classList.toggle("active", sec.id === `tab-${tabName}`);
+        });
+        if (sidebarNav && window.innerWidth <= 820) {
+          sidebarNav.classList.remove("open");
+        }
+      };
+
+      if (mobileMenuBtn && sidebarNav && !mobileMenuBtn.dataset.bound) {
+        mobileMenuBtn.dataset.bound = "true";
+        mobileMenuBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          sidebarNav.classList.toggle("open");
+        });
+      }
+
+      navButtons.forEach((btn) => {
+        if (!btn.dataset.bound) {
+          btn.dataset.bound = "true";
+          btn.addEventListener("click", () => {
+            activateTab(btn.dataset.tab);
+          });
+        }
+      });
+
       const res = await callApi("/api/dashboard");
       if (res.data) renderSnapshot(res.data);
     };
