@@ -536,13 +536,16 @@ const lookupGuildInfo = async (guildId, discordUserId) => {
   };
 };
 
-const resolveDiscordUsername = async (discordUserId) => {
+const resolveDiscordProfile = async (discordUserId) => {
   const cleanId = String(discordUserId || '').trim();
-  if (!cleanId) return 'Unknown';
+  if (!cleanId) return { username: 'Unknown', avatarUrl: '' };
   if (client && client.users && client.users.cache) {
     const u = client.users.cache.get(cleanId);
     if (u && (u.globalName || u.username)) {
-      return u.globalName || u.username;
+      return {
+        username: u.globalName || u.username,
+        avatarUrl: typeof u.displayAvatarURL === 'function' ? u.displayAvatarURL({ size: 64 }) : '',
+      };
     }
   }
   if (BOT_TOKEN && /^\d{15,22}$/.test(cleanId)) {
@@ -550,11 +553,17 @@ const resolveDiscordUsername = async (discordUserId) => {
       const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
       const userObj = await rest.get(Routes.user(cleanId));
       if (userObj && (userObj.global_name || userObj.username)) {
-        return userObj.global_name || userObj.username;
+        const avatarUrl = userObj.avatar
+          ? `https://cdn.discordapp.com/avatars/${cleanId}/${userObj.avatar}.png?size=64`
+          : '';
+        return {
+          username: userObj.global_name || userObj.username,
+          avatarUrl,
+        };
       }
     } catch (_e) {}
   }
-  return `User_${cleanId.slice(-4)}`;
+  return { username: `User_${cleanId.slice(-4)}`, avatarUrl: '' };
 };
 
 const buildPublicBaseUrl = (req) => {
@@ -781,10 +790,7 @@ const registerSlashCommands = async () => {
 };
 
 const ensureBotOnline = async () => {
-  if (!BOT_TOKEN) {
-    console.warn('[BOT] BOT_TOKEN tapılmadı.');
-    return false;
-  }
+  if (!BOT_TOKEN) return false;
   if (client.isReady()) return true;
   if (runtimeState.isConnectingNow) return false;
   const now = Date.now();
@@ -907,8 +913,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const guildName = interaction.guild && interaction.guild.name ? interaction.guild.name : '';
       const invokerId = interaction.user.id;
       const invokerName = interaction.user.globalName || interaction.user.username || invokerId;
+      const invokerAvatar =
+        typeof interaction.user.displayAvatarURL === 'function'
+          ? interaction.user.displayAvatarURL({ size: 64 })
+          : '';
       const selectedScriptArg = interaction.options.getString('script') || '';
-      const { wsId, ws } = resolveWorkspaceForDiscord({
+      const { ws } = resolveWorkspaceForDiscord({
         guildId,
         discordUserId: invokerId,
         scriptId: selectedScriptArg,
@@ -983,8 +993,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             used: false,
             createdByDiscordId: invokerId,
             createdByName: invokerName,
+            createdByAvatar: invokerAvatar,
             usedByDiscordId: null,
             usedByName: null,
+            usedByAvatar: '',
             createdAt: new Date().toISOString(),
           };
           ws.keys.unshift(newKey);
@@ -1010,6 +1022,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ws.scripts[0];
         const durMs = parseDurationToMs(durationStr);
         const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
+        const targetAvatar =
+          typeof targetUser.displayAvatarURL === 'function'
+            ? targetUser.displayAvatarURL({ size: 64 })
+            : '';
 
         const existingIdx = ws.whitelists.findIndex(
           (w) => w.discordUserId === targetUser.id && w.scriptId === (sc ? sc.id : 'default')
@@ -1018,6 +1034,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           id: existingIdx >= 0 ? ws.whitelists[existingIdx].id : crypto.randomUUID(),
           discordUserId: targetUser.id,
           username: targetUser.globalName || targetUser.username,
+          avatarUrl: targetAvatar,
           addedByDiscordId: invokerId,
           addedByName: invokerName,
           scriptId: sc ? sc.id : 'default',
@@ -1257,6 +1274,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const scriptIdFromModal = cid.replace('sado_redeem_modal_', '');
         const userId = interaction.user.id;
         const username = interaction.user.globalName || interaction.user.username || userId;
+        const userAvatar =
+          typeof interaction.user.displayAvatarURL === 'function'
+            ? interaction.user.displayAvatarURL({ size: 64 })
+            : '';
         const enteredKey = interaction.fields.getTextInputValue('redeem_key_input').trim();
         const { ws } = resolveWorkspaceForDiscord({
           guildId: interaction.guildId,
@@ -1293,6 +1314,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         keyObj.used = true;
         keyObj.usedByDiscordId = userId;
         keyObj.usedByName = username;
+        keyObj.usedByAvatar = userAvatar;
         keyObj.usedAt = new Date().toISOString();
 
         const existingWlIdx = ws.whitelists.findIndex(
@@ -1302,6 +1324,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           id: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].id : crypto.randomUUID(),
           discordUserId: userId,
           username,
+          avatarUrl: userAvatar,
           addedByDiscordId: keyObj.createdByDiscordId || userId,
           addedByName: keyObj.createdByName || username,
           scriptId: targetScriptId,
@@ -1563,7 +1586,9 @@ app.post('/api/keys', async (req, res) => {
   const creatorId = String(
     (req.body && req.body.createdByDiscordId) || ws.discordUserId || ''
   ).trim();
-  const creatorName = creatorId ? await resolveDiscordUsername(creatorId) : 'Dashboard Admin';
+  const creatorProf = creatorId
+    ? await resolveDiscordProfile(creatorId)
+    : { username: 'Dashboard Admin', avatarUrl: '' };
   const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
   const durMs = parseDurationToMs(duration);
   const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
@@ -1578,9 +1603,11 @@ app.post('/api/keys', async (req, res) => {
       expiresAt,
       used: false,
       createdByDiscordId: creatorId || null,
-      createdByName: creatorName,
+      createdByName: creatorProf.username,
+      createdByAvatar: creatorProf.avatarUrl,
       usedByDiscordId: null,
       usedByName: null,
+      usedByAvatar: '',
       createdAt: new Date().toISOString(),
     };
     ws.keys.unshift(item);
@@ -1621,8 +1648,10 @@ app.post('/api/whitelist', async (req, res) => {
   }
   const durMs = parseDurationToMs(duration);
   const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
-  const resolvedUser = await resolveDiscordUsername(discordUserId);
-  const resolvedAdder = adderId ? await resolveDiscordUsername(adderId) : 'Dashboard Admin';
+  const resolvedUser = await resolveDiscordProfile(discordUserId);
+  const resolvedAdder = adderId
+    ? await resolveDiscordProfile(adderId)
+    : { username: 'Dashboard Admin', avatarUrl: '' };
 
   const existingIdx = ws.whitelists.findIndex(
     (w) => w.discordUserId === discordUserId && w.scriptId === scriptId
@@ -1630,9 +1659,10 @@ app.post('/api/whitelist', async (req, res) => {
   const entry = {
     id: existingIdx >= 0 ? ws.whitelists[existingIdx].id : crypto.randomUUID(),
     discordUserId,
-    username: resolvedUser,
+    username: resolvedUser.username,
+    avatarUrl: resolvedUser.avatarUrl,
     addedByDiscordId: adderId || null,
-    addedByName: resolvedAdder,
+    addedByName: resolvedAdder.username,
     scriptId,
     key:
       existingIdx >= 0 && ws.whitelists[existingIdx].key
@@ -1702,11 +1732,12 @@ app.post('/api/blacklist', async (req, res) => {
     res.status(400).json({ ok: false, message: 'Discord User ID tələb olunur.' });
     return;
   }
-  const username = await resolveDiscordUsername(discordUserId);
+  const prof = await resolveDiscordProfile(discordUserId);
   const blItem = {
     id: crypto.randomUUID(),
     discordUserId,
-    username,
+    username: prof.username,
+    avatarUrl: prof.avatarUrl,
     scriptId,
     createdAt: new Date().toISOString(),
   };
@@ -1899,7 +1930,12 @@ app.all('/api/verify', async (req, res) => {
     ws.stats.authSuccess += 1;
     await saveStore();
 
-    const payloadCode = sc && sc.obfuscated ? obfuscateLuaCode(sc.code, sc.obfuscateLevel || 3) : (sc ? sc.code : DEFAULT_SCRIPT_CODE);
+    const payloadCode =
+      sc && sc.obfuscated
+        ? obfuscateLuaCode(sc.code, sc.obfuscateLevel || 3)
+        : sc
+        ? sc.code
+        : DEFAULT_SCRIPT_CODE;
 
     res.json({
       ok: true,
@@ -1915,138 +1951,271 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="az">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SADO PROTECT • Control Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>SADO PROTECT • Studio V2</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, system-ui, -apple-system, sans-serif; }
-    body { background: radial-gradient(circle at top, #111b33 0%, #070b14 55%, #04060c 100%); color: #f3f4f6; min-height: 100vh; padding: 16px; }
-    .shell { max-width: 1140px; margin: 0 auto; display: grid; gap: 16px; }
-    .topbar { background: rgba(16, 23, 39, 0.94); border: 1px solid #243354; border-radius: 18px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
-    .brand-row { display: flex; align-items: center; gap: 12px; }
-    .menu-btn { width: 46px; height: 46px; border-radius: 13px; border: 1px solid #334875; background: linear-gradient(135deg, #1d2c4d, #131c33); color: #ffffff; font-size: 21px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-    .menu-btn:hover { background: #263963; }
-    .brand-title { font-size: 19px; font-weight: 900; letter-spacing: 0.5px; color: #38bdf8; }
-    .brand-sub { font-size: 12px; color: #9ca3af; margin-top: 2px; }
-    .status-pill { padding: 8px 14px; border-radius: 999px; font-size: 13px; font-weight: 800; background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
-    .drawer-nav { display: none; background: #101727; border: 1px solid #243354; border-radius: 18px; padding: 14px; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-    .drawer-nav.open { display: grid; }
-    .nav-chip { background: #162036; color: #e5e7eb; border: 1px solid #263554; border-radius: 12px; padding: 12px 14px; font-size: 13px; font-weight: 800; cursor: pointer; text-align: left; }
-    .nav-chip.active { background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #ffffff; border-color: #8b5cf6; }
-    .page-section { display: none; gap: 16px; }
-    .page-section.active { display: grid; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 12px; }
-    .kpi-card { background: #101727; border: 1px solid #1f2a44; border-top: 3px solid #10b981; border-radius: 15px; padding: 16px; }
-    .kpi-label { font-size: 12px; color: #9ca3af; font-weight: 700; }
-    .kpi-val { font-size: 22px; font-weight: 900; color: #ffffff; margin-top: 6px; word-break: break-word; }
-    .card { background: rgba(16, 23, 39, 0.95); border: 1px solid #1f2a44; border-radius: 18px; padding: 18px; display: grid; gap: 14px; }
-    .card h2 { font-size: 16px; font-weight: 800; color: #f9fafb; }
-    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
-    label { display: grid; gap: 6px; font-size: 12px; color: #9ca3af; font-weight: 700; }
-    input, textarea, select { width: 100%; background: #090e1a; border: 1px solid #263554; color: #f9fafb; border-radius: 11px; padding: 10px 12px; font-size: 14px; }
+    :root {
+      --bg-main: #060911;
+      --bg-card: #0d1322;
+      --bg-elevated: #141d33;
+      --border-soft: rgba(148, 163, 184, 0.16);
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-violet: #8b5cf6;
+      --accent-rose: #f43f5e;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+    body {
+      background:
+        radial-gradient(circle at 12% 8%, rgba(6, 182, 212, 0.15), transparent 36%),
+        radial-gradient(circle at 88% 15%, rgba(139, 92, 246, 0.16), transparent 40%),
+        var(--bg-main);
+      color: var(--text-main);
+      min-height: 100vh;
+    }
+    .app-wrap { max-width: 1180px; margin: 0 auto; padding: 14px 16px 40px; display: grid; gap: 16px; }
+    .navbar {
+      position: sticky; top: 10px; z-index: 40;
+      background: rgba(13, 19, 34, 0.88);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-soft);
+      border-radius: 20px;
+      padding: 12px 16px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+    }
+    .nav-left { display: flex; align-items: center; gap: 12px; }
+    .hamburger {
+      width: 46px; height: 46px; border-radius: 14px;
+      border: 1px solid rgba(6, 182, 212, 0.45);
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.22), rgba(139, 92, 246, 0.22));
+      color: #ffffff; font-size: 22px; font-weight: 900;
+      display: inline-flex; align-items: center; justify-content: center;
+      cursor: pointer; touch-action: manipulation;
+    }
+    .hamburger:active { transform: scale(0.95); }
+    .logo-text { font-size: 18px; font-weight: 900; letter-spacing: 0.7px; background: linear-gradient(90deg, #38bdf8, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .logo-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .bot-chip {
+      padding: 7px 13px; border-radius: 999px; font-size: 12px; font-weight: 800;
+      background: rgba(16, 185, 129, 0.14); color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35); white-space: nowrap;
+    }
+
+    /* Slide-over Sidebar Drawer */
+    .drawer-backdrop {
+      position: fixed; inset: 0; background: rgba(2, 6, 23, 0.74);
+      backdrop-filter: blur(4px); z-index: 90;
+      display: none;
+    }
+    .drawer-backdrop.open { display: block; }
+    .side-drawer {
+      position: fixed; top: 0; left: 0; bottom: 0; width: 295px; max-width: 84vw;
+      background: #0b1120; border-right: 1px solid rgba(56, 189, 248, 0.25);
+      z-index: 100; padding: 18px 14px;
+      display: flex; flex-direction: column; gap: 10px;
+      transform: translateX(-105%); transition: transform 0.22s ease;
+      box-shadow: 20px 0 50px rgba(0, 0, 0, 0.75);
+    }
+    .side-drawer.open { transform: translateX(0); }
+    .drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 12px; border-bottom: 1px solid var(--border-soft); }
+    .close-drawer-btn {
+      width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border-soft);
+      background: var(--bg-elevated); color: #fff; font-size: 16px; font-weight: 800; cursor: pointer;
+    }
+    .nav-item {
+      width: 100%; text-align: left; padding: 13px 14px; border-radius: 14px;
+      border: 1px solid transparent; background: rgba(20, 29, 51, 0.65);
+      color: #e2e8f0; font-size: 13px; font-weight: 800; cursor: pointer;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .nav-item.active {
+      background: linear-gradient(135deg, #0284c7, #6d28d9);
+      border-color: rgba(125, 211, 252, 0.45);
+      color: #ffffff;
+      box-shadow: 0 8px 20px rgba(2, 132, 199, 0.3);
+    }
+
+    .view-section { display: none; gap: 16px; }
+    .view-section.active { display: grid; }
+
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .metric-card {
+      background: linear-gradient(160deg, #11192e, #0b101d);
+      border: 1px solid var(--border-soft);
+      border-radius: 18px; padding: 16px; position: relative; overflow: hidden;
+    }
+    .metric-card::after {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-emerald));
+    }
+    .metric-title { font-size: 12px; color: var(--text-muted); font-weight: 700; }
+    .metric-number { font-size: 24px; font-weight: 900; color: #ffffff; margin-top: 8px; word-break: break-word; }
+
+    .panel-box {
+      background: var(--bg-card); border: 1px solid var(--border-soft);
+      border-radius: 20px; padding: 18px; display: grid; gap: 14px;
+    }
+    .panel-box h2 { font-size: 16px; font-weight: 800; color: #f1f5f9; display: flex; align-items: center; gap: 8px; }
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    label { display: grid; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text-muted); }
+    input, select, textarea {
+      width: 100%; background: #070b15; border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 12px; padding: 11px 13px; color: #f8fafc; font-size: 14px; outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent-cyan); }
     textarea { min-height: 115px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .btn { border: none; border-radius: 11px; padding: 10px 15px; font-size: 13px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
-    .btn:hover { filter: brightness(1.08); }
-    .btn-green { background: #10b981; color: #042f2e; }
-    .btn-blue { background: #2563eb; color: #ffffff; }
-    .btn-purple { background: #7c3aed; color: #ffffff; }
-    .btn-red { background: #ef4444; color: #ffffff; }
-    .btn-gray { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
-    .btn-sm { padding: 7px 11px; font-size: 12px; }
-    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-    .chart-item { background: #090e1a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
-    .chart-meta { display: flex; justify-content: space-between; font-size: 12px; color: #d1d5db; }
-    .chart-track { width: 100%; height: 9px; background: #1e293b; border-radius: 999px; overflow: hidden; }
-    .chart-fill { height: 100%; border-radius: 999px; transition: width 0.25s ease; }
-    .script-item { background: #090e1a; border: 1px solid #1e293b; border-radius: 13px; padding: 14px; display: grid; gap: 10px; }
-    .script-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .loader-box { background: #050811; border: 1px solid #182235; border-radius: 10px; padding: 11px; font-family: ui-monospace, monospace; font-size: 12px; color: #34d399; word-break: break-all; }
-    .order-list { display: grid; gap: 8px; }
-    .order-row { display: flex; align-items: center; justify-content: space-between; background: #090e1a; border: 1px solid #1e293b; border-radius: 11px; padding: 10px 12px; gap: 10px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-    th, td { border-bottom: 1px solid #1e293b; padding: 8px 6px; text-align: left; }
-    th { color: #9ca3af; font-weight: 700; }
-    .toast { position: fixed; right: 16px; bottom: 16px; background: #10b981; color: #042f2e; font-weight: 800; padding: 11px 16px; border-radius: 11px; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 999; }
-    .toast.show { opacity: 1; }
+
+    .action-btn {
+      border: none; border-radius: 12px; padding: 11px 16px; font-size: 13px; font-weight: 800;
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      text-decoration: none; transition: transform 0.12s ease;
+    }
+    .action-btn:active { transform: scale(0.97); }
+    .btn-emerald { background: linear-gradient(135deg, #10b981, #059669); color: #022c22; }
+    .btn-cyan { background: linear-gradient(135deg, #06b6d4, #0284c7); color: #ffffff; }
+    .btn-violet { background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: #ffffff; }
+    .btn-rose { background: linear-gradient(135deg, #f43f5e, #e11d48); color: #ffffff; }
+    .btn-slate { background: #1e293b; color: #e2e8f0; border: 1px solid var(--border-soft); }
+    .btn-mini { padding: 7px 10px; font-size: 12px; border-radius: 9px; }
+
+    .script-card {
+      background: #080d19; border: 1px solid var(--border-soft);
+      border-radius: 15px; padding: 14px; display: grid; gap: 10px;
+    }
+    .script-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .code-preview {
+      background: #04070f; border: 1px solid rgba(16, 185, 129, 0.22);
+      border-radius: 11px; padding: 11px; font-family: ui-monospace, monospace;
+      font-size: 12px; color: #34d399; word-break: break-all; line-height: 1.5;
+    }
+
+    .user-badge { display: inline-flex; align-items: center; gap: 7px; }
+    .user-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; background: #1e293b; }
+
+    .order-stack { display: grid; gap: 8px; }
+    .order-item {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #080d19; border: 1px solid var(--border-soft);
+      border-radius: 12px; padding: 10px 12px; gap: 10px;
+    }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border-bottom: 1px solid var(--border-soft); padding: 9px 6px; text-align: left; }
+    th { color: var(--text-muted); font-weight: 700; }
+
+    .toast-msg {
+      position: fixed; bottom: 18px; right: 18px; z-index: 200;
+      background: linear-gradient(135deg, #10b981, #06b6d4); color: #022c22;
+      font-weight: 900; padding: 12px 18px; border-radius: 13px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    }
+    .toast-msg.show { opacity: 1; }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <div class="topbar">
-      <div class="brand-row">
-        <button type="button" class="menu-btn" id="menuToggleBtn" aria-label="Menyu">&#9776;</button>
+  <div class="drawer-backdrop" id="drawerBackdrop" onclick="window.sadoToggleDrawer(false)"></div>
+
+  <aside class="side-drawer" id="sideDrawer">
+    <div class="drawer-header">
+      <div>
+        <div class="logo-text">SADO PROTECT</div>
+        <div class="logo-sub">Naviqasiya Menyusu</div>
+      </div>
+      <button type="button" class="close-drawer-btn" onclick="window.sadoToggleDrawer(false)">✕</button>
+    </div>
+
+    <button type="button" class="nav-item active" data-tab="overview" onclick="window.sadoSwitchTab('overview')">
+      <span>1️⃣</span><span>Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="scripts" onclick="window.sadoSwitchTab('scripts')">
+      <span>2️⃣</span><span>Script Yaratma &amp; Ultra Obfuscation</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="keys" onclick="window.sadoSwitchTab('keys')">
+      <span>3️⃣</span><span>Key, Whitelist &amp; Blacklist</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="discord" onclick="window.sadoSwitchTab('discord')">
+      <span>4️⃣</span><span>Discord Bot &amp; Panel Dizayn</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="sendpanel" onclick="window.sadoSwitchTab('sendpanel')">
+      <span>📤</span><span>Kanala Panel Göndər</span>
+    </button>
+  </aside>
+
+  <div class="app-wrap">
+    <header class="navbar">
+      <div class="nav-left">
+        <button type="button" class="hamburger" id="openDrawerBtn" onclick="window.sadoToggleDrawer()" aria-label="Menyu">☰</button>
         <div>
-          <div class="brand-title">SADO PROTECT</div>
-          <div class="brand-sub" id="subStatus">Control Dashboard • Seçilməyib</div>
+          <div class="logo-text">SADO PROTECT</div>
+          <div class="logo-sub" id="headerSub">Control Studio • Qoşulan Sunucu: Seçilməyib</div>
         </div>
       </div>
-      <div class="status-pill" id="botBadge">Bot: Qoşulur...</div>
-    </div>
+      <div class="bot-chip" id="botStatusChip">Bot: Qoşulur...</div>
+    </header>
 
-    <div class="drawer-nav" id="drawerNav">
-      <button type="button" class="nav-chip active" data-page="overview">1. Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</button>
-      <button type="button" class="nav-chip" data-page="scripts">2. Script &amp; Ultra Obfuscation</button>
-      <button type="button" class="nav-chip" data-page="keys">3. Key, Whitelist &amp; Blacklist</button>
-      <button type="button" class="nav-chip" data-page="discord">4. Discord Bot &amp; Panel Dizayn</button>
-      <button type="button" class="nav-chip" data-page="panel">📤 Discord Panel Göndər</button>
-      <button type="button" class="nav-chip" data-page="charts">📈 Qrafiklər &amp; Statistika</button>
-    </div>
-
-    <div class="page-section active" id="page-overview">
-      <div class="kpi-grid">
-        <div class="kpi-card"><div class="kpi-label">Skriptlər</div><div class="kpi-val" id="kpiScripts">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Keylər</div><div class="kpi-val" id="kpiKeys">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Whitelist</div><div class="kpi-val" id="kpiWl">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Blacklist</div><div class="kpi-val" id="kpiBl">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Qoşulan Sunucu</div><div class="kpi-val" id="kpiGuild">Seçilməyib</div></div>
+    <!-- 1-Cİ BÖLMƏ: OVERVIEW -->
+    <section class="view-section active" id="view-overview">
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="metric-title">Skriptlər</div><div class="metric-number" id="statScripts">0</div></div>
+        <div class="metric-card"><div class="metric-title">Keylər</div><div class="metric-number" id="statKeys">0</div></div>
+        <div class="metric-card"><div class="metric-title">Whitelist</div><div class="metric-number" id="statWl">0</div></div>
+        <div class="metric-card"><div class="metric-title">Blacklist</div><div class="metric-number" id="statBl">0</div></div>
+        <div class="metric-card"><div class="metric-title">Qoşulan Sunucu</div><div class="metric-number" id="statGuild">Seçilməyib</div></div>
       </div>
-      <div class="card">
-        <h2>🕒 Son Key-lər (Yaradan &amp; İşlədən)</h2>
-        <div id="recentKeysBox" class="brand-sub">Hələ key yaradılmayıb.</div>
-      </div>
-    </div>
 
-    <div class="page-section" id="page-scripts">
-      <div class="card">
-        <h2>📜 Yeni Skript Yarat (Ultra Qoruma &amp; Obfuscation)</h2>
-        <div class="grid-2">
-          <label>Skript Adı<input id="scriptNameInput" placeholder="Məs: SADO HUB" /></label>
-          <label>Dosyadan Yüklə (.lua / .txt)<input type="file" id="scriptFileInput" accept=".lua,.txt,text/plain" /></label>
+      <div class="panel-box">
+        <h2>🕒 Son Key-lər (Yaradan &amp; İşlədən Profil)</h2>
+        <div id="recentKeysTable" class="logo-sub">Hələ key yaradılmayıb.</div>
+      </div>
+    </section>
+
+    <!-- 2-Cİ BÖLMƏ: SCRIPT & OBFUSCATION -->
+    <section class="view-section" id="view-scripts">
+      <div class="panel-box">
+        <h2>📜 Yeni Skript Yarat &amp; Dosyadan Yüklə</h2>
+        <div class="form-grid">
+          <label>Skript Adı<input id="scNameInput" placeholder="Məs: SADO HUB V2" /></label>
+          <label>Dosyadan Yüklə (.lua / .txt)<input type="file" id="scFileInput" accept=".lua,.txt,text/plain" onchange="window.sadoReadScriptFile(this)" /></label>
         </div>
-        <label>Lua Skript Kodu<textarea id="scriptCodeInput" placeholder="print('SADO PROTECT')"></textarea></label>
-        <div class="grid-2">
-          <label>Obfuscation Səviyyəsi
-            <select id="obfLevelSelect">
+        <label>Lua Skript Kodu<textarea id="scCodeInput" placeholder="print('SADO PROTECT')"></textarea></label>
+        <div class="form-grid">
+          <label>Ultra Qoruma Səviyyəsi
+            <select id="scObfLevel">
               <option value="1">Level 1 — Base64 Shield</option>
               <option value="2">Level 2 — XOR Byte Shield</option>
               <option value="3" selected>Level 3 — Ultra VM Shield</option>
             </select>
           </label>
-          <label style="display:flex;align-items:center;gap:8px;padding-top:18px;cursor:pointer;">
-            <input type="checkbox" id="createObfCheckbox" checked style="width:auto;" />
-            <span>Obfuscation Açıq / Bağlı (Açanda şifrələnir)</span>
+          <label style="display:flex;align-items:center;gap:10px;padding-top:20px;cursor:pointer;">
+            <input type="checkbox" id="scObfToggle" checked style="width:18px;height:18px;" />
+            <span>Obfuscation Açıq / Bağlı (Açanda ultra şifrələnir)</span>
           </label>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-green" id="createScriptBtn">➕ Skript Yarat</button>
-          <button type="button" class="btn btn-purple" id="runObfBtn">🛡️ Kodu Şifrələ (Test)</button>
-          <button type="button" class="btn btn-blue" id="copyObfBtn">📋 Şifrəni Kopyala</button>
+          <button type="button" class="action-btn btn-emerald" onclick="window.sadoCreateScript()">➕ Skript Yarat</button>
+          <button type="button" class="action-btn btn-violet" onclick="window.sadoTestObfuscate()">🛡️ Kodu Şifrələ (Preview)</button>
         </div>
-        <label>Şifrələnmiş Nəticə<textarea id="obfResultBox" readonly></textarea></label>
+        <label>Şifrələnmiş Kod Nəticəsi<textarea id="scObfPreview" readonly></textarea></label>
       </div>
 
-      <div class="card">
-        <h2>📂 Mövcud Skriptlər (Get Script: Əvvəl Key, Sonra Loadstring)</h2>
-        <div id="scriptsList"></div>
+      <div class="panel-box">
+        <h2>📂 Mövcud Skriptlər (Get Script: Əvvəl Script Key, Sonra Loadstring)</h2>
+        <div id="existingScriptsList"></div>
       </div>
-    </div>
+    </section>
 
-    <div class="page-section" id="page-keys">
-      <div class="card">
-        <h2>🔑 Key Yaradılması</h2>
-        <div class="grid-2">
-          <label>Skript<select id="keyScriptSelect"></select></label>
+    <!-- 3-CÜ BÖLMƏ: KEY, WHITELIST & BLACKLIST -->
+    <section class="view-section" id="view-keys">
+      <div class="panel-box">
+        <h2>🔑 Key Yarat (Müddət Seçimi ilə)</h2>
+        <div class="form-grid">
+          <label>Skript<select id="keyScSelect"></select></label>
           <label>Vaxt Seçimi
-            <select id="keyDurationSelect">
+            <select id="keyDurSelect">
               <option value="lifetime" selected>lifetime</option>
               <option value="1 month">1 month</option>
               <option value="7 day">7 day</option>
@@ -2058,24 +2227,24 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </select>
           </label>
         </div>
-        <div class="grid-2">
-          <label>Key Sayı<input id="keyAmountInput" type="number" min="1" max="50" value="1" /></label>
+        <div class="form-grid">
+          <label>Key Sayı<input id="keyCountInput" type="number" min="1" max="50" value="1" /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="btn btn-green" id="genKeysBtn">🔑 Key Yarat</button>
+            <button type="button" class="action-btn btn-emerald" onclick="window.sadoGenerateKeys()">🔑 Key Yarat</button>
           </div>
         </div>
-        <div id="keysList"></div>
+        <div id="allKeysTable"></div>
       </div>
 
-      <div class="card">
-        <h2>👤 Whitelist &amp; HWID Kilid / Reset İdarəetməsi</h2>
-        <div class="grid-2">
-          <label>Discord User ID<input id="wlUserIdInput" placeholder="Məs: 987654321098765432" /></label>
-          <label>Skript<select id="wlScriptSelect"></select></label>
+      <div class="panel-box">
+        <h2>✅ Whitelist (Vaxt &amp; İlk Cihaz HWID Kilidi)</h2>
+        <div class="form-grid">
+          <label>Discord User ID<input id="wlDiscordInput" placeholder="Məs: 987654321098765432" /></label>
+          <label>Skript<select id="wlScSelect"></select></label>
         </div>
-        <div class="grid-2">
+        <div class="form-grid">
           <label>Vaxt Seçimi
-            <select id="wlDurationSelect">
+            <select id="wlDurSelect">
               <option value="lifetime" selected>lifetime</option>
               <option value="1 month">1 month</option>
               <option value="7 day">7 day</option>
@@ -2086,75 +2255,78 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               <option value="30 minutes">30 minutes</option>
             </select>
           </label>
-          <label style="display:flex;align-items:center;gap:8px;padding-top:18px;cursor:pointer;">
-            <input type="checkbox" id="wlLockCheckbox" checked style="width:auto;" />
-            <span>HWID Kilidli Olsun (İlk işlədən telefona/cihaza bağlanır)</span>
+          <label style="display:flex;align-items:center;gap:10px;padding-top:20px;cursor:pointer;">
+            <input type="checkbox" id="wlHwidCheck" checked style="width:18px;height:18px;" />
+            <span>İlk işlədən telefona/cihaza HWID kilidlə</span>
           </label>
         </div>
-        <div><button type="button" class="btn btn-blue" id="addWhitelistBtn">➕ Whitelist-ə Əlavə Et</button></div>
-        <div id="wlList"></div>
+        <div>
+          <button type="button" class="action-btn btn-cyan" onclick="window.sadoAddWhitelist()">➕ Whitelist-ə Əlavə Et</button>
+        </div>
+        <div id="allWlTable"></div>
       </div>
 
-      <div class="card">
+      <div class="panel-box">
         <h2>🚫 Blacklist</h2>
-        <div class="grid-2">
-          <label>Discord User ID<input id="blUserIdInput" placeholder="Discord User ID" /></label>
+        <div class="form-grid">
+          <label>Discord User ID<input id="blDiscordInput" placeholder="Discord User ID" /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="btn btn-red" id="addBlacklistBtn">🚫 Blacklist-ə At</button>
+            <button type="button" class="action-btn btn-rose" onclick="window.sadoAddBlacklist()">🚫 Blacklist-ə At</button>
           </div>
         </div>
-        <div id="blList"></div>
+        <div id="allBlTable"></div>
       </div>
-    </div>
+    </section>
 
-    <div class="page-section" id="page-discord">
-      <div class="card">
-        <h2>🤖 1. Join Discord &amp; 2. Discord / Sunucu ID Bağlantısı</h2>
+    <!-- 4-CÜ BÖLMƏ: DISCORD BOT & PANEL DİZAYN -->
+    <section class="view-section" id="view-discord">
+      <div class="panel-box">
+        <h2>🤖 1. Join Discord &amp; 2. Sunucu ID Bağlantısı</h2>
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
-          <a id="joinDiscordLink" href="https://discord.gg/sado-protect" target="_blank" rel="noopener noreferrer" class="btn btn-purple">💬 Join Discord</a>
-          <span class="status-pill" id="liveGuildPreview">Sunucu: Seçilməyib</span>
+          <a id="inviteBotAnchor" href="https://discord.gg/sado-protect" target="_blank" rel="noopener noreferrer" class="action-btn btn-violet">💬 Join Discord (Botu Dəvət Et)</a>
+          <span class="bot-chip" id="guildNameLiveBadge">Sunucu Adı: Seçilməyib</span>
         </div>
-        <div class="grid-2">
-          <label>Botun Olduğu Sunucular<select id="guildSelect"></select></label>
-          <label>Sunucu (Guild) ID<input id="guildIdInput" placeholder="Sunucu ID yazın..." /></label>
+        <div class="form-grid">
+          <label>Botun Olduğu Sunucular<select id="botGuildDropdown" onchange="window.sadoSelectGuildDropdown(this.value)"></select></label>
+          <label>Sunucu (Guild) ID<input id="inputGuildId" placeholder="Sunucu ID yazın..." oninput="window.sadoLiveGuildLookup()" /></label>
         </div>
-        <div class="grid-2">
-          <label>Sahib Discord User ID<input id="discordUserIdInput" placeholder="Discord User ID yazın..." /></label>
+        <div class="form-grid">
+          <label>Sahib Discord User ID<input id="inputOwnerDiscordId" placeholder="Discord User ID..." oninput="window.sadoLiveGuildLookup()" /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="btn btn-green" id="linkWorkspaceBtn">🔗 Sunucuya Bağla</button>
+            <button type="button" class="action-btn btn-emerald" onclick="window.sadoSaveWorkspaceLink()">🔗 Sunucuya Bağla</button>
           </div>
         </div>
       </div>
 
-      <div class="card">
-        <h2>🎨 Panel Dizaynı (Ad, Emoji, Rəng &amp; Buton Sırası)</h2>
-        <div class="grid-2">
-          <label>Embed Rəngi (Hex)<input id="embedColorInput" value="#10B981" /></label>
-          <label>Rəng Seçici<input type="color" id="embedColorPicker" value="#10b981" style="height:42px;padding:4px;" /></label>
+      <div class="panel-box">
+        <h2>🎨 Panel Dizaynı (Düymə Adı, Emoji, Rəng &amp; Sıra)</h2>
+        <div class="form-grid">
+          <label>Embed Rəngi (Hex)<input id="cfgEmbedColor" value="#10B981" oninput="window.sadoSyncColorPicker(this.value)" /></label>
+          <label>Rəng Seçici<input type="color" id="cfgColorPicker" value="#10b981" style="height:44px;padding:4px;" oninput="document.getElementById('cfgEmbedColor').value = this.value.toUpperCase()" /></label>
         </div>
-        <div class="grid-2">
-          <label>Panel Başlığı<input id="panelTitleInput" value="SADO PROTECT • Script Panel" /></label>
-          <label>Panel Təsviri<input id="panelDescInput" value="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin." /></label>
+        <div class="form-grid">
+          <label>Panel Başlığı<input id="cfgTitle" value="SADO PROTECT • Script Panel" /></label>
+          <label>Panel Təsviri<input id="cfgDesc" value="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin." /></label>
         </div>
-        <div class="grid-2">
-          <label>Redeem Düymə Adı<input id="redeemLabelInput" value="Redeem Key" /></label>
-          <label>Redeem Emoji<input id="redeemEmojiInput" value="🔑" /></label>
-        </div>
-        <div class="grid-2">
-          <label>Redeem Rəngi
-            <select id="redeemStyleInput">
+
+        <div class="form-grid">
+          <label>1. Düymə Adı (Redeem)<input id="cfgRedeemLabel" value="Redeem Key" /></label>
+          <label>Emoji<input id="cfgRedeemEmoji" value="🔑" /></label>
+          <label>Rəngi
+            <select id="cfgRedeemStyle">
               <option value="Success" selected>Yaşıl (Success)</option>
               <option value="Primary">Mavi (Primary)</option>
               <option value="Secondary">Boz (Secondary)</option>
               <option value="Danger">Qırmızı (Danger)</option>
             </select>
           </label>
-          <label>Get Script Düymə Adı<input id="getScriptLabelInput" value="Get Script" /></label>
         </div>
-        <div class="grid-2">
-          <label>Get Script Emoji<input id="getScriptEmojiInput" value="📜" /></label>
-          <label>Get Script Rəngi
-            <select id="getScriptStyleInput">
+
+        <div class="form-grid">
+          <label>2. Düymə Adı (Get Script)<input id="cfgGetScriptLabel" value="Get Script" /></label>
+          <label>Emoji<input id="cfgGetScriptEmoji" value="📜" /></label>
+          <label>Rəngi
+            <select id="cfgGetScriptStyle">
               <option value="Primary" selected>Mavi (Primary)</option>
               <option value="Success">Yaşıl (Success)</option>
               <option value="Secondary">Boz (Secondary)</option>
@@ -2162,25 +2334,25 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </select>
           </label>
         </div>
-        <div class="grid-2">
-          <label>Reset HWID Düymə Adı<input id="resetHwidLabelInput" value="Reset HWID" /></label>
-          <label>Reset HWID Emoji<input id="resetHwidEmojiInput" value="⚙️" /></label>
-        </div>
-        <div class="grid-2">
-          <label>Reset HWID Rəngi
-            <select id="resetHwidStyleInput">
+
+        <div class="form-grid">
+          <label>3. Düymə Adı (Reset HWID)<input id="cfgResetHwidLabel" value="Reset HWID" /></label>
+          <label>Emoji<input id="cfgResetHwidEmoji" value="⚙️" /></label>
+          <label>Rəngi
+            <select id="cfgResetHwidStyle">
               <option value="Danger" selected>Qırmızı (Danger)</option>
               <option value="Primary">Mavi (Primary)</option>
               <option value="Success">Yaşıl (Success)</option>
               <option value="Secondary">Boz (Secondary)</option>
             </select>
           </label>
-          <label>Get Stats Düymə Adı<input id="statsLabelInput" value="Get Stats" /></label>
         </div>
-        <div class="grid-2">
-          <label>Get Stats Emoji<input id="statsEmojiInput" value="📊" /></label>
-          <label>Get Stats Rəngi
-            <select id="statsStyleInput">
+
+        <div class="form-grid">
+          <label>4. Düymə Adı (Get Stats)<input id="cfgStatsLabel" value="Get Stats" /></label>
+          <label>Emoji<input id="cfgStatsEmoji" value="📊" /></label>
+          <label>Rəngi
+            <select id="cfgStatsStyle">
               <option value="Secondary" selected>Boz (Secondary)</option>
               <option value="Primary">Mavi (Primary)</option>
               <option value="Success">Yaşıl (Success)</option>
@@ -2188,793 +2360,578 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </select>
           </label>
         </div>
+
         <div>
-          <label style="margin-bottom:8px;">Butonların Yeri / Sırası (Yuxarı-Aşağı)</label>
-          <div class="order-list" id="buttonOrderList"></div>
+          <label style="margin-bottom:8px;">Butonların Yerini Dəyiş (Sıralama)</label>
+          <div class="order-stack" id="btnOrderStack"></div>
         </div>
-        <div><button type="button" class="btn btn-green" id="savePanelDesignBtn">💾 Dizaynı Saxla &amp; Paneldə Yenilə</button></div>
-      </div>
-    </div>
 
-    <div class="page-section" id="page-panel">
-      <div class="card">
-        <h2>📤 Discord Kanalına Panel Göndər</h2>
-        <div class="grid-2">
-          <label>Discord Channel ID<input id="panelChannelIdInput" placeholder="Məs: 123456789012345678" /></label>
-          <label>Mövcud Skript Seçimi<select id="panelScriptSelect"></select></label>
+        <div>
+          <button type="button" class="action-btn btn-emerald" onclick="window.sadoSavePanelDesign()">💾 Dizaynı Saxla &amp; Aktiv Paneldə Yenilə</button>
         </div>
-        <div><button type="button" class="btn btn-blue" id="sendPanelBtn">📤 Panel Göndər</button></div>
       </div>
-    </div>
+    </section>
 
-    <div class="page-section" id="page-charts">
-      <div class="card">
-        <h2>📈 Sistem Göstəriciləri &amp; Qrafiklər</h2>
-        <div class="charts-grid" id="chartsArea"></div>
+    <!-- KANALA PANEL GÖNDƏR -->
+    <section class="view-section" id="view-sendpanel">
+      <div class="panel-box">
+        <h2>📤 Discord Kanalına Skript Paneli Göndər</h2>
+        <div class="form-grid">
+          <label>Discord Channel ID<input id="sendChannelIdInput" placeholder="Kanal ID yazın..." /></label>
+          <label>Mövcud Skript<select id="sendScriptSelect"></select></label>
+        </div>
+        <div>
+          <button type="button" class="action-btn btn-cyan" onclick="window.sadoSendPanel()">📤 Paneli Göndər</button>
+        </div>
       </div>
-    </div>
+    </section>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div class="toast-msg" id="toastBox"></div>
 
   <script>
-    const BUTTON_NAMES_MAP = {
+    const BTN_TITLE_MAP = {
       redeem: 'Redeem Key',
       getscript: 'Get Script',
       resethwid: 'Reset HWID',
       stats: 'Get Stats',
     };
 
-    const uiState = {
-      initialLoaded: false,
-      menuOpen: false,
+    const appState = {
+      hydrated: false,
       buttonOrder: ['redeem', 'getscript', 'resethwid', 'stats'],
     };
 
-    const getOrCreateWorkspaceId = () => {
+    const getWorkspaceId = () => {
       try {
-        const saved = localStorage.getItem('sado_ws_id');
-        if (saved) return saved;
-        const fresh = 'ws_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
-        localStorage.setItem('sado_ws_id', fresh);
-        return fresh;
+        const existing = localStorage.getItem('sado_studio_ws');
+        if (existing) return existing;
+        const generated = 'ws_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('sado_studio_ws', generated);
+        return generated;
       } catch (_e) {
         return 'default';
       }
     };
 
-    const wsId = getOrCreateWorkspaceId();
+    const currentWsId = getWorkspaceId();
 
-    const apiFetch = (url, opts) => {
-      const safeOpts = opts || {};
-      const headers = Object.assign({ 'X-Client-Workspace': wsId }, safeOpts.headers || {});
-      return fetch(url, Object.assign({}, safeOpts, { headers: headers }));
+    const requestApi = (url, options) => {
+      const opts = options || {};
+      const headers = Object.assign({ 'X-Client-Workspace': currentWsId }, opts.headers || {});
+      return fetch(url, Object.assign({}, opts, { headers }));
     };
 
-    const showToast = (msg) => {
-      const t = document.getElementById('toast');
-      if (!t) return;
-      t.textContent = String(msg || '');
-      t.classList.add('show');
-      setTimeout(() => {
-        t.classList.remove('show');
-      }, 2600);
-    };
-
-    const toggleMenu = (forceState) => {
-      const nav = document.getElementById('drawerNav');
-      if (!nav) return;
-      const isCurrentlyOpen = nav.classList.contains('open');
-      const nextOpen = typeof forceState === 'boolean' ? forceState : !isCurrentlyOpen;
-      uiState.menuOpen = nextOpen;
-      nav.classList.toggle('open', nextOpen);
-    };
-
-    const openPage = (pageId) => {
-      const pages = Array.from(document.querySelectorAll('.page-section'));
-      const chips = Array.from(document.querySelectorAll('.nav-chip'));
-      pages.forEach((sec) => {
-        sec.classList.toggle('active', sec.id === 'page-' + pageId);
-      });
-      chips.forEach((ch) => {
-        ch.classList.toggle('active', ch.getAttribute('data-page') === pageId);
-      });
-      toggleMenu(false);
-    };
-
-    const renderButtonOrderBox = () => {
-      const box = document.getElementById('buttonOrderList');
+    const notify = (text) => {
+      const box = document.getElementById('toastBox');
       if (!box) return;
-      box.innerHTML = uiState.buttonOrder
-        .map((key, idx) => {
+      box.textContent = String(text || '');
+      box.classList.add('show');
+      setTimeout(() => box.classList.remove('show'), 2500);
+    };
+
+    window.sadoToggleDrawer = (forceVal) => {
+      const drawer = document.getElementById('sideDrawer');
+      const backdrop = document.getElementById('drawerBackdrop');
+      if (!drawer || !backdrop) return;
+      const shouldOpen = typeof forceVal === 'boolean' ? forceVal : !drawer.classList.contains('open');
+      drawer.classList.toggle('open', shouldOpen);
+      backdrop.classList.toggle('open', shouldOpen);
+    };
+
+    window.sadoSwitchTab = (tabName) => {
+      document.querySelectorAll('.view-section').forEach((sec) => {
+        sec.classList.toggle('active', sec.id === 'view-' + tabName);
+      });
+      document.querySelectorAll('.nav-item').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
+      });
+      window.sadoToggleDrawer(false);
+    };
+
+    const drawOrderStack = () => {
+      const stack = document.getElementById('btnOrderStack');
+      if (!stack) return;
+      stack.innerHTML = appState.buttonOrder
+        .map((k, idx) => {
           return (
-            '<div class="order-row"><strong>#' +
+            '<div class="order-item"><strong>#' +
             (idx + 1) +
             ' • ' +
-            (BUTTON_NAMES_MAP[key] || key) +
+            (BTN_TITLE_MAP[k] || k) +
             '</strong><div style="display:flex;gap:6px;">' +
-            '<button type="button" class="btn btn-gray btn-sm" data-move-btn="' +
-            key +
-            '" data-move-dir="up">⬆️</button>' +
-            '<button type="button" class="btn btn-gray btn-sm" data-move-btn="' +
-            key +
-            '" data-move-dir="down">⬇️</button>' +
+            '<button type="button" class="action-btn btn-slate btn-mini" onclick="window.sadoMoveButton(\'' +
+            k +
+            '\', -1)">⬆️</button>' +
+            '<button type="button" class="action-btn btn-slate btn-mini" onclick="window.sadoMoveButton(\'' +
+            k +
+            '\', 1)">⬇️</button>' +
             '</div></div>'
           );
         })
         .join('');
     };
 
-    const moveButtonInOrder = (btnKey, dir) => {
-      const idx = uiState.buttonOrder.indexOf(btnKey);
-      if (idx < 0) return;
-      const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
-      if (targetIdx < 0 || targetIdx >= uiState.buttonOrder.length) return;
-      const copy = uiState.buttonOrder.slice();
-      const temp = copy[idx];
-      copy[idx] = copy[targetIdx];
-      copy[targetIdx] = temp;
-      uiState.buttonOrder = copy;
-      renderButtonOrderBox();
+    window.sadoMoveButton = (key, delta) => {
+      const idx = appState.buttonOrder.indexOf(key);
+      const next = idx + delta;
+      if (idx < 0 || next < 0 || next >= appState.buttonOrder.length) return;
+      const arr = appState.buttonOrder.slice();
+      const tmp = arr[idx];
+      arr[idx] = arr[next];
+      arr[next] = tmp;
+      appState.buttonOrder = arr;
+      drawOrderStack();
     };
 
-    const syncPickerFromHex = (hexVal) => {
-      const picker = document.getElementById('embedColorPicker');
-      const clean = /^#[0-9a-fA-F]{6}$/.test(String(hexVal || '').trim())
-        ? String(hexVal).trim()
-        : '#10b981';
-      if (picker) picker.value = clean;
+    window.sadoSyncColorPicker = (hex) => {
+      const picker = document.getElementById('cfgColorPicker');
+      if (picker && /^#[0-9a-fA-F]{6}$/.test(String(hex || '').trim())) {
+        picker.value = String(hex).trim();
+      }
     };
 
-    const loadScriptFile = (inputEl) => {
-      const file = inputEl && inputEl.files && inputEl.files[0];
+    window.sadoReadScriptFile = (input) => {
+      const file = input && input.files && input.files[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
-        const box = document.getElementById('scriptCodeInput');
-        if (box) box.value = String(reader.result || '');
-        const nameBox = document.getElementById('scriptNameInput');
-        if (nameBox && !nameBox.value.trim()) {
-          nameBox.value = file.name.replace(/\.(lua|txt)$/i, '');
+        document.getElementById('scCodeInput').value = String(reader.result || '');
+        const nameEl = document.getElementById('scNameInput');
+        if (nameEl && !nameEl.value.trim()) {
+          nameEl.value = file.name.replace(/\.(lua|txt)$/i, '');
         }
       };
       reader.readAsText(file);
     };
 
-    const renderCharts = (data) => {
-      const st = (data && data.stats) || {};
-      const keysArr = (data && data.keys) || [];
-      const wlArr = (data && data.whitelists) || [];
-      const blArr = (data && data.blacklist) || [];
-      const scArr = (data && data.scripts) || [];
-      const pnlArr = (data && data.panels) || [];
-      const usedCount = keysArr.filter((k) => k.used).length;
-      const freeCount = keysArr.length - usedCount;
-      const hwidBoundCount = wlArr.filter((w) => Boolean(w.hwid)).length;
-      const area = document.getElementById('chartsArea');
-      if (!area) return;
-
-      const items = [
-        { label: 'Auth Uğurlu Giriş', val: Number(st.authSuccess || 0), color: '#10b981' },
-        { label: 'Auth Blok / Kick', val: Number(st.authBlocked || 0), color: '#ef4444' },
-        { label: 'Key Redeem Sayı', val: Number(st.redeems || 0), color: '#3b82f6' },
-        { label: 'Get Script Sayı', val: Number(st.scriptFetches || 0), color: '#8b5cf6' },
-        { label: 'HWID Sıfırlama', val: Number(st.hwidResets || 0), color: '#f59e0b' },
-        { label: 'Ümumi Keylər', val: keysArr.length, color: '#06b6d4' },
-        { label: 'İşlənmiş Keylər', val: usedCount, color: '#ec4899' },
-        { label: 'Boş Keylər', val: freeCount, color: '#22c55e' },
-        { label: 'Whitelist Sayı', val: wlArr.length, color: '#6366f1' },
-        { label: 'HWID Bağlı Cihaz', val: hwidBoundCount, color: '#14b8a6' },
-        { label: 'Blacklist Sayı', val: blArr.length, color: '#dc2626' },
-        { label: 'Skript Sayı', val: scArr.length, color: '#a855f7' },
-        { label: 'Göndərilən Panellər', val: pnlArr.length, color: '#0ea5e9' },
-      ];
-
-      const maxVal = Math.max(1, ...items.map((i) => i.val));
-      area.innerHTML = items
-        .map((i) => {
-          const pct = Math.max(2, Math.round((i.val / maxVal) * 100));
-          return (
-            '<div class="chart-item"><div class="chart-meta"><span>' +
-            i.label +
-            '</span><strong>' +
-            i.val +
-            '</strong></div>' +
-            '<div class="chart-track"><div class="chart-fill" style="width:' +
-            pct +
-            '%;background:' +
-            i.color +
-            '"></div></div></div>'
-          );
-        })
-        .join('');
+    window.sadoCopyString = (encoded) => {
+      const raw = decodeURIComponent(encoded || '');
+      const ta = document.createElement('textarea');
+      ta.value = raw;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      notify('Kopyalandı!');
     };
 
-    const lookupGuildLive = async () => {
-      const guildIdInput = document.getElementById('guildIdInput');
-      const discordUserIdInput = document.getElementById('discordUserIdInput');
-      const kpiGuild = document.getElementById('kpiGuild');
-      const subStatus = document.getElementById('subStatus');
-      const preview = document.getElementById('liveGuildPreview');
-      const guildId = guildIdInput ? guildIdInput.value.trim() : '';
-      const discordUserId = discordUserIdInput ? discordUserIdInput.value.trim() : '';
-      if (!guildId && !discordUserId) {
-        if (preview) preview.textContent = 'Sunucu: Seçilməyib';
-        return;
-      }
-      const r = await apiFetch('/api/workspace/link', {
+    window.sadoCreateScript = async () => {
+      const name = document.getElementById('scNameInput').value.trim();
+      const code = document.getElementById('scCodeInput').value;
+      const obfuscate = document.getElementById('scObfToggle').checked;
+      const obfuscateLevel = Number(document.getElementById('scObfLevel').value || 3);
+      const r = await requestApi('/api/scripts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId: guildId, discordUserId: discordUserId }),
+        body: JSON.stringify({ name, code, obfuscate, obfuscateLevel }),
+      });
+      const j = await r.json();
+      if (j && j.ok) document.getElementById('scNameInput').value = '';
+      notify((j && j.message) || 'Skript yaradıldı');
+      await refreshDashboard();
+    };
+
+    window.sadoDeleteScript = async (id) => {
+      const r = await requestApi('/api/scripts/' + id, { method: 'DELETE' });
+      const j = await r.json();
+      notify((j && j.message) || 'Skript silindi');
+      await refreshDashboard();
+    };
+
+    window.sadoTestObfuscate = async () => {
+      const code = document.getElementById('scCodeInput').value;
+      const level = Number(document.getElementById('scObfLevel').value || 3);
+      const r = await requestApi('/api/obfuscate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, level }),
+      });
+      const j = await r.json();
+      if (j && j.obfuscated) document.getElementById('scObfPreview').value = j.obfuscated;
+      notify((j && j.message) || 'Şifrələndi');
+    };
+
+    window.sadoGenerateKeys = async () => {
+      const scriptId = document.getElementById('keyScSelect').value;
+      const duration = document.getElementById('keyDurSelect').value;
+      const amount = Number(document.getElementById('keyCountInput').value || 1);
+      const createdByDiscordId = document.getElementById('inputOwnerDiscordId').value.trim();
+      const r = await requestApi('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scriptId, duration, amount, createdByDiscordId }),
+      });
+      const j = await r.json();
+      notify((j && j.message) || 'Key yaradıldı');
+      await refreshDashboard();
+    };
+
+    window.sadoDeleteKey = async (encKey) => {
+      const r = await requestApi('/api/keys/' + encKey, { method: 'DELETE' });
+      const j = await r.json();
+      notify((j && j.message) || 'Key silindi');
+      await refreshDashboard();
+    };
+
+    window.sadoAddWhitelist = async () => {
+      const discordUserId = document.getElementById('wlDiscordInput').value.trim();
+      const scriptId = document.getElementById('wlScSelect').value;
+      const duration = document.getElementById('wlDurSelect').value;
+      const hwidLocked = document.getElementById('wlHwidCheck').checked;
+      const addedByDiscordId = document.getElementById('inputOwnerDiscordId').value.trim();
+      const r = await requestApi('/api/whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordUserId, scriptId, duration, hwidLocked, addedByDiscordId }),
+      });
+      const j = await r.json();
+      if (j && j.ok) document.getElementById('wlDiscordInput').value = '';
+      notify((j && j.message) || 'Whitelist yeniləndi');
+      await refreshDashboard();
+    };
+
+    window.sadoToggleWlLock = async (id) => {
+      const r = await requestApi('/api/whitelist/' + id + '/toggle-lock', { method: 'POST' });
+      const j = await r.json();
+      notify((j && j.message) || 'Kilid dəyişdi');
+      await refreshDashboard();
+    };
+
+    window.sadoResetWlHwid = async (id) => {
+      const r = await requestApi('/api/whitelist/' + id + '/reset-hwid', { method: 'POST' });
+      const j = await r.json();
+      notify((j && j.message) || 'HWID sıfırlandı');
+      await refreshDashboard();
+    };
+
+    window.sadoDeleteWl = async (id) => {
+      const r = await requestApi('/api/whitelist/' + id, { method: 'DELETE' });
+      const j = await r.json();
+      notify((j && j.message) || 'Silindi');
+      await refreshDashboard();
+    };
+
+    window.sadoAddBlacklist = async () => {
+      const discordUserId = document.getElementById('blDiscordInput').value.trim();
+      const r = await requestApi('/api/blacklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discordUserId }),
+      });
+      const j = await r.json();
+      if (j && j.ok) document.getElementById('blDiscordInput').value = '';
+      notify((j && j.message) || 'Blacklist yeniləndi');
+      await refreshDashboard();
+    };
+
+    window.sadoDeleteBl = async (id) => {
+      const r = await requestApi('/api/blacklist/' + id, { method: 'DELETE' });
+      const j = await r.json();
+      notify((j && j.message) || 'Silindi');
+      await refreshDashboard();
+    };
+
+    window.sadoSelectGuildDropdown = (val) => {
+      if (!val) return;
+      document.getElementById('inputGuildId').value = val;
+      window.sadoLiveGuildLookup();
+    };
+
+    window.sadoLiveGuildLookup = async () => {
+      const guildId = document.getElementById('inputGuildId').value.trim();
+      const discordUserId = document.getElementById('inputOwnerDiscordId').value.trim();
+      if (!guildId && !discordUserId) return;
+      const r = await requestApi('/api/workspace/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, discordUserId }),
       });
       const j = await r.json();
       if (j && j.guildName) {
-        if (kpiGuild) kpiGuild.textContent = j.guildName;
-        if (subStatus) subStatus.textContent = 'Control Dashboard • ' + j.guildName;
-        if (preview) {
-          preview.textContent =
-            'Sunucu: ' + j.guildName + (j.guildId ? ' (' + j.guildId + ')' : '');
-        }
+        document.getElementById('statGuild').textContent = j.guildName;
+        document.getElementById('headerSub').textContent = 'Control Studio • Qoşulan Sunucu: ' + j.guildName;
+        document.getElementById('guildNameLiveBadge').textContent = 'Sunucu Adı: ' + j.guildName;
       }
     };
 
-    const renderAll = async () => {
-      try {
-        const stRes = await apiFetch('/api/status');
-        const st = await stRes.json();
-        const badge = document.getElementById('botBadge');
-        const subStatus = document.getElementById('subStatus');
-        const kpiScripts = document.getElementById('kpiScripts');
-        const kpiKeys = document.getElementById('kpiKeys');
-        const kpiWl = document.getElementById('kpiWl');
-        const kpiBl = document.getElementById('kpiBl');
-        const kpiGuild = document.getElementById('kpiGuild');
+    window.sadoSaveWorkspaceLink = async () => {
+      const guildId = document.getElementById('inputGuildId').value.trim();
+      const discordUserId = document.getElementById('inputOwnerDiscordId').value.trim();
+      const r = await requestApi('/api/workspace/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guildId, discordUserId }),
+      });
+      const j = await r.json();
+      appState.hydrated = false;
+      notify((j && j.message) || 'Sunucu bağlandı');
+      await refreshDashboard();
+    };
 
-        const res = await apiFetch('/api/state');
-        const data = await res.json();
+    window.sadoSavePanelDesign = async () => {
+      const body = {
+        embedColor: document.getElementById('cfgEmbedColor').value.trim(),
+        title: document.getElementById('cfgTitle').value.trim(),
+        description: document.getElementById('cfgDesc').value.trim(),
+        redeemLabel: document.getElementById('cfgRedeemLabel').value.trim(),
+        redeemEmoji: document.getElementById('cfgRedeemEmoji').value.trim(),
+        redeemStyle: document.getElementById('cfgRedeemStyle').value,
+        getScriptLabel: document.getElementById('cfgGetScriptLabel').value.trim(),
+        getScriptEmoji: document.getElementById('cfgGetScriptEmoji').value.trim(),
+        getScriptStyle: document.getElementById('cfgGetScriptStyle').value,
+        resetHwidLabel: document.getElementById('cfgResetHwidLabel').value.trim(),
+        resetHwidEmoji: document.getElementById('cfgResetHwidEmoji').value.trim(),
+        resetHwidStyle: document.getElementById('cfgResetHwidStyle').value,
+        statsLabel: document.getElementById('cfgStatsLabel').value.trim(),
+        statsEmoji: document.getElementById('cfgStatsEmoji').value.trim(),
+        statsStyle: document.getElementById('cfgStatsStyle').value,
+        buttonOrder: appState.buttonOrder.slice(),
+      };
+      const r = await requestApi('/api/panel-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      notify((j && j.message) || 'Panel dizaynı yeniləndi');
+      await refreshDashboard();
+    };
+
+    window.sadoSendPanel = async () => {
+      const channelId = document.getElementById('sendChannelIdInput').value.trim();
+      const scriptId = document.getElementById('sendScriptSelect').value;
+      const r = await requestApi('/api/send-panel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, scriptId }),
+      });
+      const j = await r.json();
+      notify((j && j.message) || 'Panel göndərildi');
+      await refreshDashboard();
+    };
+
+    const renderProfileBadge = (name, avatarUrl, fallbackText) => {
+      const label = name || fallbackText || '-';
+      const img = avatarUrl
+        ? '<img class="user-avatar" src="' + avatarUrl + '" alt="" />'
+        : '';
+      return '<span class="user-badge">' + img + '<span>' + label + '</span></span>';
+    };
+
+    const refreshDashboard = async () => {
+      try {
+        const [stRes, stateRes] = await Promise.all([
+          requestApi('/api/status'),
+          requestApi('/api/state'),
+        ]);
+        const st = await stRes.json();
+        const data = await stateRes.json();
         if (!data || !data.ok) return;
 
         const guildLabel = data.guildName || 'Seçilməyib';
-        if (badge) badge.textContent = st && st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...';
-        if (subStatus) subStatus.textContent = 'Control Dashboard • ' + guildLabel;
-        if (kpiScripts) kpiScripts.textContent = String((data.scripts || []).length);
-        if (kpiKeys) kpiKeys.textContent = String((data.keys || []).length);
-        if (kpiWl) kpiWl.textContent = String((data.whitelists || []).length);
-        if (kpiBl) kpiBl.textContent = String((data.blacklist || []).length);
-        if (kpiGuild) kpiGuild.textContent = guildLabel;
+        document.getElementById('botStatusChip').textContent =
+          st && st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...';
+        document.getElementById('headerSub').textContent =
+          'Control Studio • Qoşulan Sunucu: ' + guildLabel;
+        document.getElementById('statScripts').textContent = String((data.scripts || []).length);
+        document.getElementById('statKeys').textContent = String((data.keys || []).length);
+        document.getElementById('statWl').textContent = String((data.whitelists || []).length);
+        document.getElementById('statBl').textContent = String((data.blacklist || []).length);
+        document.getElementById('statGuild').textContent = guildLabel;
 
-        const joinLink = document.getElementById('joinDiscordLink');
-        const guildIdInput = document.getElementById('guildIdInput');
-        const discordUserIdInput = document.getElementById('discordUserIdInput');
-        const liveGuildPreview = document.getElementById('liveGuildPreview');
-        if (joinLink && data.inviteUrl) joinLink.href = data.inviteUrl;
-
-        const gSel = document.getElementById('guildSelect');
-        if (gSel) {
-          const gOpts = (data.guilds || [])
-            .map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>')
-            .join('');
-          gSel.innerHTML = '<option value="">-- Sunucu seçin və ya aşağıya ID yazın</option>' + gOpts;
-          if (data.guildId) gSel.value = data.guildId;
+        if (data.inviteUrl) {
+          document.getElementById('inviteBotAnchor').href = data.inviteUrl;
         }
 
-        const recentKeys = (data.keys || []).slice(0, 6);
-        const recentBox = document.getElementById('recentKeysBox');
-        if (recentBox) {
-          const recentRows = recentKeys
-            .map(
-              (k) =>
-                '<tr><td>' +
-                k.key +
-                '</td><td>' +
-                (k.duration || 'lifetime') +
-                '</td><td>' +
-                (k.createdByName || '-') +
-                '</td><td>' +
-                (k.usedByName || (k.used ? k.usedByDiscordId : 'Hələ işlənməyib')) +
-                '</td></tr>'
-            )
+        const gDrop = document.getElementById('botGuildDropdown');
+        if (gDrop) {
+          const opts = (data.guilds || [])
+            .map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>')
             .join('');
-          recentBox.innerHTML = recentKeys.length
+          gDrop.innerHTML = '<option value="">-- Botun olduğu sunucunu seçin</option>' + opts;
+          if (data.guildId) gDrop.value = data.guildId;
+        }
+
+        const scriptOptions = (data.scripts || [])
+          .map((s) => '<option value="' + s.id + '">' + s.name + '</option>')
+          .join('');
+        ['keyScSelect', 'wlScSelect', 'sendScriptSelect'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = scriptOptions;
+        });
+
+        const recentList = (data.keys || []).slice(0, 8);
+        const recentEl = document.getElementById('recentKeysTable');
+        if (recentEl) {
+          recentEl.innerHTML = recentList.length
             ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th></tr>' +
-              recentRows +
+              recentList
+                .map(
+                  (k) =>
+                    '<tr><td><code>' +
+                    k.key +
+                    '</code></td><td>' +
+                    (k.duration || 'lifetime') +
+                    '</td><td>' +
+                    renderProfileBadge(k.createdByName, k.createdByAvatar, '-') +
+                    '</td><td>' +
+                    (k.used
+                      ? renderProfileBadge(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
+                      : 'Hələ işlənməyib') +
+                    '</td></tr>'
+                )
+                .join('') +
               '</table>'
             : 'Hələ key yaradılmayıb.';
         }
 
-        renderCharts(data);
-
-        const scriptOpts = (data.scripts || [])
-          .map((s) => '<option value="' + s.id + '">' + s.name + '</option>')
-          .join('');
-        ['panelScriptSelect', 'keyScriptSelect', 'wlScriptSelect'].forEach((selId) => {
-          const el = document.getElementById(selId);
-          if (el) el.innerHTML = scriptOpts;
-        });
-
-        const scriptsListEl = document.getElementById('scriptsList');
-        if (scriptsListEl) {
-          const loaderBaseOrigin = window.location.origin;
-          scriptsListEl.innerHTML = (data.scripts || [])
+        const scListEl = document.getElementById('existingScriptsList');
+        if (scListEl) {
+          const origin = window.location.origin;
+          scListEl.innerHTML = (data.scripts || [])
             .map((s) => {
-              const loaderUrl = loaderBaseOrigin + '/loader/' + s.loaderToken + '?ws=' + wsId;
-              const getScriptText =
+              const loaderUrl = origin + '/loader/' + s.loaderToken + '?ws=' + currentWsId;
+              const getScriptSnippet =
                 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
-              const obfBadge = s.obfuscated
-                ? ' • 🛡️ Obfuscated (Lv.' + (s.obfuscateLevel || 3) + ')'
-                : ' • Obfuscation Bağlı';
+              const badge = s.obfuscated
+                ? '🛡️ Obfuscation Açıq (Lv.' + (s.obfuscateLevel || 3) + ')'
+                : 'Obfuscation Bağlı';
               return (
-                '<div class="script-item"><div class="script-head"><div><strong>📜 ' +
+                '<div class="script-card"><div class="script-top"><div><strong>📜 ' +
                 s.name +
-                '</strong><div class="brand-sub">' +
-                s.name +
-                '.lua' +
-                obfBadge +
-                '</div></div>' +
-                '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button type="button" class="btn btn-blue btn-sm" data-copy-code="' +
-                encodeURIComponent(getScriptText) +
-                '">📋 Kopyala</button>' +
-                '<button type="button" class="btn btn-red btn-sm" data-del-script="' +
+                '</strong><div class="logo-sub">' +
+                badge +
+                '</div></div><div style="display:flex;gap:8px;">' +
+                '<button type="button" class="action-btn btn-cyan btn-mini" onclick="window.sadoCopyString(\'' +
+                encodeURIComponent(getScriptSnippet) +
+                '\')">📋 Get Script Kopyala</button>' +
+                '<button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteScript(\'' +
                 s.id +
-                '">🗑️ Sil</button></div></div>' +
-                '<div class="loader-box">' +
-                getScriptText.replace(/\n/g, '<br/>') +
+                '\')">🗑️ Sil</button></div></div>' +
+                '<div class="code-preview">' +
+                getScriptSnippet.replace(/\n/g, '<br/>') +
                 '</div></div>'
               );
             })
             .join('');
         }
 
-        const keysListEl = document.getElementById('keysList');
-        if (keysListEl) {
-          const keyRows = (data.keys || [])
-            .map(
-              (k) =>
-                '<tr><td>' +
-                k.key +
-                '</td><td>' +
-                (k.duration || 'lifetime') +
-                '</td><td>' +
-                (k.createdByName || '-') +
-                '</td><td>' +
-                (k.usedByName || (k.used ? k.usedByDiscordId : 'Boş')) +
-                '</td><td><button type="button" class="btn btn-red btn-sm" data-del-key="' +
-                encodeURIComponent(k.key) +
-                '">Sil</button></td></tr>'
-            )
-            .join('');
-          keysListEl.innerHTML = (data.keys || []).length
-            ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
-              keyRows +
+        const allKeysEl = document.getElementById('allKeysTable');
+        if (allKeysEl) {
+          allKeysEl.innerHTML = (data.keys || []).length
+            ? '<table><tr><th>Key</th><th>Skript</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
+              (data.keys || [])
+                .map(
+                  (k) =>
+                    '<tr><td><code>' +
+                    k.key +
+                    '</code></td><td>' +
+                    (k.scriptName || '-') +
+                    '</td><td>' +
+                    (k.duration || 'lifetime') +
+                    '</td><td>' +
+                    renderProfileBadge(k.createdByName, k.createdByAvatar, '-') +
+                    '</td><td>' +
+                    (k.used
+                      ? renderProfileBadge(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
+                      : 'Boş') +
+                    '</td><td><button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteKey(\'' +
+                    encodeURIComponent(k.key) +
+                    '\')">Sil</button></td></tr>'
+                )
+                .join('') +
               '</table>'
-            : '<div class="brand-sub" style="margin-top:6px;">Hələ key yoxdur.</div>';
+            : '<div class="logo-sub">Hələ key yaradılmayıb.</div>';
         }
 
-        const wlListEl = document.getElementById('wlList');
-        if (wlListEl) {
-          const wlRows = (data.whitelists || [])
-            .map(
-              (w) =>
-                '<tr><td>' +
-                (w.username || w.discordUserId) +
-                '<br/><span style="color:#9ca3af">Edən: ' +
-                (w.addedByName || '-') +
-                '</span></td><td>' +
-                (w.hwid || 'Yoxdur (İlk cihaza bağlanacaq)') +
-                '</td><td>' +
-                (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
-                '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
-                '<button type="button" class="btn btn-blue btn-sm" data-lock-wl="' +
-                w.id +
-                '">Kilid</button>' +
-                '<button type="button" class="btn btn-purple btn-sm" data-reset-wl="' +
-                w.id +
-                '">Reset HWID</button>' +
-                '<button type="button" class="btn btn-red btn-sm" data-del-wl="' +
-                w.id +
-                '">Sil</button></div></td></tr>'
-            )
-            .join('');
-          wlListEl.innerHTML = (data.whitelists || []).length
+        const allWlEl = document.getElementById('allWlTable');
+        if (allWlEl) {
+          allWlEl.innerHTML = (data.whitelists || []).length
             ? '<table><tr><th>İstifadəçi</th><th>Bağlı HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
-              wlRows +
+              (data.whitelists || [])
+                .map(
+                  (w) =>
+                    '<tr><td>' +
+                    renderProfileBadge(w.username, w.avatarUrl, w.discordUserId) +
+                    '<div class="logo-sub">Edən: ' +
+                    (w.addedByName || '-') +
+                    '</div></td><td><code>' +
+                    (w.hwid || 'İlk cihaza bağlanacaq') +
+                    '</code></td><td>' +
+                    (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
+                    '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                    '<button type="button" class="action-btn btn-cyan btn-mini" onclick="window.sadoToggleWlLock(\'' +
+                    w.id +
+                    '\')">Kilid</button>' +
+                    '<button type="button" class="action-btn btn-violet btn-mini" onclick="window.sadoResetWlHwid(\'' +
+                    w.id +
+                    '\')">Reset HWID</button>' +
+                    '<button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteWl(\'' +
+                    w.id +
+                    '\')">Sil</button></div></td></tr>'
+                )
+                .join('') +
               '</table>'
-            : '<div class="brand-sub" style="margin-top:6px;">Aktiv whitelist yoxdur.</div>';
+            : '<div class="logo-sub">Aktiv whitelist yoxdur.</div>';
         }
 
-        const blListEl = document.getElementById('blList');
-        if (blListEl) {
-          const blRows = (data.blacklist || [])
-            .map(
-              (b) =>
-                '<tr><td>' +
-                b.discordUserId +
-                '</td><td>' +
-                (b.username || '-') +
-                '</td><td><button type="button" class="btn btn-red btn-sm" data-del-bl="' +
-                b.id +
-                '">Çıxar</button></td></tr>'
-            )
-            .join('');
-          blListEl.innerHTML = (data.blacklist || []).length
-            ? '<table><tr><th>ID</th><th>Ad</th><th>Sil</th></tr>' +
-              blRows +
+        const allBlEl = document.getElementById('allBlTable');
+        if (allBlEl) {
+          allBlEl.innerHTML = (data.blacklist || []).length
+            ? '<table><tr><th>İstifadəçi</th><th>ID</th><th>Sil</th></tr>' +
+              (data.blacklist || [])
+                .map(
+                  (b) =>
+                    '<tr><td>' +
+                    renderProfileBadge(b.username, b.avatarUrl, b.discordUserId) +
+                    '</td><td>' +
+                    b.discordUserId +
+                    '</td><td><button type="button" class="action-btn btn-rose btn-mini" onclick="window.sadoDeleteBl(\'' +
+                    b.id +
+                    '\')">Çıxar</button></td></tr>'
+                )
+                .join('') +
               '</table>'
-            : '<div class="brand-sub" style="margin-top:6px;">Blacklist boşdur.</div>';
+            : '<div class="logo-sub">Blacklist boşdur.</div>';
         }
 
-        if (!uiState.initialLoaded) {
-          if (guildIdInput) guildIdInput.value = data.guildId || '';
-          if (discordUserIdInput) discordUserIdInput.value = data.discordUserId || '';
-          if (liveGuildPreview) {
-            liveGuildPreview.textContent = data.guildName
-              ? 'Sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
-              : 'Sunucu: Seçilməyib';
-          }
+        if (!appState.hydrated) {
+          document.getElementById('inputGuildId').value = data.guildId || '';
+          document.getElementById('inputOwnerDiscordId').value = data.discordUserId || '';
+          document.getElementById('guildNameLiveBadge').textContent =
+            'Sunucu Adı: ' + (data.guildName || 'Seçilməyib');
           const cfg = data.panelConfig || {};
-          if (cfg.embedColor && document.getElementById('embedColorInput')) {
-            document.getElementById('embedColorInput').value = cfg.embedColor.toUpperCase();
-            syncPickerFromHex(cfg.embedColor);
+          if (cfg.embedColor) {
+            document.getElementById('cfgEmbedColor').value = cfg.embedColor.toUpperCase();
+            window.sadoSyncColorPicker(cfg.embedColor);
           }
-          if (cfg.title && document.getElementById('panelTitleInput')) {
-            document.getElementById('panelTitleInput').value = cfg.title;
-          }
-          if (cfg.description && document.getElementById('panelDescInput')) {
-            document.getElementById('panelDescInput').value = cfg.description;
-          }
-          if (cfg.redeemLabel && document.getElementById('redeemLabelInput')) {
-            document.getElementById('redeemLabelInput').value = cfg.redeemLabel;
-          }
-          if (cfg.redeemEmoji && document.getElementById('redeemEmojiInput')) {
-            document.getElementById('redeemEmojiInput').value = cfg.redeemEmoji;
-          }
-          if (cfg.redeemStyle && document.getElementById('redeemStyleInput')) {
-            document.getElementById('redeemStyleInput').value = cfg.redeemStyle;
-          }
-          if (cfg.getScriptLabel && document.getElementById('getScriptLabelInput')) {
-            document.getElementById('getScriptLabelInput').value = cfg.getScriptLabel;
-          }
-          if (cfg.getScriptEmoji && document.getElementById('getScriptEmojiInput')) {
-            document.getElementById('getScriptEmojiInput').value = cfg.getScriptEmoji;
-          }
-          if (cfg.getScriptStyle && document.getElementById('getScriptStyleInput')) {
-            document.getElementById('getScriptStyleInput').value = cfg.getScriptStyle;
-          }
-          if (cfg.resetHwidLabel && document.getElementById('resetHwidLabelInput')) {
-            document.getElementById('resetHwidLabelInput').value = cfg.resetHwidLabel;
-          }
-          if (cfg.resetHwidEmoji && document.getElementById('resetHwidEmojiInput')) {
-            document.getElementById('resetHwidEmojiInput').value = cfg.resetHwidEmoji;
-          }
-          if (cfg.resetHwidStyle && document.getElementById('resetHwidStyleInput')) {
-            document.getElementById('resetHwidStyleInput').value = cfg.resetHwidStyle;
-          }
-          if (cfg.statsLabel && document.getElementById('statsLabelInput')) {
-            document.getElementById('statsLabelInput').value = cfg.statsLabel;
-          }
-          if (cfg.statsEmoji && document.getElementById('statsEmojiInput')) {
-            document.getElementById('statsEmojiInput').value = cfg.statsEmoji;
-          }
-          if (cfg.statsStyle && document.getElementById('statsStyleInput')) {
-            document.getElementById('statsStyleInput').value = cfg.statsStyle;
-          }
+          if (cfg.title) document.getElementById('cfgTitle').value = cfg.title;
+          if (cfg.description) document.getElementById('cfgDesc').value = cfg.description;
+          if (cfg.redeemLabel) document.getElementById('cfgRedeemLabel').value = cfg.redeemLabel;
+          if (cfg.redeemEmoji) document.getElementById('cfgRedeemEmoji').value = cfg.redeemEmoji;
+          if (cfg.redeemStyle) document.getElementById('cfgRedeemStyle').value = cfg.redeemStyle;
+          if (cfg.getScriptLabel) document.getElementById('cfgGetScriptLabel').value = cfg.getScriptLabel;
+          if (cfg.getScriptEmoji) document.getElementById('cfgGetScriptEmoji').value = cfg.getScriptEmoji;
+          if (cfg.getScriptStyle) document.getElementById('cfgGetScriptStyle').value = cfg.getScriptStyle;
+          if (cfg.resetHwidLabel) document.getElementById('cfgResetHwidLabel').value = cfg.resetHwidLabel;
+          if (cfg.resetHwidEmoji) document.getElementById('cfgResetHwidEmoji').value = cfg.resetHwidEmoji;
+          if (cfg.resetHwidStyle) document.getElementById('cfgResetHwidStyle').value = cfg.resetHwidStyle;
+          if (cfg.statsLabel) document.getElementById('cfgStatsLabel').value = cfg.statsLabel;
+          if (cfg.statsEmoji) document.getElementById('cfgStatsEmoji').value = cfg.statsEmoji;
+          if (cfg.statsStyle) document.getElementById('cfgStatsStyle').value = cfg.statsStyle;
           if (Array.isArray(cfg.buttonOrder) && cfg.buttonOrder.length) {
-            uiState.buttonOrder = cfg.buttonOrder.slice();
+            appState.buttonOrder = cfg.buttonOrder.slice();
           }
-          renderButtonOrderBox();
-          uiState.initialLoaded = true;
+          drawOrderStack();
+          appState.hydrated = true;
         }
-      } catch (_err) {}
+      } catch (_e) {}
     };
 
-    const copyText = (txt) => {
-      const ta = document.createElement('textarea');
-      ta.value = txt;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      showToast('Kopyalandı!');
-    };
-
-    const createScript = async () => {
-      const name = document.getElementById('scriptNameInput').value.trim();
-      const code = document.getElementById('scriptCodeInput').value;
-      const obfuscate = document.getElementById('createObfCheckbox').checked;
-      const obfuscateLevel = Number(document.getElementById('obfLevelSelect').value || 3);
-      const r = await apiFetch('/api/scripts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name,
-          code: code,
-          obfuscate: obfuscate,
-          obfuscateLevel: obfuscateLevel,
-        }),
-      });
-      const j = await r.json();
-      if (j && j.ok) document.getElementById('scriptNameInput').value = '';
-      showToast((j && j.message) || 'Skript yaradıldı');
-      await renderAll();
-    };
-
-    const deleteScript = async (id) => {
-      const r = await apiFetch('/api/scripts/' + id, { method: 'DELETE' });
-      const j = await r.json();
-      showToast((j && j.message) || 'Silindi');
-      await renderAll();
-    };
-
-    const runStandaloneObf = async () => {
-      const code = document.getElementById('obfInputCode')
-        ? document.getElementById('obfInputCode').value || document.getElementById('scriptCodeInput').value
-        : document.getElementById('scriptCodeInput').value;
-      const level = Number(document.getElementById('obfLevelSelect').value || 3);
-      const r = await apiFetch('/api/obfuscate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code, level: level }),
-      });
-      const j = await r.json();
-      if (j && j.obfuscated) document.getElementById('obfResultBox').value = j.obfuscated;
-      showToast((j && j.message) || 'Şifrələndi');
-    };
-
-    const copyObfCode = () => {
-      const val = document.getElementById('obfResultBox').value;
-      if (!val) {
-        showToast('Şifrələnmiş kod boşdur');
-        return;
-      }
-      copyText(val);
-    };
-
-    const generateKeys = async () => {
-      const scriptId = document.getElementById('keyScriptSelect').value;
-      const duration = document.getElementById('keyDurationSelect').value;
-      const amount = Number(document.getElementById('keyAmountInput').value || 1);
-      const createdByDiscordId = document.getElementById('discordUserIdInput').value.trim();
-      const r = await apiFetch('/api/keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scriptId: scriptId,
-          duration: duration,
-          amount: amount,
-          createdByDiscordId: createdByDiscordId,
-        }),
-      });
-      const j = await r.json();
-      showToast((j && j.message) || 'Key yaradıldı');
-      await renderAll();
-    };
-
-    const deleteKey = async (k) => {
-      const r = await apiFetch('/api/keys/' + k, { method: 'DELETE' });
-      const j = await r.json();
-      showToast((j && j.message) || 'Silindi');
-      await renderAll();
-    };
-
-    const addWhitelist = async () => {
-      const discordUserId = document.getElementById('wlUserIdInput').value.trim();
-      const scriptId = document.getElementById('wlScriptSelect').value;
-      const duration = document.getElementById('wlDurationSelect').value;
-      const hwidLocked = document.getElementById('wlLockCheckbox').checked;
-      const addedByDiscordId = document.getElementById('discordUserIdInput').value.trim();
-      const r = await apiFetch('/api/whitelist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          discordUserId: discordUserId,
-          scriptId: scriptId,
-          duration: duration,
-          hwidLocked: hwidLocked,
-          addedByDiscordId: addedByDiscordId,
-        }),
-      });
-      const j = await r.json();
-      if (j && j.ok) document.getElementById('wlUserIdInput').value = '';
-      showToast((j && j.message) || 'Whitelist yeniləndi');
-      await renderAll();
-    };
-
-    const toggleLock = async (id) => {
-      const r = await apiFetch('/api/whitelist/' + id + '/toggle-lock', { method: 'POST' });
-      const j = await r.json();
-      showToast((j && j.message) || 'Kilid dəyişdi');
-      await renderAll();
-    };
-
-    const resetHw = async (id) => {
-      const r = await apiFetch('/api/whitelist/' + id + '/reset-hwid', { method: 'POST' });
-      const j = await r.json();
-      showToast((j && j.message) || 'HWID sıfırlandı');
-      await renderAll();
-    };
-
-    const delWl = async (id) => {
-      const r = await apiFetch('/api/whitelist/' + id, { method: 'DELETE' });
-      const j = await r.json();
-      showToast((j && j.message) || 'Silindi');
-      await renderAll();
-    };
-
-    const addBlacklist = async () => {
-      const discordUserId = document.getElementById('blUserIdInput').value.trim();
-      const r = await apiFetch('/api/blacklist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ discordUserId: discordUserId }),
-      });
-      const j = await r.json();
-      if (j && j.ok) document.getElementById('blUserIdInput').value = '';
-      showToast((j && j.message) || 'Blacklist yeniləndi');
-      await renderAll();
-    };
-
-    const delBl = async (id) => {
-      const r = await apiFetch('/api/blacklist/' + id, { method: 'DELETE' });
-      const j = await r.json();
-      showToast((j && j.message) || 'Silindi');
-      await renderAll();
-    };
-
-    const linkWorkspace = async () => {
-      const guildId = document.getElementById('guildIdInput').value.trim();
-      const discordUserId = document.getElementById('discordUserIdInput').value.trim();
-      const r = await apiFetch('/api/workspace/link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guildId: guildId, discordUserId: discordUserId }),
-      });
-      const j = await r.json();
-      uiState.initialLoaded = false;
-      showToast((j && j.message) || 'Yadda saxlandı');
-      await renderAll();
-    };
-
-    const sendPanelToChannel = async () => {
-      const channelId = document.getElementById('panelChannelIdInput').value.trim();
-      const scriptId = document.getElementById('panelScriptSelect').value;
-      const r = await apiFetch('/api/send-panel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId: channelId, scriptId: scriptId }),
-      });
-      const j = await r.json();
-      showToast((j && j.message) || 'Panel göndərildi');
-      await renderAll();
-    };
-
-    const savePanelDesign = async () => {
-      const payload = {
-        embedColor: document.getElementById('embedColorInput').value.trim(),
-        title: document.getElementById('panelTitleInput').value.trim(),
-        description: document.getElementById('panelDescInput').value.trim(),
-        redeemLabel: document.getElementById('redeemLabelInput').value.trim(),
-        redeemEmoji: document.getElementById('redeemEmojiInput').value.trim(),
-        redeemStyle: document.getElementById('redeemStyleInput').value,
-        getScriptLabel: document.getElementById('getScriptLabelInput').value.trim(),
-        getScriptEmoji: document.getElementById('getScriptEmojiInput').value.trim(),
-        getScriptStyle: document.getElementById('getScriptStyleInput').value,
-        resetHwidLabel: document.getElementById('resetHwidLabelInput').value.trim(),
-        resetHwidEmoji: document.getElementById('resetHwidEmojiInput').value.trim(),
-        resetHwidStyle: document.getElementById('resetHwidStyleInput').value,
-        statsLabel: document.getElementById('statsLabelInput').value.trim(),
-        statsEmoji: document.getElementById('statsEmojiInput').value.trim(),
-        statsStyle: document.getElementById('statsStyleInput').value,
-        buttonOrder: uiState.buttonOrder.slice(),
-      };
-      const r = await apiFetch('/api/panel-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const j = await r.json();
-      showToast((j && j.message) || 'Panel dizaynı yeniləndi');
-      await renderAll();
-    };
-
-    const menuBtn = document.getElementById('menuToggleBtn');
-    if (menuBtn) {
-      menuBtn.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        toggleMenu();
-      });
-    }
-
-    document.querySelectorAll('.nav-chip').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        const p = chip.getAttribute('data-page');
-        if (p) openPage(p);
-      });
-    });
-
-    document.addEventListener('click', (ev) => {
-      const clickedBtn =
-        ev.target && ev.target.closest ? ev.target.closest('#menuToggleBtn, button') : null;
-      if (clickedBtn && clickedBtn.id === 'menuToggleBtn') {
-        ev.preventDefault();
-        ev.stopPropagation();
-        toggleMenu();
-        return;
-      }
-      const target = ev.target && ev.target.closest ? ev.target.closest('button') : null;
-      if (!target) return;
-      if (target.hasAttribute('data-move-btn')) {
-        moveButtonInOrder(
-          target.getAttribute('data-move-btn') || '',
-          target.getAttribute('data-move-dir') || 'up'
-        );
-      } else if (target.hasAttribute('data-copy-code')) {
-        copyText(decodeURIComponent(target.getAttribute('data-copy-code') || ''));
-      } else if (target.hasAttribute('data-del-script')) {
-        deleteScript(target.getAttribute('data-del-script') || '');
-      } else if (target.hasAttribute('data-del-key')) {
-        deleteKey(target.getAttribute('data-del-key') || '');
-      } else if (target.hasAttribute('data-lock-wl')) {
-        toggleLock(target.getAttribute('data-lock-wl') || '');
-      } else if (target.hasAttribute('data-reset-wl')) {
-        resetHw(target.getAttribute('data-reset-wl') || '');
-      } else if (target.hasAttribute('data-del-wl')) {
-        delWl(target.getAttribute('data-del-wl') || '');
-      } else if (target.hasAttribute('data-del-bl')) {
-        delBl(target.getAttribute('data-del-bl') || '');
-      }
-    });
-
-    const pickerEl = document.getElementById('embedColorPicker');
-    const hexEl = document.getElementById('embedColorInput');
-    if (pickerEl && hexEl) {
-      pickerEl.addEventListener('input', () => {
-        hexEl.value = pickerEl.value.toUpperCase();
-      });
-      hexEl.addEventListener('input', () => {
-        syncPickerFromHex(hexEl.value);
-      });
-    }
-
-    const fileEl = document.getElementById('scriptFileInput');
-    if (fileEl) {
-      fileEl.addEventListener('change', () => loadScriptFile(fileEl));
-    }
-
-    const guildInputEl = document.getElementById('guildIdInput');
-    const discordInputEl = document.getElementById('discordUserIdInput');
-    const guildSelectEl = document.getElementById('guildSelect');
-    if (guildInputEl) guildInputEl.addEventListener('input', lookupGuildLive);
-    if (discordInputEl) discordInputEl.addEventListener('input', lookupGuildLive);
-    if (guildSelectEl) {
-      guildSelectEl.addEventListener('change', () => {
-        if (guildInputEl && guildSelectEl.value) {
-          guildInputEl.value = guildSelectEl.value;
-          lookupGuildLive();
-        }
-      });
-    }
-
-    const actionMap = {
-      createScriptBtn: createScript,
-      sendPanelBtn: sendPanelToChannel,
-      runObfBtn: runStandaloneObf,
-      copyObfBtn: copyObfCode,
-      genKeysBtn: generateKeys,
-      addWhitelistBtn: addWhitelist,
-      addBlacklistBtn: addBlacklist,
-      linkWorkspaceBtn: linkWorkspace,
-      savePanelDesignBtn: savePanelDesign,
-    };
-
-    Object.keys(actionMap).forEach((id) => {
-      const btn = document.getElementById(id);
-      if (btn) btn.addEventListener('click', actionMap[id]);
-    });
-
-    renderButtonOrderBox();
-    renderAll();
-    setInterval(renderAll, 7000);
+    drawOrderStack();
+    refreshDashboard();
+    setInterval(refreshDashboard, 6500);
   </script>
 </body>
 </html>`;
