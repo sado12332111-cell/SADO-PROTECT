@@ -31,6 +31,7 @@ const TOKEN_PARTS = [
   'MTU2MjA4MDY1NDI4MjE5OTEyMQ',
   'GezNfm',
   'uOsxre1d-X2aUXZ55ua1vaumADoI-JbvNxXOg0',
+];
 const BOT_TOKEN = String(
   process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || TOKEN_PARTS.join('.')
 ).trim();
