@@ -2123,7 +2123,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="shell">
     <header class="topbar">
       <div class="brand-group">
-        <button type="button" class="menu-trigger" id="openMenuBtn" aria-label="Menyu">☰</button>
+        <button type="button" class="menu-trigger" id="openMenuBtn" aria-label="Menyu" onclick="document.getElementById('navOverlay').style.display='flex'">☰</button>
         <div>
           <div class="brand-name">SADO PROTECT</div>
           <div class="brand-meta" id="headerSub">Cyber Command • Qoşulan Sunucu: Seçilməyib</div>
@@ -2911,7 +2911,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     renderButtonOrderList();
     loadAllData();
     setInterval(loadAllData, 6500);
-  </script>
+  <\/script>
 </body>
 </html>`;
 
