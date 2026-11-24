@@ -955,7 +955,8 @@ const getDashboardSnapshot = async () => {
     }
   }
 
-  const displayGuild = guildName || `Sunucu #${guildId}`;
+  // Yalnız sunucu ID-yə bağlı sunucunun adını göstərir (ID əlavə etmir)
+  const displayGuild = guildName && guildName !== "Sado Protect Hub" ? guildName : "Sunucu seçilməyib";
 
   return {
     stats: {
@@ -1421,77 +1422,34 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="layout-shell">
     <aside class="sidebar" id="sidebarNav">
       <button type="button" class="nav-btn active" data-tab="overview" onclick="window.sadoSelectTab('overview')">📊 İdarəetmə</button>
-      <button type="button" class="nav-btn" data-tab="scripts" onclick="window.sadoSelectTab('scripts')">📜 Scriptlər</button>
-      <button type="button" class="nav-btn" data-tab="keys" onclick="window.sadoSelectTab('keys')">🔑 Keylər</button>
       <button type="button" class="nav-btn" data-tab="design" onclick="window.sadoSelectTab('design')">🎨 Panel Dizaynı</button>
-      <button type="button" class="nav-btn" data-tab="lists" onclick="window.sadoSelectTab('lists')">🛡️ Whitelist / Blacklist</button>
     </aside>
 
     <main class="main-content">
-      <section class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Aktiv Scriptlər</div>
-          <div class="stat-value" id="statScriptsCount">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Yaradılan Keylər</div>
-          <div class="stat-value" id="statKeysCount">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Bağlanan Sunucu</div>
-          <div class="stat-value" id="statGuildName">-</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Whitelist / Blacklist</div>
-          <div class="stat-value" id="statListsCount">0 / 0</div>
-        </div>
-      </section>
+      <div class="tab-section active" id="tab-overview">
+        <section class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Bağlanan Sunucu</div>
+            <div class="stat-value" id="statGuildName">Sunucu seçilməyib</div>
+          </div>
+        </section>
 
-      <div class="tab-section active" id="tab-overview"></div>
-
-      <div class="tab-section" id="tab-scripts">
         <div class="panel-card">
-          <div class="panel-heading">📜 Yeni Script Yarat</div>
+          <div class="panel-heading">🤖 Discord Bot Bağlantısı</div>
+          <div class="info-box" id="connectedGuildBanner">Bağlanan Sunucu: Sunucu seçilməyib</div>
           <div class="form-grid">
             <div>
-              <label for="scriptNameInput">Script Adı</label>
-              <input type="text" id="scriptNameInput" placeholder="Script adını daxil edin" />
+              <label for="guildIdInput">Sunucu ID</label>
+              <input type="text" id="guildIdInput" placeholder="Sunucu ID daxil edin" />
             </div>
             <div>
-              <label for="scriptLoaderInput">Loader URL</label>
-              <input type="text" id="scriptLoaderInput" placeholder="https://example.com/loader.lua" />
-            </div>
-            <div>
-              <label for="scriptFileInput">Dosya Əlavə Et (.lua / .txt / .js)</label>
-              <input type="file" id="scriptFileInput" accept=".lua,.txt,.js,.json,*/*" />
+              <label for="panelChannelIdInput">Panel Kanal ID</label>
+              <input type="text" id="panelChannelIdInput" placeholder="Panel kanal ID daxil edin" />
             </div>
           </div>
           <div class="btn-row">
-            <button type="button" class="btn btn-amber" id="createScriptBtn">Script Yarat</button>
+            <button type="button" class="btn btn-amber" id="connectGuildBotBtn">Botu Bağla və Paneli Yenilə</button>
           </div>
-        </div>
-
-        <div class="panel-card">
-          <div class="panel-heading">📦 Mövcud Scriptlər</div>
-          <div class="list-stack" id="scriptsListContainer"></div>
-        </div>
-      </div>
-
-      <div class="tab-section" id="tab-keys">
-        <div class="panel-card">
-          <div class="panel-heading">🔑 Key İdarəetməsi</div>
-          <div class="form-grid">
-            <div>
-              <label for="keyScriptSelect">Script Seçimi</label>
-              <select id="keyScriptSelect"></select>
-            </div>
-            <div>
-              <label for="customKeyInput">Xüsusi Key (Boş qalsa avtomatik yaranır)</label>
-              <input type="text" id="customKeyInput" placeholder="SADO-XXXX-XXXX" />
-            </div>
-          </div>
-          <button type="button" class="btn btn-amber" id="generateKeyBtn">Yeni Key Yarat</button>
-          <div class="list-stack" id="keysListContainer"></div>
         </div>
       </div>
 
@@ -1517,33 +1475,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             <input type="text" id="designFooterInput" />
           </div>
 
-          <div class="panel-heading">🎛️ Panel Butonları (Yerini Yuxarı/Aşağı Dəyişin)</div>
+          <div class="panel-heading">🎛️ Panel Butonları (Adını, Emojisini və Yerini Dəyişin)</div>
           <div id="buttonsEditorContainer"></div>
 
           <div class="btn-row" style="margin-top:14px;">
             <button type="button" class="btn btn-amber" id="saveDesignBtn">💾 Ayarları Yadda Saxla</button>
           </div>
-        </div>
-      </div>
-
-      <div class="tab-section" id="tab-lists">
-        <div class="panel-card">
-          <div class="panel-heading">🛡️ Whitelist / Blacklist</div>
-          <div class="form-grid">
-            <div>
-              <label for="listTargetInput">İstifadəçi / HWID / ID</label>
-              <input type="text" id="listTargetInput" placeholder="Dəyər daxil edin" />
-            </div>
-            <div>
-              <label for="listTypeSelect">Siyahı Növü</label>
-              <select id="listTypeSelect">
-                <option value="whitelist">Whitelist</option>
-                <option value="blacklist">Blacklist</option>
-              </select>
-            </div>
-          </div>
-          <button type="button" class="btn btn-amber" id="addListEntryBtn">Siyahıya Əlavə Et</button>
-          <div class="list-stack" id="listsContainer"></div>
         </div>
       </div>
     </main>
@@ -1637,14 +1574,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (!data) return;
       snapshotCache = data;
 
-      const guildDisplayName = data.stats?.guildName || "Seçilməyib";
-      const wlCount = data.stats?.whitelistCount ?? 0;
-      const blCount = data.stats?.blacklistCount ?? 0;
+      const guildDisplayName = data.stats?.guildName || "Sunucu seçilməyib";
 
-      document.getElementById("statScriptsCount").textContent = String(data.stats?.activeScripts ?? 0);
-      document.getElementById("statKeysCount").textContent = String(data.stats?.totalKeys ?? 0);
-      document.getElementById("statGuildName").textContent = guildDisplayName;
-      document.getElementById("statListsCount").textContent = String(wlCount) + " / " + String(blCount);
+      const statGuildEl = document.getElementById("statGuildName");
+      if (statGuildEl) {
+        statGuildEl.textContent = guildDisplayName;
+      }
 
       const guildBannerEl = document.getElementById("connectedGuildBanner");
       if (guildBannerEl) {
@@ -1668,69 +1603,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         labelEl.textContent = "Bot: Aktiv (" + guildDisplayName + ")";
       }
 
-      const scriptsContainer = document.getElementById("scriptsListContainer");
-      scriptsContainer.innerHTML = "";
-      const scriptSelect = document.getElementById("keyScriptSelect");
-      scriptSelect.innerHTML = '<option value="">Ümumi / Default</option>';
-
-      (data.scripts || []).forEach((sc) => {
-        const opt = document.createElement("option");
-        opt.value = sc.name;
-        opt.textContent = sc.name;
-        scriptSelect.appendChild(opt);
-
-        const detailMeta = sc.fileName
-          ? ("Dosya: " + sc.fileName + " • " + (sc.loaderUrl || "Yüklənmiş script dosyası"))
-          : (sc.loaderUrl || "Loader URL yoxdur");
-
-        const row = document.createElement("div");
-        row.className = "list-item";
-        row.innerHTML =
-          '<div><strong>' + sc.name + '</strong><div style="font-size:12px;color:#94a3b8;">' + detailMeta + '</div></div>' +
-          '<div class="btn-row">' +
-          '<button type="button" class="btn btn-ghost" onclick="updateScriptPrompt(\'' + sc.id + '\', \'' + encodeURIComponent(sc.name) + '\', \'' + encodeURIComponent(sc.loaderUrl || "") + '\')">Update</button>' +
-          '<button type="button" class="btn btn-red" onclick="deleteScriptItem(\'' + sc.id + '\')">Silmək</button>' +
-          '</div>';
-        scriptsContainer.appendChild(row);
-      });
-
-      const keysContainer = document.getElementById("keysListContainer");
-      keysContainer.innerHTML = "";
-      (data.keys || []).forEach((k) => {
-        const row = document.createElement("div");
-        row.className = "list-item";
-        row.innerHTML =
-          '<div><strong><code>' + k.key + '</code></strong><div style="font-size:12px;color:#94a3b8;">Script: ' + (k.scriptName || "-") + ' • HWID: ' + (k.hwid || "Boş") + '</div></div>' +
-          '<button type="button" class="btn btn-red" onclick="deleteKeyItem(\'' + k.id + '\')">Sil</button>';
-        keysContainer.appendChild(row);
-      });
-
       const titleInput = document.getElementById("designTitleInput");
       const colorInput = document.getElementById("designColorInput");
       const descInput = document.getElementById("designDescInput");
       const footerInput = document.getElementById("designFooterInput");
 
-      if (document.activeElement !== titleInput) titleInput.value = data.design?.title || "";
-      if (document.activeElement !== colorInput) colorInput.value = data.design?.color || "#F59E0B";
-      if (document.activeElement !== descInput) descInput.value = data.design?.description || "";
-      if (document.activeElement !== footerInput) footerInput.value = data.design?.footer || "";
+      if (titleInput && document.activeElement !== titleInput) titleInput.value = data.design?.title || "";
+      if (colorInput && document.activeElement !== colorInput) colorInput.value = data.design?.color || "#F59E0B";
+      if (descInput && document.activeElement !== descInput) descInput.value = data.design?.description || "";
+      if (footerInput && document.activeElement !== footerInput) footerInput.value = data.design?.footer || "";
 
       renderButtonsEditor(data.design?.buttons || []);
-
-      const listsContainer = document.getElementById("listsContainer");
-      listsContainer.innerHTML = "";
-      (data.whitelist || []).forEach((item) => {
-        const row = document.createElement("div");
-        row.className = "list-item";
-        row.innerHTML = '<span><strong>[WHITELIST]</strong> ' + item.value + '</span><button type="button" class="btn btn-red" onclick="removeListItem(\'whitelist\', \'' + item.id + '\')">Sil</button>';
-        listsContainer.appendChild(row);
-      });
-      (data.blacklist || []).forEach((item) => {
-        const row = document.createElement("div");
-        row.className = "list-item";
-        row.innerHTML = '<span><strong>[BLACKLIST]</strong> ' + item.value + '</span><button type="button" class="btn btn-red" onclick="removeListItem(\'blacklist\', \'' + item.id + '\')">Sil</button>';
-        listsContainer.appendChild(row);
-      });
     };
 
     window.updateScriptPrompt = async (id, encName, encLoader) => {
@@ -1814,16 +1697,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput")
     );
 
-    document.getElementById("generateKeyBtn").addEventListener("click", async () => {
-      const scriptName = document.getElementById("keyScriptSelect").value;
-      const customKey = document.getElementById("customKeyInput").value.trim();
-      const res = await callApi("/api/keys", "POST", { scriptName, customKey });
-      if (res.data) {
-        renderSnapshot(res.data);
-        document.getElementById("customKeyInput").value = "";
-      }
-      showToast(res.ok ? "Key yaradıldı!" : ("Xəta: " + res.error));
-    });
+    const connectGuildBotBtn = document.getElementById("connectGuildBotBtn");
+    if (connectGuildBotBtn) {
+      connectGuildBotBtn.addEventListener("click", async () => {
+        const guildId = document.getElementById("guildIdInput")?.value.trim() || "";
+        const panelChannelId = document.getElementById("panelChannelIdInput")?.value.trim() || "";
+        const res = await callApi("/api/bot/connect", "POST", { guildId, panelChannelId });
+        if (res.data) renderSnapshot(res.data);
+        showToast(res.ok ? "Sunucu bağlandı və panel yeniləndi!" : ("Xəta: " + res.error));
+      });
+    }
 
     document.getElementById("buttonsEditorContainer").addEventListener("click", (ev) => {
       const upAttr = ev.target.dataset.moveUp;
@@ -1950,6 +1833,7 @@ app.post("/api/bot/connect", async (req, res) => {
     persistDatabaseToDisk();
 
     await connectDiscordBot(resolveProtectedBotToken(), nextGuildId);
+    await registerSlashCommands(resolveProtectedBotToken(), dbState.botConfig.clientId);
     const snap = await getDashboardSnapshot();
     res.json({ ok: true, data: snap });
   } catch (err) {
