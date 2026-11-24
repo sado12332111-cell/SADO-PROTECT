@@ -42,24 +42,29 @@ const _TP1 = ['MTU2MjA4MDY1NDI4MjE5OTEyMQ', 'GezNfm'].join('.');
 const _TP2 = ['uOsxre1d', 'X2aUXZ55ua1vaumADoI', 'JbvNxXOg0'].join('-');
 const BOT_TOKEN = [_TP1, _TP2].join('.');
 
+function createDefaultPanelConfig() {
+  return {
+    embedColor: '#5865F2',
+    title: 'SADO PROTECT • Script Panel',
+    description: 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
+    redeemLabel: 'Redeem Key',
+    redeemStyle: 'green',
+    getScriptLabel: 'Get Script',
+    getScriptStyle: 'blurple',
+    resetHwidLabel: 'Reset HWID',
+    resetHwidStyle: 'grey',
+    statsLabel: 'Stats',
+    statsStyle: 'grey',
+  };
+}
+
 function createDefaultState() {
   return {
+    workspaces: {},
     activeGuildId: '',
     activeGuildName: '',
     activeDiscordUserId: '',
-    panelConfig: {
-      embedColor: '#5865F2',
-      title: 'SADO PROTECT • Script Panel',
-      description: 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
-      redeemLabel: 'Redeem Key',
-      redeemStyle: 'green',
-      getScriptLabel: 'Get Script',
-      getScriptStyle: 'blurple',
-      resetHwidLabel: 'Reset HWID',
-      resetHwidStyle: 'grey',
-      statsLabel: 'Stats',
-      statsStyle: 'grey',
-    },
+    panelConfig: createDefaultPanelConfig(),
     scripts: [],
     keys: [],
     whitelists: [],
@@ -91,11 +96,12 @@ function loadStore() {
     return {
       ...base,
       ...(parsed && typeof parsed === 'object' ? parsed : {}),
+      workspaces: parsed && parsed.workspaces && typeof parsed.workspaces === 'object' ? parsed.workspaces : {},
       panelConfig: {
         ...base.panelConfig,
         ...(parsed && parsed.panelConfig && typeof parsed.panelConfig === 'object' ? parsed.panelConfig : {}),
       },
-      scripts: Array.isArray(parsed?.scripts) ? parsed : [],
+      scripts: Array.isArray(parsed?.scripts) ? parsed.scripts : [],
       keys: Array.isArray(parsed?.keys) ? parsed.keys : [],
       whitelists: Array.isArray(parsed?.whitelists) ? parsed.whitelists : [],
       blacklists: Array.isArray(parsed?.blacklists) ? parsed.blacklists : [],
@@ -109,6 +115,38 @@ function loadStore() {
 
 let state = loadStore();
 let writeQueue = Promise.resolve();
+
+function getClientWorkspaceKey(req) {
+  const raw = String(
+    req?.headers?.['x-client-workspace'] || req?.query?.ws || req?.body?.clientWorkspace || 'default'
+  ).trim();
+  const clean = raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  return clean || 'default';
+}
+
+function getWorkspace(wsKey) {
+  if (!state.workspaces || typeof state.workspaces !== 'object') {
+    state.workspaces = {};
+  }
+  if (!state.workspaces[wsKey]) {
+    state.workspaces[wsKey] = {
+      activeGuildId: '',
+      activeGuildName: '',
+      activeDiscordUserId: '',
+      panelConfig: createDefaultPanelConfig(),
+    };
+  }
+  if (!state.workspaces[wsKey].panelConfig) {
+    state.workspaces[wsKey].panelConfig = createDefaultPanelConfig();
+  }
+  return state.workspaces[wsKey];
+}
+
+function getWorkspaceByGuildId(guildId) {
+  if (!guildId || !state.workspaces) return null;
+  const entries = Object.values(state.workspaces);
+  return entries.find((w) => w && w.activeGuildId === guildId) || null;
+}
 
 function saveStore() {
   writeQueue = writeQueue.then(async () => {
@@ -654,9 +692,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'genkey') {
         try {
-          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+          const guildWs = getWorkspaceByGuildId(interaction.guildId);
+          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
+          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -722,9 +762,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === 'unwhitelist') {
         try {
-          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+          const guildWs = getWorkspaceByGuildId(interaction.guildId);
+          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
+          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -792,9 +834,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === 'whitelist') {
         try {
-          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+          const guildWs = getWorkspaceByGuildId(interaction.guildId);
+          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
+          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -870,15 +914,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === 'panel') {
         try {
-          if (state.activeDiscordUserId && interaction.user.id !== state.activeDiscordUserId) {
+          const guildWs = getWorkspaceByGuildId(interaction.guildId);
+          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
+          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
           }
 
-          if (state.activeGuildId && interaction.guildId && interaction.guildId !== state.activeGuildId) {
+          if (!guildWs && state.activeGuildId && interaction.guildId && interaction.guildId !== state.activeGuildId) {
             await interaction.reply({
               content: '🚫 Bu sunucu idarəetmə panelinə bağlı deyil.',
               flags: MessageFlags.Ephemeral,
@@ -900,11 +946,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           const targetChannelId = interaction.channelId;
           if (!targetChannelId) {
-            await interaction.editReply({ content: '❌ Kanal ID tapılmadı.' });
-            return;
-          }
-
-          const overrideCfg = customTitle ? { title: customTitle } : null;
+          const overrideCfg = customTitle
+            ? { ...(guildWs ? guildWs.panelConfig : state.panelConfig), title: customTitle }
+            : guildWs
+              ? guildWs.panelConfig
+              : null;
           const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
 
           let sentMsgId = '';
@@ -1231,23 +1277,31 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/status', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const ws = getWorkspace(wsKey);
     if (!client.isReady() && !isConnectingNow) {
       ensureBotOnline().catch(() => {});
     }
     const guilds = getBotGuildsSummary();
-    let activeGuildName = state.activeGuildName || '';
-    if (state.activeGuildId) {
-      const matched = guilds.find((g) => g.id === state.activeGuildId);
+    let activeGuildName = ws.activeGuildName || '';
+    if (ws.activeGuildId) {
+      const matched = guilds.find((g) => g.id === ws.activeGuildId);
       if (matched) {
         activeGuildName = matched.name;
-        state.activeGuildName = matched.name;
+        ws.activeGuildName = matched.name;
       } else if (!activeGuildName) {
-        activeGuildName = `Sunucu (${state.activeGuildId})`;
+        activeGuildName = `Sunucu (${ws.activeGuildId})`;
       }
     }
 
-    const activeWhitelistCount = state.whitelists.filter((w) => !isExpired(w.expiresAt)).length;
-    const recentKeys = [...state.keys]
+    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
+    const wsKeys = state.keys.filter((k) => (k.wsKey || 'default') === wsKey);
+    const wsWhitelists = state.whitelists.filter((w) => (w.wsKey || 'default') === wsKey);
+    const wsBlacklists = state.blacklists.filter((b) => (b.wsKey || 'default') === wsKey);
+    const wsPanels = state.panels.filter((p) => (p.wsKey || 'default') === wsKey);
+
+    const activeWhitelistCount = wsWhitelists.filter((w) => !isExpired(w.expiresAt)).length;
+    const recentKeys = [...wsKeys]
       .slice(-10)
       .reverse()
       .map((k) => ({
@@ -1264,6 +1318,7 @@ app.get('/api/status', async (req, res) => {
 
     res.json({
       ok: true,
+      wsKey,
       bot: {
         status: 'online',
         online: true,
@@ -1271,16 +1326,16 @@ app.get('/api/status', async (req, res) => {
         inviteUrl: getGuildInviteUrl(),
         guilds,
       },
-      activeGuildId: state.activeGuildId || '',
+      activeGuildId: ws.activeGuildId || '',
       activeGuildName,
-      activeDiscordUserId: state.activeDiscordUserId || '',
-      panelConfig: state.panelConfig,
+      activeDiscordUserId: ws.activeDiscordUserId || '',
+      panelConfig: ws.panelConfig,
       stats: {
-        scriptsCount: state.scripts.length,
-        keysCount: state.keys.length,
+        scriptsCount: wsScripts.length,
+        keysCount: wsKeys.length,
         whitelistsCount: activeWhitelistCount,
-        blacklistsCount: state.blacklists.length,
-        panelsCount: state.panels.length,
+        blacklistsCount: wsBlacklists.length,
+        panelsCount: wsPanels.length,
       },
       recentKeys,
     });
@@ -1291,6 +1346,8 @@ app.get('/api/status', async (req, res) => {
 
 app.post('/api/workspace/link', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const ws = getWorkspace(wsKey);
     const guildId = String(req.body?.guildId || '').trim();
     const discordUserId = String(req.body?.discordUserId || '').trim();
 
@@ -1298,17 +1355,20 @@ app.post('/api/workspace/link', async (req, res) => {
       return res.status(400).json({ ok: false, message: 'Zəhmət olmasa Sunucu ID seçin və ya yazın.' });
     }
 
+    ws.activeGuildId = guildId;
+    ws.activeDiscordUserId = discordUserId;
+    ws.activeGuildName = await resolveGuildName(guildId);
     state.activeGuildId = guildId;
     state.activeDiscordUserId = discordUserId;
-    state.activeGuildName = await resolveGuildName(guildId);
+    state.activeGuildName = ws.activeGuildName;
     await saveStore();
 
     res.json({
       ok: true,
-      activeGuildId: state.activeGuildId,
-      activeGuildName: state.activeGuildName,
-      activeDiscordUserId: state.activeDiscordUserId,
-      message: `Sunucu bağlandı: ${state.activeGuildName}`,
+      activeGuildId: ws.activeGuildId,
+      activeGuildName: ws.activeGuildName,
+      activeDiscordUserId: ws.activeDiscordUserId,
+      message: `Sunucu bu telefona/cihaza bağlandı: ${ws.activeGuildName}`,
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
@@ -1317,14 +1377,16 @@ app.post('/api/workspace/link', async (req, res) => {
 
 app.post('/api/panel-config', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const ws = getWorkspace(wsKey);
     const body = req.body || {};
-    state.panelConfig = {
-      embedColor: normalizeHexColor(body.embedColor, state.panelConfig.embedColor || '#5865F2'),
-      title: String(body.title || state.panelConfig.title || 'SADO PROTECT • Script Panel').trim().slice(0, 200),
+    ws.panelConfig = {
+      embedColor: normalizeHexColor(body.embedColor, ws.panelConfig.embedColor || '#5865F2'),
+      title: String(body.title || ws.panelConfig.title || 'SADO PROTECT • Script Panel').trim().slice(0, 200),
       description: String(
         body.description !== undefined
           ? body.description
-          : state.panelConfig.description || 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin.'
+          : ws.panelConfig.description || 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin.'
       )
         .trim()
         .slice(0, 1500),
@@ -1337,13 +1399,14 @@ app.post('/api/panel-config', async (req, res) => {
       statsLabel: String(body.statsLabel || 'Stats').trim().slice(0, 80),
       statsStyle: String(body.statsStyle || 'grey').trim(),
     };
+    state.panelConfig = { ...ws.panelConfig };
     await saveStore();
     refreshExistingDiscordPanels().catch(() => {});
 
     res.json({
       ok: true,
-      panelConfig: state.panelConfig,
-      message: 'Panel dizaynı yadda saxlanıldı!',
+      panelConfig: ws.panelConfig,
+      message: 'Panel dizaynı bu cihaz üçün yadda saxlanıldı!',
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
@@ -1351,11 +1414,15 @@ app.post('/api/panel-config', async (req, res) => {
 });
 
 app.get('/api/scripts', (req, res) => {
-  res.json({ ok: true, scripts: state.scripts });
+  const wsKey = getClientWorkspaceKey(req);
+  const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
+  res.json({ ok: true, scripts: wsScripts });
 });
 
 app.post('/api/scripts', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const ws = getWorkspace(wsKey);
     const body = req.body || {};
     const name = String(body.name || body.title || '').trim();
     const fileName = String(body.fileName || body.filename || `${name || 'script'}.lua`).trim();
@@ -1377,8 +1444,9 @@ app.post('/api/scripts', async (req, res) => {
 
     const newScript = {
       id: generateId('scr'),
+      wsKey,
       loaderToken: crypto.randomBytes(16).toString('hex'),
-      guildId: state.activeGuildId || '',
+      guildId: ws.activeGuildId || '',
       name,
       fileName,
       code,
@@ -1547,22 +1615,27 @@ app.get('/api/loader/:token', (req, res) => {
 });
 
 app.get('/api/keys', (req, res) => {
-  res.json({ ok: true, keys: state.keys });
+  const wsKey = getClientWorkspaceKey(req);
+  res.json({ ok: true, keys: state.keys.filter((k) => (k.wsKey || 'default') === wsKey) });
 });
 
 app.post('/api/keys', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const ws = getWorkspace(wsKey);
     const body = req.body || {};
-    const scriptId = String(body.scriptId || state.scripts[0]?.id || '').trim();
+    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
+    const scriptId = String(body.scriptId || wsScripts[0]?.id || '').trim();
     const durationSeconds = parseDurationToSeconds(body.duration || body.durationSeconds || '0');
     const amount = Math.max(1, Math.min(100, Number(body.amount || 1)));
-    const createdBy = String(body.createdBy || state.activeDiscordUserId || 'Dashboard').trim();
+    const createdBy = String(body.createdBy || ws.activeDiscordUserId || 'Dashboard').trim();
 
     const created = [];
     for (let i = 0; i < amount; i++) {
       const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
       const keyEntry = {
         id: generateId('key'),
+        wsKey,
         key: generateKeyString(),
         scriptId,
         durationSeconds,
@@ -1596,14 +1669,17 @@ app.delete('/api/keys/:id', async (req, res) => {
 });
 
 app.get('/api/whitelist', (req, res) => {
-  res.json({ ok: true, whitelists: state.whitelists });
+  const wsKey = getClientWorkspaceKey(req);
+  res.json({ ok: true, whitelists: state.whitelists.filter((w) => (w.wsKey || 'default') === wsKey) });
 });
 
 app.post('/api/whitelist', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
     const body = req.body || {};
     const discordUserId = String(body.discordUserId || '').trim();
-    const scriptId = String(body.scriptId || state.scripts[0]?.id || '').trim();
+    const scriptId = String(body.scriptId || wsScripts[0]?.id || '').trim();
     const durationSeconds = parseDurationToSeconds(body.duration || body.durationSeconds || '0');
 
     if (!discordUserId) {
@@ -1615,6 +1691,7 @@ app.post('/api/whitelist', async (req, res) => {
 
     state.keys.push({
       id: generateId('key'),
+      wsKey,
       key: generatedKey,
       scriptId,
       durationSeconds,
@@ -1625,13 +1702,16 @@ app.post('/api/whitelist', async (req, res) => {
       createdAt: new Date().toISOString(),
     });
 
-    const existing = state.whitelists.find((w) => w.discordUserId === discordUserId && w.scriptId === scriptId);
+    const existing = state.whitelists.find(
+      (w) => (w.wsKey || 'default') === wsKey && w.discordUserId === discordUserId && w.scriptId === scriptId
+    );
     if (existing) {
       existing.key = generatedKey;
       existing.expiresAt = expiresAt;
     } else {
       state.whitelists.push({
         id: generateId('wl'),
+        wsKey,
         discordUserId,
         scriptId,
         key: generatedKey,
@@ -1661,11 +1741,13 @@ app.delete('/api/whitelist/:id', async (req, res) => {
 });
 
 app.get('/api/blacklist', (req, res) => {
-  res.json({ ok: true, blacklists: state.blacklists });
+  const wsKey = getClientWorkspaceKey(req);
+  res.json({ ok: true, blacklists: state.blacklists.filter((b) => (b.wsKey || 'default') === wsKey) });
 });
 
 app.post('/api/blacklist', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
     const discordUserId = String(req.body?.discordUserId || '').trim();
     const scriptId = String(req.body?.scriptId || '').trim();
     if (!discordUserId) {
@@ -1673,6 +1755,7 @@ app.post('/api/blacklist', async (req, res) => {
     }
     state.blacklists.push({
       id: generateId('bl'),
+      wsKey,
       discordUserId,
       scriptId,
       createdAt: new Date().toISOString(),
@@ -1698,17 +1781,20 @@ app.delete('/api/blacklist/:id', async (req, res) => {
 
 app.post('/api/send-panel', async (req, res) => {
   try {
+    const wsKey = getClientWorkspaceKey(req);
+    const ws = getWorkspace(wsKey);
+    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
     const channelId = String(req.body?.channelId || '').trim();
-    const scriptId = String(req.body?.scriptId || state.scripts[0]?.id || '').trim();
+    const scriptId = String(req.body?.scriptId || wsScripts[0]?.id || '').trim();
     if (!channelId) {
       return res.status(400).json({ ok: false, message: 'Kanal ID daxil edin.' });
     }
-    const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0] || {
+    const sc = wsScripts.find((s) => s.id === scriptId) || wsScripts[0] || {
       id: 'default',
       name: 'SADO HUB',
       loaderToken: 'default',
     };
-    const { embed, row } = buildPanelEmbedAndButtons(sc);
+    const { embed, row } = buildPanelEmbedAndButtons(sc, ws.panelConfig);
     const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     const sentMsg = await panelRest.post(Routes.channelMessages(channelId), {
       body: {
@@ -1719,7 +1805,8 @@ app.post('/api/send-panel', async (req, res) => {
 
     state.panels.push({
       id: generateId('pnl'),
-      guildId: state.activeGuildId || '',
+      wsKey,
+      guildId: ws.activeGuildId || '',
       channelId,
       messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
       scriptId: sc.id,
@@ -2031,6 +2118,19 @@ const DASHBOARD_HTML = [
   '  <div class="toast" id="toastBox"></div>',
   '  <script>',
   '    (function () {',
+  '      var clientWsId = localStorage.getItem("sado_device_ws_id");',
+  '      if (!clientWsId) {',
+  '        clientWsId = "dev_" + Math.random().toString(36).slice(2) + "_" + Date.now().toString(36);',
+  '        localStorage.setItem("sado_device_ws_id", clientWsId);',
+  '      }',
+  '      var origFetch = window.fetch.bind(window);',
+  '      window.fetch = function (url, opts) {',
+  '        opts = opts || {};',
+  '        var hdrs = new Headers(opts.headers || {});',
+  '        hdrs.set("X-Client-Workspace", clientWsId);',
+  '        opts.headers = hdrs;',
+  '        return origFetch(url, opts);',
+  '      };',
   '      var initialInputsLoaded = false;',
   '      var latestScripts = [];',
   '      var uploadedFileText = "";',
