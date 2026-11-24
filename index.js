@@ -1,10 +1,10 @@
 /**
  * SADO PROTECT - Control Dashboard & Discord Bot (index.js)
  * Tam və müstəqil Node.js tətbiqi:
+ * - Hər telefon / cihaz üçün ayrı təcrid olunmuş Workspace (ID kontrolu ilə heç kəs bir-birinin skript, key və sunucu ayarlarını görmür)
  * - Sabit const bot tokeni (7/24 həmişə online + Render self-ping yuxu qoruması)
  * - Discord.js v14 botu (/panel, /whitelist, /unwhitelist, /genkey, Redeem Key, Get Script, Reset HWID, Stats)
  * - Express web serveri (Dashboard UI + REST API + HWID kilidli Protected Loader)
- * - Script idarəetməsi, Lua fayl yükləmə və Ultra Lua Obfuscator
  */
 
 const fs = require('fs');
@@ -30,7 +30,7 @@ const {
 } = require('discord.js');
 
 // ============================================================================
-// 1. KONFİQURASİYA, SABİT BOT TOKENİ VƏ SAXLAMA QATLARI
+// 1. KONFİQURASİYA, SABİT BOT TOKENİ VƏ WORKSPACE-ƏSASLI SAXLAMA QATLARI
 // ============================================================================
 
 const PORT = Number(process.env.PORT || 3000);
@@ -42,34 +42,35 @@ const _TP1 = ['MTU2MjA4MDY1NDI4MjE5OTEyMQ', 'GezNfm'].join('.');
 const _TP2 = ['uOsxre1d', 'X2aUXZ55ua1vaumADoI', 'JbvNxXOg0'].join('-');
 const BOT_TOKEN = [_TP1, _TP2].join('.');
 
-function createDefaultPanelConfig() {
+function createDefaultWorkspaceState() {
   return {
-    embedColor: '#5865F2',
-    title: 'SADO PROTECT • Script Panel',
-    description: 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
-    redeemLabel: 'Redeem Key',
-    redeemStyle: 'green',
-    getScriptLabel: 'Get Script',
-    getScriptStyle: 'blurple',
-    resetHwidLabel: 'Reset HWID',
-    resetHwidStyle: 'grey',
-    statsLabel: 'Stats',
-    statsStyle: 'grey',
-  };
-}
-
-function createDefaultState() {
-  return {
-    workspaces: {},
     activeGuildId: '',
     activeGuildName: '',
     activeDiscordUserId: '',
-    panelConfig: createDefaultPanelConfig(),
+    panelConfig: {
+      embedColor: '#5865F2',
+      title: 'SADO PROTECT • Script Panel',
+      description: 'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
+      redeemLabel: 'Redeem Key',
+      redeemStyle: 'green',
+      getScriptLabel: 'Get Script',
+      getScriptStyle: 'blurple',
+      resetHwidLabel: 'Reset HWID',
+      resetHwidStyle: 'grey',
+      statsLabel: 'Stats',
+      statsStyle: 'grey',
+    },
     scripts: [],
     keys: [],
     whitelists: [],
     blacklists: [],
     panels: [],
+  };
+}
+
+function createDefaultRootStore() {
+  return {
+    workspaces: {},
   };
 }
 
@@ -83,83 +84,140 @@ function ensureDataDir() {
   }
 }
 
+function normalizeWorkspaceObject(raw) {
+  const base = createDefaultWorkspaceState();
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  return {
+    ...base,
+    ...obj,
+    panelConfig: {
+      ...base.panelConfig,
+      ...(obj.panelConfig && typeof obj.panelConfig === 'object' ? obj.panelConfig : {}),
+    },
+    scripts: Array.isArray(obj.scripts) ? obj.scripts : [],
+    keys: Array.isArray(obj.keys) ? obj.keys : [],
+    whitelists: Array.isArray(obj.whitelists) ? obj.whitelists : [],
+    blacklists: Array.isArray(obj.blacklists) ? obj.blacklists : [],
+    panels: Array.isArray(obj.panels) ? obj.panels : [],
+  };
+}
+
 function loadStore() {
   ensureDataDir();
-  const base = createDefaultState();
+  const root = createDefaultRootStore();
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(base, null, 2), 'utf8');
-      return base;
+      fs.writeFileSync(DATA_FILE, JSON.stringify(root, null, 2), 'utf8');
+      return root;
     }
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    return {
-      ...base,
-      ...(parsed && typeof parsed === 'object' ? parsed : {}),
-      workspaces: parsed && parsed.workspaces && typeof parsed.workspaces === 'object' ? parsed.workspaces : {},
-      panelConfig: {
-        ...base.panelConfig,
-        ...(parsed && parsed.panelConfig && typeof parsed.panelConfig === 'object' ? parsed.panelConfig : {}),
-      },
-      scripts: Array.isArray(parsed?.scripts) ? parsed.scripts : [],
-      keys: Array.isArray(parsed?.keys) ? parsed.keys : [],
-      whitelists: Array.isArray(parsed?.whitelists) ? parsed.whitelists : [],
-      blacklists: Array.isArray(parsed?.blacklists) ? parsed.blacklists : [],
-      panels: Array.isArray(parsed?.panels) ? parsed.panels : [],
-    };
+
+    if (parsed && typeof parsed === 'object' && parsed.workspaces && typeof parsed.workspaces === 'object') {
+      const normalizedWorkspaces = {};
+      for (const [wsId, wsData] of Object.entries(parsed.workspaces)) {
+        normalizedWorkspaces[wsId] = normalizeWorkspaceObject(wsData);
+      }
+      return { workspaces: normalizedWorkspaces };
+    }
+
+    if (parsed && typeof parsed === 'object' && (Array.isArray(parsed.scripts) || parsed.activeGuildId)) {
+      return {
+        workspaces: {
+          ws_legacy_owner: normalizeWorkspaceObject(parsed),
+        },
+      };
+    }
+
+    return root;
   } catch (err) {
-    console.error('[STORE] store.json oxunarkən xəta, default state istifadə edilir:', err.message);
-    return base;
+    console.error('[STORE] store.json oxunarkən xəta, default store istifadə edilir:', err.message);
+    return root;
   }
 }
 
-let state = loadStore();
+let rootStore = loadStore();
 let writeQueue = Promise.resolve();
-
-function getClientWorkspaceKey(req) {
-  const raw = String(
-    req?.headers?.['x-client-workspace'] || req?.query?.ws || req?.body?.clientWorkspace || 'default'
-  ).trim();
-  const clean = raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
-  return clean || 'default';
-}
-
-function getWorkspace(wsKey) {
-  if (!state.workspaces || typeof state.workspaces !== 'object') {
-    state.workspaces = {};
-  }
-  if (!state.workspaces[wsKey]) {
-    state.workspaces[wsKey] = {
-      activeGuildId: '',
-      activeGuildName: '',
-      activeDiscordUserId: '',
-      panelConfig: createDefaultPanelConfig(),
-    };
-  }
-  if (!state.workspaces[wsKey].panelConfig) {
-    state.workspaces[wsKey].panelConfig = createDefaultPanelConfig();
-  }
-  return state.workspaces[wsKey];
-}
-
-function getWorkspaceByGuildId(guildId) {
-  if (!guildId || !state.workspaces) return null;
-  const entries = Object.values(state.workspaces);
-  return entries.find((w) => w && w.activeGuildId === guildId) || null;
-}
 
 function saveStore() {
   writeQueue = writeQueue.then(async () => {
     try {
       ensureDataDir();
       const tmpFile = `${DATA_FILE}.${process.pid}.tmp`;
-      await fs.promises.writeFile(tmpFile, JSON.stringify(state, null, 2), 'utf8');
+      await fs.promises.writeFile(tmpFile, JSON.stringify(rootStore, null, 2), 'utf8');
       await fs.promises.rename(tmpFile, DATA_FILE);
     } catch (err) {
       console.error('[STORE] Yadda saxlama xətası:', err.message);
     }
   });
   return writeQueue;
+}
+
+function sanitizeWorkspaceId(rawId) {
+  const clean = String(rawId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!clean || clean.length < 6) return 'ws_default_device';
+  return clean.slice(0, 64);
+}
+
+function getWorkspaceState(wsId) {
+  const safeId = sanitizeWorkspaceId(wsId);
+  if (!rootStore.workspaces[safeId]) {
+    rootStore.workspaces[safeId] = createDefaultWorkspaceState();
+  }
+  return rootStore.workspaces[safeId];
+}
+
+function getAllWorkspacesList() {
+  return Object.entries(rootStore.workspaces).map(([id, ws]) => ({
+    id,
+    ws,
+  }));
+}
+
+function findWorkspaceByGuildId(guildId, preferredUserId = '') {
+  const list = getAllWorkspacesList();
+  if (!guildId) return list[0]?.ws || createDefaultWorkspaceState();
+
+  const matchingGuild = list.filter((item) => item.ws.activeGuildId === guildId);
+  if (matchingGuild.length === 1) return matchingGuild[0].ws;
+  if (matchingGuild.length > 1 && preferredUserId) {
+    const exactUser = matchingGuild.find((item) => item.ws.activeDiscordUserId === preferredUserId);
+    if (exactUser) return exactUser.ws;
+  }
+  if (matchingGuild.length > 0) return matchingGuild[0].ws;
+
+  if (preferredUserId) {
+    const byUser = list.find((item) => item.ws.activeDiscordUserId === preferredUserId);
+    if (byUser) return byUser.ws;
+  }
+
+  return createDefaultWorkspaceState();
+}
+
+function findWorkspaceByScriptId(scriptId, guildId = '') {
+  const list = getAllWorkspacesList();
+  if (scriptId && scriptId !== 'default') {
+    for (const item of list) {
+      if (item.ws.scripts.some((s) => s.id === scriptId)) {
+        return item.ws;
+      }
+    }
+  }
+  if (guildId) {
+    return findWorkspaceByGuildId(guildId);
+  }
+  return list[0]?.ws || createDefaultWorkspaceState();
+}
+
+function findWorkspaceByLoaderToken(token) {
+  const list = getAllWorkspacesList();
+  for (const item of list) {
+    const sc = item.ws.scripts.find((s) => s.loaderToken === token || s.id === token);
+    if (sc) {
+      return { ws: item.ws, sc };
+    }
+  }
+  return { ws: null, sc: null };
 }
 
 // ============================================================================
@@ -401,10 +459,12 @@ async function resolveGuildName(guildId) {
 async function ensureBotOnline() {
   if (!BOT_TOKEN) return;
   if (client.isReady()) {
-    if (state.activeGuildId) {
-      const resolved = await resolveGuildName(state.activeGuildId);
-      if (resolved && !resolved.startsWith('Sunucu (')) {
-        state.activeGuildName = resolved;
+    for (const item of getAllWorkspacesList()) {
+      if (item.ws.activeGuildId) {
+        const resolved = await resolveGuildName(item.ws.activeGuildId);
+        if (resolved && !resolved.startsWith('Sunucu (')) {
+          item.ws.activeGuildName = resolved;
+        }
       }
     }
     return;
@@ -435,12 +495,18 @@ function startWatchdog() {
     try {
       if (!client.isReady() && !isConnectingNow) {
         await ensureBotOnline();
-      } else if (state.activeGuildId && (!state.activeGuildName || state.activeGuildName.startsWith('Sunucu ('))) {
-        const name = await resolveGuildName(state.activeGuildId);
-        if (name && !name.startsWith('Sunucu (')) {
-          state.activeGuildName = name;
-          await saveStore();
+      } else {
+        let changed = false;
+        for (const item of getAllWorkspacesList()) {
+          if (item.ws.activeGuildId && (!item.ws.activeGuildName || item.ws.activeGuildName.startsWith('Sunucu ('))) {
+            const name = await resolveGuildName(item.ws.activeGuildId);
+            if (name && !name.startsWith('Sunucu (')) {
+              item.ws.activeGuildName = name;
+              changed = true;
+            }
+          }
         }
+        if (changed) await saveStore();
       }
     } catch (err) {
       console.error('[WATCHDOG] Xəta:', err.message);
@@ -543,21 +609,28 @@ async function registerSlashCommands() {
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`[BOT] Online: ${readyClient.user.tag} (${readyClient.guilds.cache.size} sunucu)`);
   await registerSlashCommands();
-  if (state.activeGuildId) {
-    const realName = await resolveGuildName(state.activeGuildId);
-    if (realName && !realName.startsWith('Sunucu (')) {
-      state.activeGuildName = realName;
-      await saveStore();
+  let changed = false;
+  for (const item of getAllWorkspacesList()) {
+    if (item.ws.activeGuildId) {
+      const realName = await resolveGuildName(item.ws.activeGuildId);
+      if (realName && !realName.startsWith('Sunucu (')) {
+        item.ws.activeGuildName = realName;
+        changed = true;
+      }
     }
   }
+  if (changed) await saveStore();
 });
 
 client.on(Events.GuildCreate, async (guild) => {
-  if (!state.activeGuildId || state.activeGuildId === guild.id) {
-    state.activeGuildId = guild.id;
-    state.activeGuildName = guild.name;
-    await saveStore();
+  let changed = false;
+  for (const item of getAllWorkspacesList()) {
+    if (item.ws.activeGuildId === guild.id) {
+      item.ws.activeGuildName = guild.name;
+      changed = true;
+    }
   }
+  if (changed) await saveStore();
 });
 
 client.on(Events.ShardDisconnect, () => {
@@ -568,9 +641,9 @@ client.on(Events.Error, (err) => {
   console.error('[CLIENT ERROR]', err.message);
 });
 
-function buildPanelEmbedAndButtons(scriptObj, overrideCfg = null) {
+function buildPanelEmbedAndButtons(wsState, scriptObj, overrideCfg = null) {
   const cfg = {
-    ...state.panelConfig,
+    ...(wsState?.panelConfig || createDefaultWorkspaceState().panelConfig),
     ...(overrideCfg && typeof overrideCfg === 'object' ? overrideCfg : {}),
   };
 
@@ -610,14 +683,14 @@ function buildPanelEmbedAndButtons(scriptObj, overrideCfg = null) {
   return { embed, row };
 }
 
-async function refreshExistingDiscordPanels() {
-  if (!client.isReady() || !Array.isArray(state.panels) || !state.panels.length) return;
+async function refreshExistingDiscordPanels(wsState) {
+  if (!client.isReady() || !wsState || !Array.isArray(wsState.panels) || !wsState.panels.length) return;
   const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-  for (const pnl of state.panels) {
+  for (const pnl of wsState.panels) {
     try {
       if (!pnl.channelId || !pnl.messageId) continue;
-      const sc = state.scripts.find((s) => s.id === pnl.scriptId) || state.scripts[0];
-      const { embed, row } = buildPanelEmbedAndButtons(sc);
+      const sc = wsState.scripts.find((s) => s.id === pnl.scriptId) || wsState.scripts[0];
+      const { embed, row } = buildPanelEmbedAndButtons(wsState, sc);
       await rest.patch(Routes.channelMessage(pnl.channelId, pnl.messageId), {
         body: {
           embeds: [embed.toJSON()],
@@ -640,8 +713,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         interaction.commandName === 'genkey'
       ) {
         try {
+          const ws = findWorkspaceByGuildId(interaction.guildId, interaction.user?.id);
           const focused = String(interaction.options.getFocused() || '').trim().toLowerCase();
-          const allScripts = Array.isArray(state.scripts) ? state.scripts : [];
+          const allScripts = Array.isArray(ws.scripts) ? ws.scripts : [];
           const filtered = allScripts.filter((sc) => {
             if (!focused) return true;
             const n = String(sc && sc.name ? sc.name : '').toLowerCase();
@@ -690,13 +764,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand()) {
+      const ws = findWorkspaceByGuildId(interaction.guildId, interaction.user?.id);
+
       if (interaction.commandName === 'genkey') {
         try {
-          const guildWs = getWorkspaceByGuildId(interaction.guildId);
-          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
-          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
+          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -710,8 +784,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const amount = Math.max(1, Math.min(25, Number(rawAmount || 1)));
 
           const sc =
-            state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
-            state.scripts[0] || {
+            ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
+            ws.scripts[0] || {
               id: 'default',
               name: chosenScriptArg && chosenScriptArg !== 'default' ? chosenScriptArg : 'SADO HUB',
             };
@@ -734,7 +808,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               createdBy: interaction.user.tag || interaction.user.id,
               createdAt: new Date().toISOString(),
             };
-            state.keys.push(entry);
+            ws.keys.push(entry);
             createdKeys.push(entry);
           }
 
@@ -762,11 +836,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === 'unwhitelist') {
         try {
-          const guildWs = getWorkspaceByGuildId(interaction.guildId);
-          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
-          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
+          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -778,19 +850,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
 
           const matchedScript = chosenScriptArg
-            ? state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg)
+            ? ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg)
             : null;
 
-          const beforeCount = state.whitelists.length;
-          state.whitelists = state.whitelists.filter((w) => {
+          const beforeCount = ws.whitelists.length;
+          ws.whitelists = ws.whitelists.filter((w) => {
             if (w.discordUserId !== targetUser.id) return true;
             if (!chosenScriptArg) return false;
             if (matchedScript) return w.scriptId !== matchedScript.id;
             return w.scriptId !== chosenScriptArg;
           });
-          const removedCount = beforeCount - state.whitelists.length;
+          const removedCount = beforeCount - ws.whitelists.length;
 
-          for (const kItem of state.keys) {
+          for (const kItem of ws.keys) {
             if (
               kItem.usedByDiscordId === targetUser.id &&
               (!chosenScriptArg ||
@@ -834,11 +906,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === 'whitelist') {
         try {
-          const guildWs = getWorkspaceByGuildId(interaction.guildId);
-          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
-          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
+          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
@@ -851,8 +921,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const durationRaw = String(interaction.options.getString('duration') || '0').trim();
 
           const sc =
-            state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
-            state.scripts[0];
+            ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
+            ws.scripts[0];
 
           if (!sc) {
             await interaction.editReply({
@@ -865,7 +935,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
           const generatedKey = generateKeyString();
 
-          state.keys.push({
+          ws.keys.push({
             id: generateId('key'),
             key: generatedKey,
             scriptId: sc.id,
@@ -877,14 +947,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
             createdAt: new Date().toISOString(),
           });
 
-          const existingWl = state.whitelists.find(
+          const existingWl = ws.whitelists.find(
             (w) => w.discordUserId === targetUser.id && w.scriptId === sc.id
           );
           if (existingWl) {
             existingWl.key = generatedKey;
             existingWl.expiresAt = expiresAt;
           } else {
-            state.whitelists.push({
+            ws.whitelists.push({
               id: generateId('wl'),
               discordUserId: targetUser.id,
               scriptId: sc.id,
@@ -914,17 +984,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.commandName === 'panel') {
         try {
-          const guildWs = getWorkspaceByGuildId(interaction.guildId);
-          const ownerDiscordId = guildWs ? guildWs.activeDiscordUserId : state.activeDiscordUserId;
-          if (ownerDiscordId && interaction.user.id !== ownerDiscordId) {
+          if (ws.activeDiscordUserId && interaction.user.id !== ws.activeDiscordUserId) {
             await interaction.reply({
-              content: '🚫 Bu əmri yalnız bu sunucuya bağlı olan Discord ID sahibi işlədə bilər.',
+              content: '🚫 Bu əmri yalnız bağlı olan Discord ID sahibi işlədə bilər.',
               flags: MessageFlags.Ephemeral,
             });
             return;
           }
 
-          if (!guildWs && state.activeGuildId && interaction.guildId && interaction.guildId !== state.activeGuildId) {
+          if (ws.activeGuildId && interaction.guildId && interaction.guildId !== ws.activeGuildId) {
             await interaction.reply({
               content: '🚫 Bu sunucu idarəetmə panelinə bağlı deyil.',
               flags: MessageFlags.Ephemeral,
@@ -937,8 +1005,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const chosenScriptArg = String(interaction.options.getString('script') || '').trim();
           const customTitle = String(interaction.options.getString('title') || '').trim();
           const sc =
-            state.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
-            state.scripts[0] || {
+            ws.scripts.find((s) => s.id === chosenScriptArg || s.name === chosenScriptArg) ||
+            ws.scripts[0] || {
               id: 'default',
               name: chosenScriptArg && chosenScriptArg !== 'default' ? chosenScriptArg : 'SADO HUB',
               loaderToken: 'default',
@@ -946,12 +1014,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           const targetChannelId = interaction.channelId;
           if (!targetChannelId) {
-          const overrideCfg = customTitle
-            ? { ...(guildWs ? guildWs.panelConfig : state.panelConfig), title: customTitle }
-            : guildWs
-              ? guildWs.panelConfig
-              : null;
-          const { embed, row } = buildPanelEmbedAndButtons(sc, overrideCfg);
+            await interaction.editReply({ content: '❌ Kanal ID tapılmadı.' });
+            return;
+          }
+
+          const overrideCfg = customTitle ? { title: customTitle } : null;
+          const { embed, row } = buildPanelEmbedAndButtons(ws, sc, overrideCfg);
 
           let sentMsgId = '';
           let sentOk = false;
@@ -980,9 +1048,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             sentMsgId = sentMsg && sentMsg.id ? sentMsg.id : '';
           }
 
-          state.panels.push({
+          ws.panels.push({
             id: generateId('pnl'),
-            guildId: interaction.guildId || state.activeGuildId || '',
+            guildId: interaction.guildId || ws.activeGuildId || '',
             channelId: targetChannelId,
             messageId: sentMsgId,
             scriptId: sc.id,
@@ -1006,8 +1074,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             // Səssiz ötürülür
           }
         }
+        return;
       }
-      return;
     }
 
     if (interaction.isButton()) {
@@ -1017,15 +1085,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (cid.startsWith('sado_copyscript_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_copyscript_', '');
-        const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
-        const wl = state.whitelists.find(
+        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
+        const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
+        const wl = ws.whitelists.find(
           (w) => w.discordUserId === userId && (!sc || !w.scriptId || w.scriptId === sc.id) && !isExpired(w.expiresAt)
         );
         const keyVal = wl ? wl.key : 'WHITELIST_KEY';
         const snippet = sc ? buildLoaderSnippet(sc, keyVal) : `script_key = "${keyVal}"`;
 
         const copyEmbed = new EmbedBuilder()
-          .setColor(hexToDiscordInt(state.panelConfig.embedColor || '#5865F2'))
+          .setColor(hexToDiscordInt(ws.panelConfig.embedColor || '#5865F2'))
           .setTitle('📋 Skript Kopyalama Paneli')
           .setDescription(
             [
@@ -1067,14 +1136,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (cid.startsWith('sado_getscript_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_getscript_', '');
-        const sc = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
+        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
+        const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
 
         if (!sc) {
           await interaction.editReply({ content: '❌ Bu panel üçün aktiv skript tapılmadı.' });
           return;
         }
 
-        const isBl = state.blacklists.some(
+        const isBl = ws.blacklists.some(
           (b) => b.discordUserId === userId && (!b.scriptId || b.scriptId === sc.id)
         );
         if (isBl) {
@@ -1082,7 +1152,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
 
-        const wl = state.whitelists.find(
+        const wl = ws.whitelists.find(
           (w) => w.discordUserId === userId && (!w.scriptId || w.scriptId === sc.id) && !isExpired(w.expiresAt)
         );
 
@@ -1097,7 +1167,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const scriptText = buildLoaderSnippet(sc, wl.key);
 
         const scriptPanelEmbed = new EmbedBuilder()
-          .setColor(hexToDiscordInt(state.panelConfig.embedColor || '#5865F2'))
+          .setColor(hexToDiscordInt(ws.panelConfig.embedColor || '#5865F2'))
           .setTitle(`📜 ${sc.name} — Script & Key`)
           .setDescription(
             [
@@ -1129,7 +1199,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (cid.startsWith('sado_resethwid_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const scriptId = cid.replace('sado_resethwid_', '');
-        const matchingWl = state.whitelists.filter(
+        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
+        const matchingWl = ws.whitelists.filter(
           (w) => w.discordUserId === userId && (scriptId === 'default' || !w.scriptId || w.scriptId === scriptId)
         );
 
@@ -1142,7 +1213,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           item.hwid = '';
           item.hwidResetAt = new Date().toISOString();
         }
-        for (const kItem of state.keys) {
+        for (const kItem of ws.keys) {
           if (kItem.usedByDiscordId === userId && (!scriptId || scriptId === 'default' || kItem.scriptId === scriptId)) {
             kItem.hwid = '';
           }
@@ -1157,11 +1228,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (cid.startsWith('sado_stats_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const userKeys = state.keys.filter((k) => k.usedByDiscordId === userId);
-        const userWl = state.whitelists.filter((w) => w.discordUserId === userId && !isExpired(w.expiresAt));
+        const scriptId = cid.replace('sado_stats_', '');
+        const ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
+        const userKeys = ws.keys.filter((k) => k.usedByDiscordId === userId);
+        const userWl = ws.whitelists.filter((w) => w.discordUserId === userId && !isExpired(w.expiresAt));
 
         const statsEmbed = new EmbedBuilder()
-          .setColor(hexToDiscordInt(state.panelConfig.embedColor || '#5865F2'))
+          .setColor(hexToDiscordInt(ws.panelConfig.embedColor || '#5865F2'))
           .setTitle('📊 İstifadəçi Statistikası')
           .setDescription(
             [
@@ -1187,8 +1260,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const keyInput = interaction.fields.getTextInputValue('redeem_key_value').trim();
         const userId = interaction.user.id;
 
-        const targetScript = state.scripts.find((s) => s.id === scriptId) || state.scripts[0];
-        const isBl = state.blacklists.some(
+        let ws = findWorkspaceByScriptId(scriptId, interaction.guildId);
+        let keyObj = ws.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
+        if (!keyObj) {
+          for (const item of getAllWorkspacesList()) {
+            const found = item.ws.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
+            if (found) {
+              ws = item.ws;
+              keyObj = found;
+              break;
+            }
+          }
+        }
+
+        const targetScript = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
+        const isBl = ws.blacklists.some(
           (b) => b.discordUserId === userId && (!targetScript || !b.scriptId || b.scriptId === targetScript.id)
         );
         if (isBl) {
@@ -1196,7 +1282,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
 
-        const keyObj = state.keys.find((k) => k.key.toUpperCase() === keyInput.toUpperCase());
         if (!keyObj) {
           await interaction.editReply({ content: '❌ Daxil edilən key tapılmadı.' });
           return;
@@ -1221,14 +1306,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           keyObj.expiresAt = expiresAt;
         }
 
-        const existingWl = state.whitelists.find(
+        const existingWl = ws.whitelists.find(
           (w) => w.discordUserId === userId && w.scriptId === effectiveScriptId
         );
         if (existingWl) {
           existingWl.key = keyObj.key;
           existingWl.expiresAt = keyObj.expiresAt || expiresAt;
         } else {
-          state.whitelists.push({
+          ws.whitelists.push({
             id: generateId('wl'),
             discordUserId: userId,
             scriptId: effectiveScriptId,
@@ -1258,7 +1343,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // ============================================================================
-// 4. EXPRESS WEB SERVER VƏ REST API ENDPOINTLƏRİ
+// 4. EXPRESS WEB SERVER VƏ CİHAZ/WORKSPACE-ƏSASLI REST API ENDPOINTLƏRİ
 // ============================================================================
 
 const app = express();
@@ -1268,6 +1353,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  const rawWsId = req.headers['x-workspace-id'] || req.query.wsId || req.body?.wsId || '';
+  req.wsId = sanitizeWorkspaceId(rawWsId);
+  req.wsState = getWorkspaceState(req.wsId);
   next();
 });
 
@@ -1277,8 +1365,7 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/status', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const ws = getWorkspace(wsKey);
+    const ws = req.wsState;
     if (!client.isReady() && !isConnectingNow) {
       ensureBotOnline().catch(() => {});
     }
@@ -1294,14 +1381,8 @@ app.get('/api/status', async (req, res) => {
       }
     }
 
-    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
-    const wsKeys = state.keys.filter((k) => (k.wsKey || 'default') === wsKey);
-    const wsWhitelists = state.whitelists.filter((w) => (w.wsKey || 'default') === wsKey);
-    const wsBlacklists = state.blacklists.filter((b) => (b.wsKey || 'default') === wsKey);
-    const wsPanels = state.panels.filter((p) => (p.wsKey || 'default') === wsKey);
-
-    const activeWhitelistCount = wsWhitelists.filter((w) => !isExpired(w.expiresAt)).length;
-    const recentKeys = [...wsKeys]
+    const activeWhitelistCount = ws.whitelists.filter((w) => !isExpired(w.expiresAt)).length;
+    const recentKeys = [...ws.keys]
       .slice(-10)
       .reverse()
       .map((k) => ({
@@ -1318,7 +1399,7 @@ app.get('/api/status', async (req, res) => {
 
     res.json({
       ok: true,
-      wsKey,
+      workspaceId: req.wsId,
       bot: {
         status: 'online',
         online: true,
@@ -1331,11 +1412,11 @@ app.get('/api/status', async (req, res) => {
       activeDiscordUserId: ws.activeDiscordUserId || '',
       panelConfig: ws.panelConfig,
       stats: {
-        scriptsCount: wsScripts.length,
-        keysCount: wsKeys.length,
+        scriptsCount: ws.scripts.length,
+        keysCount: ws.keys.length,
         whitelistsCount: activeWhitelistCount,
-        blacklistsCount: wsBlacklists.length,
-        panelsCount: wsPanels.length,
+        blacklistsCount: ws.blacklists.length,
+        panelsCount: ws.panels.length,
       },
       recentKeys,
     });
@@ -1346,8 +1427,7 @@ app.get('/api/status', async (req, res) => {
 
 app.post('/api/workspace/link', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const ws = getWorkspace(wsKey);
+    const ws = req.wsState;
     const guildId = String(req.body?.guildId || '').trim();
     const discordUserId = String(req.body?.discordUserId || '').trim();
 
@@ -1358,9 +1438,6 @@ app.post('/api/workspace/link', async (req, res) => {
     ws.activeGuildId = guildId;
     ws.activeDiscordUserId = discordUserId;
     ws.activeGuildName = await resolveGuildName(guildId);
-    state.activeGuildId = guildId;
-    state.activeDiscordUserId = discordUserId;
-    state.activeGuildName = ws.activeGuildName;
     await saveStore();
 
     res.json({
@@ -1368,7 +1445,7 @@ app.post('/api/workspace/link', async (req, res) => {
       activeGuildId: ws.activeGuildId,
       activeGuildName: ws.activeGuildName,
       activeDiscordUserId: ws.activeDiscordUserId,
-      message: `Sunucu bu telefona/cihaza bağlandı: ${ws.activeGuildName}`,
+      message: `Sunucu bağlandı: ${ws.activeGuildName}`,
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
@@ -1377,8 +1454,7 @@ app.post('/api/workspace/link', async (req, res) => {
 
 app.post('/api/panel-config', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const ws = getWorkspace(wsKey);
+    const ws = req.wsState;
     const body = req.body || {};
     ws.panelConfig = {
       embedColor: normalizeHexColor(body.embedColor, ws.panelConfig.embedColor || '#5865F2'),
@@ -1399,14 +1475,13 @@ app.post('/api/panel-config', async (req, res) => {
       statsLabel: String(body.statsLabel || 'Stats').trim().slice(0, 80),
       statsStyle: String(body.statsStyle || 'grey').trim(),
     };
-    state.panelConfig = { ...ws.panelConfig };
     await saveStore();
-    refreshExistingDiscordPanels().catch(() => {});
+    refreshExistingDiscordPanels(ws).catch(() => {});
 
     res.json({
       ok: true,
       panelConfig: ws.panelConfig,
-      message: 'Panel dizaynı bu cihaz üçün yadda saxlanıldı!',
+      message: 'Panel dizaynı yadda saxlanıldı!',
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
@@ -1414,15 +1489,12 @@ app.post('/api/panel-config', async (req, res) => {
 });
 
 app.get('/api/scripts', (req, res) => {
-  const wsKey = getClientWorkspaceKey(req);
-  const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
-  res.json({ ok: true, scripts: wsScripts });
+  res.json({ ok: true, scripts: req.wsState.scripts });
 });
 
 app.post('/api/scripts', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const ws = getWorkspace(wsKey);
+    const ws = req.wsState;
     const body = req.body || {};
     const name = String(body.name || body.title || '').trim();
     const fileName = String(body.fileName || body.filename || `${name || 'script'}.lua`).trim();
@@ -1444,7 +1516,6 @@ app.post('/api/scripts', async (req, res) => {
 
     const newScript = {
       id: generateId('scr'),
-      wsKey,
       loaderToken: crypto.randomBytes(16).toString('hex'),
       guildId: ws.activeGuildId || '',
       name,
@@ -1455,7 +1526,7 @@ app.post('/api/scripts', async (req, res) => {
       updatedAt: new Date().toISOString(),
     };
 
-    state.scripts.push(newScript);
+    ws.scripts.push(newScript);
     await saveStore();
 
     res.status(201).json({
@@ -1470,7 +1541,8 @@ app.post('/api/scripts', async (req, res) => {
 
 app.put('/api/scripts/:id', async (req, res) => {
   try {
-    const sc = state.scripts.find((s) => s.id === req.params.id);
+    const ws = req.wsState;
+    const sc = ws.scripts.find((s) => s.id === req.params.id);
     if (!sc) {
       return res.status(404).json({ ok: false, message: 'Skript tapılmadı.' });
     }
@@ -1500,11 +1572,12 @@ app.put('/api/scripts/:id', async (req, res) => {
 
 app.delete('/api/scripts/:id', async (req, res) => {
   try {
-    const idx = state.scripts.findIndex((s) => s.id === req.params.id);
+    const ws = req.wsState;
+    const idx = ws.scripts.findIndex((s) => s.id === req.params.id);
     if (idx === -1) {
       return res.status(404).json({ ok: false, message: 'Skript tapılmadı.' });
     }
-    state.scripts.splice(idx, 1);
+    ws.scripts.splice(idx, 1);
     await saveStore();
     res.json({ ok: true, message: 'Skript silindi.' });
   } catch (err) {
@@ -1534,8 +1607,8 @@ app.get('/api/loader/:token', (req, res) => {
   const acceptHeader = String(req.headers['accept'] || '').toLowerCase();
   const secFetchDest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
 
-  const sc = state.scripts.find((s) => s.loaderToken === token || s.id === token);
-  if (!sc) {
+  const { ws, sc } = findWorkspaceByLoaderToken(token);
+  if (!ws || !sc) {
     res.status(403).type('text/plain').send('-- [SADO PROTECT] Access Denied');
     return;
   }
@@ -1552,13 +1625,13 @@ app.get('/api/loader/:token', (req, res) => {
     return;
   }
 
-  const validWl = state.whitelists.find(
+  const validWl = ws.whitelists.find(
     (w) =>
       String(w.key || '').toUpperCase() === providedKey.toUpperCase() &&
       (!w.scriptId || w.scriptId === sc.id) &&
       !isExpired(w.expiresAt)
   );
-  const validKey = state.keys.find(
+  const validKey = ws.keys.find(
     (k) =>
       String(k.key || '').toUpperCase() === providedKey.toUpperCase() &&
       (!k.scriptId || k.scriptId === sc.id) &&
@@ -1575,7 +1648,7 @@ app.get('/api/loader/:token', (req, res) => {
 
   const ownerId = validWl ? validWl.discordUserId : validKey.usedByDiscordId;
   if (ownerId) {
-    const isBlacklisted = state.blacklists.some(
+    const isBlacklisted = ws.blacklists.some(
       (b) => b.discordUserId === ownerId && (!b.scriptId || b.scriptId === sc.id)
     );
     if (isBlacklisted) {
@@ -1615,17 +1688,14 @@ app.get('/api/loader/:token', (req, res) => {
 });
 
 app.get('/api/keys', (req, res) => {
-  const wsKey = getClientWorkspaceKey(req);
-  res.json({ ok: true, keys: state.keys.filter((k) => (k.wsKey || 'default') === wsKey) });
+  res.json({ ok: true, keys: req.wsState.keys });
 });
 
 app.post('/api/keys', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const ws = getWorkspace(wsKey);
+    const ws = req.wsState;
     const body = req.body || {};
-    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
-    const scriptId = String(body.scriptId || wsScripts[0]?.id || '').trim();
+    const scriptId = String(body.scriptId || ws.scripts[0]?.id || '').trim();
     const durationSeconds = parseDurationToSeconds(body.duration || body.durationSeconds || '0');
     const amount = Math.max(1, Math.min(100, Number(body.amount || 1)));
     const createdBy = String(body.createdBy || ws.activeDiscordUserId || 'Dashboard').trim();
@@ -1635,7 +1705,6 @@ app.post('/api/keys', async (req, res) => {
       const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
       const keyEntry = {
         id: generateId('key'),
-        wsKey,
         key: generateKeyString(),
         scriptId,
         durationSeconds,
@@ -1645,7 +1714,7 @@ app.post('/api/keys', async (req, res) => {
         createdBy,
         createdAt: new Date().toISOString(),
       };
-      state.keys.push(keyEntry);
+      ws.keys.push(keyEntry);
       created.push(keyEntry);
     }
 
@@ -1658,9 +1727,10 @@ app.post('/api/keys', async (req, res) => {
 
 app.delete('/api/keys/:id', async (req, res) => {
   try {
-    const idx = state.keys.findIndex((k) => k.id === req.params.id);
+    const ws = req.wsState;
+    const idx = ws.keys.findIndex((k) => k.id === req.params.id);
     if (idx === -1) return res.status(404).json({ ok: false, message: 'Key tapılmadı.' });
-    state.keys.splice(idx, 1);
+    ws.keys.splice(idx, 1);
     await saveStore();
     res.json({ ok: true, message: 'Key silindi.' });
   } catch (err) {
@@ -1669,17 +1739,15 @@ app.delete('/api/keys/:id', async (req, res) => {
 });
 
 app.get('/api/whitelist', (req, res) => {
-  const wsKey = getClientWorkspaceKey(req);
-  res.json({ ok: true, whitelists: state.whitelists.filter((w) => (w.wsKey || 'default') === wsKey) });
+  res.json({ ok: true, whitelists: req.wsState.whitelists });
 });
 
 app.post('/api/whitelist', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
+    const ws = req.wsState;
     const body = req.body || {};
     const discordUserId = String(body.discordUserId || '').trim();
-    const scriptId = String(body.scriptId || wsScripts[0]?.id || '').trim();
+    const scriptId = String(body.scriptId || ws.scripts[0]?.id || '').trim();
     const durationSeconds = parseDurationToSeconds(body.duration || body.durationSeconds || '0');
 
     if (!discordUserId) {
@@ -1689,9 +1757,8 @@ app.post('/api/whitelist', async (req, res) => {
     const expiresAt = durationSeconds > 0 ? new Date(Date.now() + durationSeconds * 1000).toISOString() : null;
     const generatedKey = generateKeyString();
 
-    state.keys.push({
+    ws.keys.push({
       id: generateId('key'),
-      wsKey,
       key: generatedKey,
       scriptId,
       durationSeconds,
@@ -1702,16 +1769,13 @@ app.post('/api/whitelist', async (req, res) => {
       createdAt: new Date().toISOString(),
     });
 
-    const existing = state.whitelists.find(
-      (w) => (w.wsKey || 'default') === wsKey && w.discordUserId === discordUserId && w.scriptId === scriptId
-    );
+    const existing = ws.whitelists.find((w) => w.discordUserId === discordUserId && w.scriptId === scriptId);
     if (existing) {
       existing.key = generatedKey;
       existing.expiresAt = expiresAt;
     } else {
-      state.whitelists.push({
+      ws.whitelists.push({
         id: generateId('wl'),
-        wsKey,
         discordUserId,
         scriptId,
         key: generatedKey,
@@ -1730,9 +1794,10 @@ app.post('/api/whitelist', async (req, res) => {
 
 app.delete('/api/whitelist/:id', async (req, res) => {
   try {
-    const idx = state.whitelists.findIndex((w) => w.id === req.params.id);
+    const ws = req.wsState;
+    const idx = ws.whitelists.findIndex((w) => w.id === req.params.id);
     if (idx === -1) return res.status(404).json({ ok: false, message: 'Whitelist qeydi tapılmadı.' });
-    state.whitelists.splice(idx, 1);
+    ws.whitelists.splice(idx, 1);
     await saveStore();
     res.json({ ok: true, message: 'Whitelist silindi.' });
   } catch (err) {
@@ -1741,21 +1806,19 @@ app.delete('/api/whitelist/:id', async (req, res) => {
 });
 
 app.get('/api/blacklist', (req, res) => {
-  const wsKey = getClientWorkspaceKey(req);
-  res.json({ ok: true, blacklists: state.blacklists.filter((b) => (b.wsKey || 'default') === wsKey) });
+  res.json({ ok: true, blacklists: req.wsState.blacklists });
 });
 
 app.post('/api/blacklist', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
+    const ws = req.wsState;
     const discordUserId = String(req.body?.discordUserId || '').trim();
     const scriptId = String(req.body?.scriptId || '').trim();
     if (!discordUserId) {
       return res.status(400).json({ ok: false, message: 'Discord User ID daxil edin.' });
     }
-    state.blacklists.push({
+    ws.blacklists.push({
       id: generateId('bl'),
-      wsKey,
       discordUserId,
       scriptId,
       createdAt: new Date().toISOString(),
@@ -1769,9 +1832,10 @@ app.post('/api/blacklist', async (req, res) => {
 
 app.delete('/api/blacklist/:id', async (req, res) => {
   try {
-    const idx = state.blacklists.findIndex((b) => b.id === req.params.id);
+    const ws = req.wsState;
+    const idx = ws.blacklists.findIndex((b) => b.id === req.params.id);
     if (idx === -1) return res.status(404).json({ ok: false, message: 'Blacklist qeydi tapılmadı.' });
-    state.blacklists.splice(idx, 1);
+    ws.blacklists.splice(idx, 1);
     await saveStore();
     res.json({ ok: true, message: 'Blacklist silindi.' });
   } catch (err) {
@@ -1781,20 +1845,18 @@ app.delete('/api/blacklist/:id', async (req, res) => {
 
 app.post('/api/send-panel', async (req, res) => {
   try {
-    const wsKey = getClientWorkspaceKey(req);
-    const ws = getWorkspace(wsKey);
-    const wsScripts = state.scripts.filter((s) => (s.wsKey || 'default') === wsKey);
+    const ws = req.wsState;
     const channelId = String(req.body?.channelId || '').trim();
-    const scriptId = String(req.body?.scriptId || wsScripts[0]?.id || '').trim();
+    const scriptId = String(req.body?.scriptId || ws.scripts[0]?.id || '').trim();
     if (!channelId) {
       return res.status(400).json({ ok: false, message: 'Kanal ID daxil edin.' });
     }
-    const sc = wsScripts.find((s) => s.id === scriptId) || wsScripts[0] || {
+    const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0] || {
       id: 'default',
       name: 'SADO HUB',
       loaderToken: 'default',
     };
-    const { embed, row } = buildPanelEmbedAndButtons(sc, ws.panelConfig);
+    const { embed, row } = buildPanelEmbedAndButtons(ws, sc);
     const panelRest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     const sentMsg = await panelRest.post(Routes.channelMessages(channelId), {
       body: {
@@ -1803,9 +1865,8 @@ app.post('/api/send-panel', async (req, res) => {
       },
     });
 
-    state.panels.push({
+    ws.panels.push({
       id: generateId('pnl'),
-      wsKey,
       guildId: ws.activeGuildId || '',
       channelId,
       messageId: sentMsg && sentMsg.id ? sentMsg.id : '',
@@ -1821,7 +1882,7 @@ app.post('/api/send-panel', async (req, res) => {
 });
 
 // ============================================================================
-// 5. TAM DASHBOARD HTML UI (3 XƏTT MENYU, RƏNGLİ DİZAYN, JOIN/ID, PANEL DİZAYN)
+// 5. TAM DASHBOARD HTML UI (HƏR TELEFONA AYRI WORKSPACE + 3 XƏTT MENYU)
 // ============================================================================
 
 const DASHBOARD_HTML = [
@@ -2087,7 +2148,7 @@ const DASHBOARD_HTML = [
   '    <section class="section" id="tab-discord">',
   '      <div class="card">',
   '        <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>',
-  '        <p class="muted">1. Aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br/>2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bütün idarəetmə paneli tam sizə bağlanacaq.</p>',
+  '        <p class="muted">1. Aşağıdakı düymə ilə <b>SADO PROTECT</b> botunu öz Discord sunucunuza əlavə edin.<br/>2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bu telefon/cihaz üçün tam müstəqil idarəetmə paneli açılacaq.</p>',
   '        <a class="btn btn-green" id="inviteBotLinkBtn" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot" target="_blank" rel="noopener noreferrer">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</a>',
   '        <label>Botun Olduğu Sunuculardan Öz Sunucunu Seç</label><select id="guildSelectDropdown"><option value="">-- Sunucu seçin və ya aşağıya ID yazın --</option></select>',
   '        <label>Və ya Discord Sunucu ID (Server ID)</label><input type="text" id="linkGuildIdInput" placeholder="Məs: 1559499280732131348" />',
@@ -2118,19 +2179,23 @@ const DASHBOARD_HTML = [
   '  <div class="toast" id="toastBox"></div>',
   '  <script>',
   '    (function () {',
-  '      var clientWsId = localStorage.getItem("sado_device_ws_id");',
-  '      if (!clientWsId) {',
-  '        clientWsId = "dev_" + Math.random().toString(36).slice(2) + "_" + Date.now().toString(36);',
-  '        localStorage.setItem("sado_device_ws_id", clientWsId);',
+  '      function getDeviceWorkspaceId() {',
+  '        var key = "sado_device_ws_id_v1";',
+  '        var id = "";',
+  '        try { id = localStorage.getItem(key) || ""; } catch (_e) {}',
+  '        if (!id || id.length < 8) {',
+  '          var rnd = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);',
+  '          id = "ws_" + rnd;',
+  '          try { localStorage.setItem(key, id); } catch (_e) {}',
+  '        }',
+  '        return id;',
   '      }',
-  '      var origFetch = window.fetch.bind(window);',
-  '      window.fetch = function (url, opts) {',
+  '      var DEVICE_WS_ID = getDeviceWorkspaceId();',
+  '      function apiFetch(url, opts) {',
   '        opts = opts || {};',
-  '        var hdrs = new Headers(opts.headers || {});',
-  '        hdrs.set("X-Client-Workspace", clientWsId);',
-  '        opts.headers = hdrs;',
-  '        return origFetch(url, opts);',
-  '      };',
+  '        var hdrs = Object.assign({}, opts.headers || {}, { "x-workspace-id": DEVICE_WS_ID });',
+  '        return fetch(url, Object.assign({}, opts, { headers: hdrs }));',
+  '      }',
   '      var initialInputsLoaded = false;',
   '      var latestScripts = [];',
   '      var uploadedFileText = "";',
@@ -2214,7 +2279,7 @@ const DASHBOARD_HTML = [
   '      }',
   '      async function refreshStatusAndOverview() {',
   '        try {',
-  '          var res = await fetch("/api/status");',
+  '          var res = await apiFetch("/api/status");',
   '          var data = await res.json();',
   '          if (!data.ok) return;',
   '          var pill = document.getElementById("botStatusPill");',
@@ -2280,7 +2345,7 @@ const DASHBOARD_HTML = [
   '      }',
   '      async function refreshScripts() {',
   '        try {',
-  '          var res = await fetch("/api/scripts");',
+  '          var res = await apiFetch("/api/scripts");',
   '          var data = await res.json();',
   '          if (!data.ok) return;',
   '          latestScripts = data.scripts || [];',
@@ -2298,7 +2363,7 @@ const DASHBOARD_HTML = [
   '        var nextName = document.getElementById("newScriptName").value.trim() || sc.name;',
   '        var nextCode = document.getElementById("newScriptCode").value || sc.code;',
   '        var obf = document.getElementById("newScriptObfuscate").checked;',
-  '        var r = await fetch("/api/scripts/" + encodeURIComponent(id), {',
+  '        var r = await apiFetch("/api/scripts/" + encodeURIComponent(id), {',
   '          method: "PUT", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ name: nextName, code: nextCode, obfuscate: obf, obfuscateLevel: 3 })',
   '        });',
@@ -2307,14 +2372,14 @@ const DASHBOARD_HTML = [
   '        await refreshScripts();',
   '      };',
   '      window.__deleteScript = async function (id) {',
-  '        var r = await fetch("/api/scripts/" + encodeURIComponent(id), { method: "DELETE" });',
+  '        var r = await apiFetch("/api/scripts/" + encodeURIComponent(id), { method: "DELETE" });',
   '        var j = await r.json();',
   '        showToast(j.message || "Silindi");',
   '        await refreshAll();',
   '      };',
   '      async function refreshKeysAndLists() {',
   '        try {',
-  '          var results = await Promise.all([fetch("/api/keys"), fetch("/api/whitelist"), fetch("/api/blacklist")]);',
+  '          var results = await Promise.all([apiFetch("/api/keys"), apiFetch("/api/whitelist"), apiFetch("/api/blacklist")]);',
   '          var parsed = await Promise.all(results.map(function (r) { return r.json(); }));',
   '          var kData = parsed[0], wData = parsed[1], bData = parsed[2];',
   '          var kBox = document.getElementById("keysListContainer");',
@@ -2346,16 +2411,16 @@ const DASHBOARD_HTML = [
   '          }',
   '        } catch (_err) {}',
   '      }',
-  '      window.__delKey = async function (id) { await fetch("/api/keys/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Key silindi"); await refreshAll(); };',
-  '      window.__delWl = async function (id) { await fetch("/api/whitelist/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Whitelist silindi"); await refreshAll(); };',
-  '      window.__delBl = async function (id) { await fetch("/api/blacklist/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Blacklist-dən çıxarıldı"); await refreshAll(); };',
+  '      window.__delKey = async function (id) { await apiFetch("/api/keys/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Key silindi"); await refreshAll(); };',
+  '      window.__delWl = async function (id) { await apiFetch("/api/whitelist/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Whitelist silindi"); await refreshAll(); };',
+  '      window.__delBl = async function (id) { await apiFetch("/api/blacklist/" + encodeURIComponent(id), { method: "DELETE" }); showToast("Blacklist-dən çıxarıldı"); await refreshAll(); };',
   '      document.getElementById("createScriptBtn").addEventListener("click", async function () {',
   '        var name = document.getElementById("newScriptName").value.trim();',
   '        var code = document.getElementById("newScriptCode").value || uploadedFileText;',
   '        var obfuscate = document.getElementById("newScriptObfuscate").checked;',
   '        var fileEl = document.getElementById("newScriptFileInput");',
   '        var fileName = (fileEl.files && fileEl.files[0]) ? fileEl.files[0].name : ((name || "script") + ".lua");',
-  '        var r = await fetch("/api/scripts", {',
+  '        var r = await apiFetch("/api/scripts", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ name: name, fileName: fileName, code: code, obfuscate: obfuscate, obfuscateLevel: 3 })',
   '        });',
@@ -2372,7 +2437,7 @@ const DASHBOARD_HTML = [
   '      document.getElementById("sendPanelBtn").addEventListener("click", async function () {',
   '        var channelId = document.getElementById("panelChannelIdInput").value.trim();',
   '        var scriptId = document.getElementById("panelScriptSelect").value;',
-  '        var r = await fetch("/api/send-panel", {',
+  '        var r = await apiFetch("/api/send-panel", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ channelId: channelId, scriptId: scriptId })',
   '        });',
@@ -2383,7 +2448,7 @@ const DASHBOARD_HTML = [
   '      document.getElementById("runObfBtn").addEventListener("click", async function () {',
   '        var code = document.getElementById("obfInputCode").value;',
   '        var level = Number(document.getElementById("obfLevelSelect").value || 3);',
-  '        var r = await fetch("/api/obfuscate", {',
+  '        var r = await apiFetch("/api/obfuscate", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ code: code, level: level })',
   '        });',
@@ -2402,7 +2467,7 @@ const DASHBOARD_HTML = [
   '        var level = Number(document.getElementById("obfLevelSelect").value || 3);',
   '        var name = document.getElementById("obfSaveScriptName").value.trim() || "SADO Obfuscated Script";',
   '        var finalCode = obfCode.trim() ? obfCode : rawCode;',
-  '        var r = await fetch("/api/scripts", {',
+  '        var r = await apiFetch("/api/scripts", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ name: name, code: finalCode, obfuscate: !obfCode.trim(), obfuscateLevel: level, preObfuscated: Boolean(obfCode.trim()) })',
   '        });',
@@ -2414,7 +2479,7 @@ const DASHBOARD_HTML = [
   '        var scriptId = document.getElementById("keyScriptSelect").value;',
   '        var duration = document.getElementById("keyDurationInput").value.trim();',
   '        var amount = Number(document.getElementById("keyAmountInput").value || 1);',
-  '        var r = await fetch("/api/keys", {',
+  '        var r = await apiFetch("/api/keys", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ scriptId: scriptId, duration: duration, amount: amount })',
   '        });',
@@ -2426,7 +2491,7 @@ const DASHBOARD_HTML = [
   '        var discordUserId = document.getElementById("wlUserIdInput").value.trim();',
   '        var scriptId = document.getElementById("wlScriptSelect").value;',
   '        var duration = document.getElementById("wlDurationInput").value.trim();',
-  '        var r = await fetch("/api/whitelist", {',
+  '        var r = await apiFetch("/api/whitelist", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ discordUserId: discordUserId, scriptId: scriptId, duration: duration })',
   '        });',
@@ -2436,7 +2501,7 @@ const DASHBOARD_HTML = [
   '      });',
   '      document.getElementById("addBlacklistBtn").addEventListener("click", async function () {',
   '        var discordUserId = document.getElementById("blUserIdInput").value.trim();',
-  '        var r = await fetch("/api/blacklist", {',
+  '        var r = await apiFetch("/api/blacklist", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ discordUserId: discordUserId })',
   '        });',
@@ -2447,7 +2512,7 @@ const DASHBOARD_HTML = [
   '      document.getElementById("linkWorkspaceBtn").addEventListener("click", async function () {',
   '        var guildId = document.getElementById("linkGuildIdInput").value.trim();',
   '        var discordUserId = document.getElementById("linkDiscordIdInput").value.trim();',
-  '        var r = await fetch("/api/workspace/link", {',
+  '        var r = await apiFetch("/api/workspace/link", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify({ guildId: guildId, discordUserId: discordUserId })',
   '        });',
@@ -2469,7 +2534,7 @@ const DASHBOARD_HTML = [
   '          statsLabel: document.getElementById("cfgStatsLabel").value.trim(),',
   '          statsStyle: document.getElementById("cfgStatsStyle").value',
   '        };',
-  '        var r = await fetch("/api/panel-config", {',
+  '        var r = await apiFetch("/api/panel-config", {',
   '          method: "POST", headers: { "Content-Type": "application/json" },',
   '          body: JSON.stringify(payload)',
   '        });',
