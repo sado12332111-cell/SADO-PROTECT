@@ -399,24 +399,6 @@ const refreshGuildNameInState = async (targetGuildId) => {
   return dbState.botConfig.guildName || "";
 };
 
-const refreshGuildNameInState = async (targetGuildId) => {
-  const cleanId = String(targetGuildId || dbState.botConfig.guildId || "").trim();
-  if (!cleanId) {
-    return "";
-  }
-  const resolvedName = await resolveGuildDisplayName(cleanId);
-  if (resolvedName && resolvedName !== "Sado Protect Hub") {
-    dbState.botConfig.guildId = cleanId;
-    dbState.botConfig.guildName = resolvedName;
-    if (botRuntimeStatus.connectedGuildId === cleanId || !botRuntimeStatus.connectedGuildId) {
-      botRuntimeStatus.connectedGuildName = resolvedName;
-      botRuntimeStatus.connectedGuildId = cleanId;
-    }
-    persistDatabaseToDisk();
-  }
-  return resolvedName;
-};
-
 const parseHexColorToInt = (hexValue) => {
   const cleaned = String(hexValue || DEFAULT_THEME_COLOR)
     .replace("#", "")
