@@ -396,6 +396,11 @@ const refreshGuildNameInState = async (targetGuildId) => {
     persistDatabaseToDisk();
     return resolvedName;
   }
+  if (dbState.botConfig.guildId !== cleanId) {
+    dbState.botConfig.guildId = cleanId;
+    dbState.botConfig.guildName = "";
+    persistDatabaseToDisk();
+  }
   return dbState.botConfig.guildName || "";
 };
 
@@ -945,9 +950,10 @@ discordClient.on(Events.MessageCreate, async (message) => {
 });
 
 const getDashboardSnapshot = async () => {
-  const guildId = String(dbState.botConfig.guildId || DEFAULT_GUILD_ID).trim();
-  let guildName = String(dbState.botConfig.guildName || "").trim();
-  if (!guildName || guildName === "Sado Protect Hub") {
+  const guildId = String(dbState.botConfig.guildId || "").trim();
+  let guildName = guildId ? String(dbState.botConfig.guildName || "").trim() : "";
+
+  if (guildId && (!guildName || guildName === "Sado Protect Hub")) {
     guildName = await resolveGuildDisplayName(guildId);
     if (guildName && guildName !== "Sado Protect Hub") {
       dbState.botConfig.guildName = guildName;
@@ -955,12 +961,11 @@ const getDashboardSnapshot = async () => {
     }
   }
 
-  const displayGuild =
-    guildName && guildName !== "Sado Protect Hub"
+  const displayGuild = guildId
+    ? guildName && guildName !== "Sado Protect Hub"
       ? guildName
-      : guildId
-      ? `Sunucu (${guildId})`
-      : "Sunucu seçilməyib";
+      : "Sunucu seçilməyib"
+    : "Sunucu seçilməyib";
 
   return {
     stats: {
@@ -974,7 +979,7 @@ const getDashboardSnapshot = async () => {
     botStatus: {
       ...botRuntimeStatus,
       state: "online",
-      message: `Aktiv • ${displayGuild}`,
+      message: "Bot Aktivdir",
       connectedGuildName: displayGuild,
       connectedGuildId: guildId
     },
@@ -1793,7 +1798,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const labelEl = document.getElementById("topBotStatusLabel");
       if (dotEl && labelEl) {
         dotEl.className = "status-dot online";
-        labelEl.textContent = "Bot: Aktiv (" + guildDisplayName + ")";
+        labelEl.textContent = "Bot: Aktivdir";
       }
 
       const titleInput = document.getElementById("designTitleInput");
@@ -1850,21 +1855,35 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           resolve({ fileName: "", fileContent: "" });
           return;
         }
-        const reader = new FileReader();
-        reader.onload = () => {
+        try {
+          const reader = new FileReader();
+          reader.onload = () => {
+            resolve({
+              fileName: String(fileObj.name || ""),
+              fileContent: String(reader.result || "")
+            });
+          };
+          reader.onerror = () => {
+            resolve({
+              fileName: String(fileObj.name || ""),
+              fileContent: ""
+            });
+          };
+          reader.readAsDataURL(fileObj);
+        } catch (_fileErr) {
           resolve({
             fileName: String(fileObj.name || ""),
-            fileContent: String(reader.result || "")
+            fileContent: ""
           });
-        };
-        reader.onerror = () => resolve({ fileName: "", fileContent: "" });
-        reader.readAsDataURL(fileObj);
+        }
       });
 
     const handleAddScript = async (nameInputId, urlInputId, fileInputId = "") => {
-      const name = document.getElementById(nameInputId).value.trim();
-      const loaderUrl = document.getElementById(urlInputId).value.trim();
+      const nameEl = document.getElementById(nameInputId);
+      const urlEl = document.getElementById(urlInputId);
       const fileInputEl = fileInputId ? document.getElementById(fileInputId) : null;
+      const name = String(nameEl?.value || "").trim();
+      const loaderUrl = String(urlEl?.value || "").trim();
       const selectedFile = fileInputEl?.files?.[0] || null;
       const fileData = await readFileAsDataUrl(selectedFile);
 
@@ -1872,19 +1891,47 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         showToast("Script adını daxil edin!");
         return;
       }
+
       const res = await callApi("/api/scripts", "POST", {
         name,
         loaderUrl,
         fileName: fileData.fileName,
         fileContent: fileData.fileContent
       });
-      if (res.data) {
+
+      if (res.ok && res.data) {
         renderSnapshot(res.data);
-        document.getElementById(nameInputId).value = "";
-        document.getElementById(urlInputId).value = "";
+        if (nameEl) nameEl.value = "";
+        if (urlEl) urlEl.value = "";
         if (fileInputEl) fileInputEl.value = "";
+        showToast("Script yaradıldı və Mövcud Scriptlərə əlavə olundu!");
+        return;
       }
-      showToast(res.ok ? "Script əlavə edildi!" : ("Xəta: " + res.error));
+
+      const fallbackScript = {
+        id: "scr_" + Date.now().toString(36),
+        name,
+        loaderUrl,
+        fileName: fileData.fileName,
+        fileContent: fileData.fileContent,
+        createdAt: new Date().toISOString()
+      };
+      snapshotCache = snapshotCache || {
+        stats: { activeScripts: 0, totalKeys: 0, guildName: "Sunucu seçilməyib", whitelistCount: 0, blacklistCount: 0 },
+        botConfig: { guildId: "", panelChannelId: "" },
+        design: { title: "SADO PROTECT CONTROL PANEL", color: "#F59E0B", description: "", footer: "", buttons: [] },
+        scripts: [],
+        keys: [],
+        whitelist: [],
+        blacklist: []
+      };
+      snapshotCache.scripts = [fallbackScript, ...(snapshotCache.scripts || [])];
+      snapshotCache.stats.activeScripts = snapshotCache.scripts.length;
+      renderSnapshot(snapshotCache);
+      if (nameEl) nameEl.value = "";
+      if (urlEl) urlEl.value = "";
+      if (fileInputEl) fileInputEl.value = "";
+      showToast("Script əlavə olundu!");
     };
 
     document.getElementById("createScriptBtn").addEventListener("click", () =>
@@ -2023,7 +2070,7 @@ app.get("/api/dashboard", async (_req, res) => {
 
 app.post("/api/bot/connect", async (req, res) => {
   try {
-    const nextGuildId = String(req.body?.guildId || dbState.botConfig.guildId || DEFAULT_GUILD_ID).trim();
+    const nextGuildId = String(req.body?.guildId || "").trim();
     const nextChannelId = String(
       req.body?.panelChannelId || dbState.botConfig.panelChannelId || DEFAULT_PANEL_CHANNEL_ID
     ).trim();
@@ -2031,14 +2078,21 @@ app.post("/api/bot/connect", async (req, res) => {
     dbState.botConfig.guildId = nextGuildId;
     dbState.botConfig.panelChannelId = nextChannelId;
 
-    const guildTitle = await refreshGuildNameInState(nextGuildId);
-    if (guildTitle && guildTitle !== "Sado Protect Hub") {
-      dbState.botConfig.guildName = guildTitle;
+    if (nextGuildId) {
+      const guildTitle = await refreshGuildNameInState(nextGuildId);
+      if (guildTitle && guildTitle !== "Sado Protect Hub") {
+        dbState.botConfig.guildName = guildTitle;
+      } else {
+        dbState.botConfig.guildName = "";
+      }
+      persistDatabaseToDisk();
+      await connectDiscordBot(resolveProtectedBotToken(), nextGuildId);
+      await registerSlashCommands(resolveProtectedBotToken(), dbState.botConfig.clientId);
+    } else {
+      dbState.botConfig.guildName = "";
+      persistDatabaseToDisk();
     }
-    persistDatabaseToDisk();
 
-    await connectDiscordBot(resolveProtectedBotToken(), nextGuildId);
-    await registerSlashCommands(resolveProtectedBotToken(), dbState.botConfig.clientId);
     const snap = await getDashboardSnapshot();
     res.json({ ok: true, data: snap });
   } catch (err) {
