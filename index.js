@@ -635,16 +635,36 @@ const ensureBotOnline = async () => {
 };
 
 const startWatchdog = () => {
-  setInterval(async () => {
-    try {
-      if (!client.isReady() && !storeState.isConnectingNow) {
-        await ensureBotOnline();
-      }
-      if (client.isReady() && !storeState.commandsRegistered) {
-        await registerSlashCommands().catch(() => {});
-      }
-    } catch (_e) {}
+  const intervalId = setInterval(async () => {
+    const readyNow = client.isReady();
+    const connectingNow = storeState.isConnectingNow;
+    const shouldLogin = !readyNow && !connectingNow;
+    const loginPromise = shouldLogin ? ensureBotOnline() : Promise.resolve();
+    const regPromise = readyNow && !storeState.commandsRegistered ? registerSlashCommands() : Promise.resolve();
+    const settleAll = await Promise.allSettled([loginPromise, regPromise]);
+    return settleAll;
+  }, 30000);
+  return intervalId;
+};
+
+const startRenderKeepAlive = () => {
+  const hostUrl = process.env.RENDER_EXTERNAL_URL || 'https://sado-protect.onrender.com';
+  const localUrl = `http://127.0.0.1:${PORT}/health`;
+  const pingTargets = [
+    `${String(hostUrl).replace(/\/+$/, '')}/health`,
+    `${String(hostUrl).replace(/\/+$/, '')}/api/status`,
+    localUrl,
+  ];
+  const timerId = setInterval(async () => {
+    const botOk = client.isReady();
+    const loginTask = !botOk && !storeState.isConnectingNow ? ensureBotOnline() : Promise.resolve();
+    const pingTasks = pingTargets.map((targetUrl) =>
+      fetch(targetUrl, { headers: { 'X-Keepalive-Ping': '1' } }).catch(() => null)
+    );
+    const results = await Promise.allSettled([loginTask, ...pingTasks]);
+    return results;
   }, 45000);
+  return timerId;
 };
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -2426,14 +2446,9 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[WEB] SADO PROTECT http://0.0.0.0:${PORT} ünvanında işləyir`);
-  await loadStore();
-  startWatchdog();
-  await ensureBotOnline();
-  const selfPingUrl = process.env.RENDER_EXTERNAL_URL || 'https://sado-protect.onrender.com';
-  setInterval(() => {
-    fetch(`${selfPingUrl}/health`).catch(() => {});
-    if (!client.isReady() && !storeState.isConnectingNow) {
-      ensureBotOnline().catch(() => {});
-    }
-  }, 4 * 60 * 1000);
+  const loaded = await loadStore();
+  const watchdog = startWatchdog();
+  const keepAlive = startRenderKeepAlive();
+  const initialLogin = await ensureBotOnline();
+  return { loaded, watchdog, keepAlive, initialLogin };
 });
