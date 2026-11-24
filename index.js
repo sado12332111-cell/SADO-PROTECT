@@ -336,6 +336,15 @@ const buildPublicBaseUrl = (req) => {
   }
   return `http://localhost:${PORT}`;
 };
+
+const buildLoaderSnippet = (wsId, sc, wl, baseUrl) => {
+  const safeBase = String(baseUrl || `http://localhost:${PORT}`).replace(/\/+$/, '');
+  const loaderToken = sc && (sc.loaderToken || sc.id) ? (sc.loaderToken || sc.id) : 'default';
+  const loaderUrl = `${safeBase}/loader/${encodeURIComponent(loaderToken)}?ws=${encodeURIComponent(wsId || 'default')}`;
+  const keyText = wl && wl.key ? wl.key : 'YOUR_KEY';
+  return `script_key = "${keyText}"\nloadstring(game:HttpGet("${loaderUrl}"))()`;
+};
+
 const resolveButtonStyle = (styleName, fallbackStyle) => {
   const map = {
     Success: ButtonStyle.Success,
@@ -1885,10 +1894,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   const obfuscateLuaSource = (src, level) => {
     const bytes = [];
-    for (let i = 0; i < src.length; i++) {
-      bytes.push((src.charCodeAt(i) + (level === 'level3' ? 7 : level === 'level2' ? 3 : 1)) % 256);
-    }
     const shift = level === 'level3' ? 7 : level === 'level2' ? 3 : 1;
+    for (let i = 0; i < src.length; i += 1) {
+      bytes.push((src.charCodeAt(i) + shift) % 256);
+    }
     return [
       `-- SADO PROTECT Obfuscated (${level})`,
       `local _b = {${bytes.join(',')}}`,
