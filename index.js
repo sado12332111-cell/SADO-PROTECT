@@ -2100,22 +2100,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         <div class="brand-name">SADO PROTECT</div>
         <div class="brand-meta">Bölmə Seçin</div>
       </div>
-      <button type="button" class="close-nav" id="closeMenuBtn">✕</button>
+      <button type="button" class="close-nav" id="closeMenuBtn" onclick="document.getElementById('navOverlay').style.display='none'">✕</button>
     </div>
 
-    <button type="button" class="menu-card-btn active" data-page="overview">
+    <button type="button" class="menu-card-btn active" data-page="overview" onclick="window.__sadoSwitchPage && window.__sadoSwitchPage('overview')">
       <span>1️⃣</span><span>Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</span>
     </button>
-    <button type="button" class="menu-card-btn" data-page="scripts">
+    <button type="button" class="menu-card-btn" data-page="scripts" onclick="window.__sadoSwitchPage && window.__sadoSwitchPage('scripts')">
       <span>2️⃣</span><span>Script Yaratma &amp; Ultra Obfuscation</span>
     </button>
-    <button type="button" class="menu-card-btn" data-page="keys">
+    <button type="button" class="menu-card-btn" data-page="keys" onclick="window.__sadoSwitchPage && window.__sadoSwitchPage('keys')">
       <span>3️⃣</span><span>Key, Whitelist &amp; Blacklist</span>
     </button>
-    <button type="button" class="menu-card-btn" data-page="discord">
+    <button type="button" class="menu-card-btn" data-page="discord" onclick="window.__sadoSwitchPage && window.__sadoSwitchPage('discord')">
       <span>4️⃣</span><span>Discord Bot &amp; Panel Dizayn</span>
     </button>
-    <button type="button" class="menu-card-btn" data-page="sendpanel">
+    <button type="button" class="menu-card-btn" data-page="sendpanel" onclick="window.__sadoSwitchPage && window.__sadoSwitchPage('sendpanel')">
       <span>📤</span><span>Kanala Panel Göndər</span>
     </button>
   </div>
@@ -2413,21 +2413,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     const activatePage = (pageKey) => {
+      const targetKey = String(pageKey || 'overview');
       document.querySelectorAll('.page-panel').forEach((panel) => {
-        panel.classList.toggle('active', panel.id === 'page-' + pageKey);
+        const match = panel.id === 'page-' + targetKey;
+        panel.classList.toggle('active', match);
+        panel.style.display = match ? 'grid' : 'none';
       });
       document.querySelectorAll('.menu-card-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-page') === pageKey);
+        btn.classList.toggle('active', btn.getAttribute('data-page') === targetKey);
       });
       setMenuVisible(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
-    const renderButtonOrderList = () => {
-      const stack = document.getElementById('btnOrderStack');
-      if (!stack) return;
-      stack.innerHTML = uiState.buttonOrder
-        .map((key, idx) => {
-          return (
+    window.__sadoSwitchPage = activatePage;
+    window.__sadoCloseMenu = () => setMenuVisible(false);
             '<div class="order-row"><strong>#' +
             (idx + 1) +
             ' • ' +
@@ -2458,18 +2458,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const data = await stateRes.json();
         if (!data || !data.ok) return;
 
-        const gName = data.guildName || 'Seçilməyib';
-        document.getElementById('botStatusChip').textContent =
-          st && st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...';
-        document.getElementById('headerSub').textContent =
-          'Cyber Command • Qoşulan Sunucu: ' + gName;
-        document.getElementById('statScripts').textContent = String((data.scripts || []).length);
-        document.getElementById('statKeys').textContent = String((data.keys || []).length);
-        document.getElementById('statWl').textContent = String((data.whitelists || []).length);
-        document.getElementById('statBl').textContent = String((data.blacklist || []).length);
-        document.getElementById('statGuild').textContent = gName;
+        const setText = (id, val) => {
+          const el = document.getElementById(id);
+          if (el) el.textContent = String(val);
+        };
+        const setHtml = (id, val) => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = String(val);
+        };
 
-        if (data.inviteUrl) document.getElementById('inviteBotAnchor').href = data.inviteUrl;
+        const gName = data.guildName || 'Seçilməyib';
+        setText('botStatusChip', st && st.botReady ? 'Bot: Online ✅' : 'Bot: Qoşulur...');
+        setText('headerSub', 'Cyber Command • Qoşulan Sunucu: ' + gName);
+        setText('statScripts', (data.scripts || []).length);
+        setText('statKeys', (data.keys || []).length);
+        setText('statWl', (data.whitelists || []).length);
+        setText('statBl', (data.blacklist || []).length);
+        setText('statGuild', gName);
+
+        const invEl = document.getElementById('inviteBotAnchor');
+        if (invEl && data.inviteUrl) invEl.href = data.inviteUrl;
 
         const gDrop = document.getElementById('botGuildDropdown');
         if (gDrop) {
@@ -2484,153 +2492,176 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           .map((s) => '<option value="' + s.id + '">' + s.name + '</option>')
           .join('');
         ['keyScSelect', 'wlScSelect', 'sendScriptSelect'].forEach((id) => {
-          const el = document.getElementById(id);
-          if (el) el.innerHTML = scOpts;
+          setHtml(id, scOpts);
         });
 
         const recentList = (data.keys || []).slice(0, 8);
-        document.getElementById('recentKeysTable').innerHTML = recentList.length
-          ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th></tr>' +
-            recentList
-              .map(
-                (k) =>
-                  '<tr><td><code>' +
-                  k.key +
-                  '</code></td><td>' +
-                  (k.duration || 'lifetime') +
-                  '</td><td>' +
-                  renderProfile(k.createdByName, k.createdByAvatar, '-') +
-                  '</td><td>' +
-                  (k.used
-                    ? renderProfile(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
-                    : 'Hələ işlənməyib') +
-                  '</td></tr>'
-              )
-              .join('') +
-            '</table>'
-          : 'Hələ key yaradılmayıb.';
+        setHtml(
+          'recentKeysTable',
+          recentList.length
+            ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th></tr>' +
+                recentList
+                  .map(
+                    (k) =>
+                      '<tr><td><code>' +
+                      k.key +
+                      '</code></td><td>' +
+                      (k.duration || 'lifetime') +
+                      '</td><td>' +
+                      renderProfile(k.createdByName, k.createdByAvatar, '-') +
+                      '</td><td>' +
+                      (k.used
+                        ? renderProfile(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
+                        : 'Hələ işlənməyib') +
+                      '</td></tr>'
+                  )
+                  .join('') +
+                '</table>'
+            : 'Hələ key yaradılmayıb.'
+        );
 
         const origin = window.location.origin;
-        document.getElementById('existingScriptsList').innerHTML = (data.scripts || [])
-          .map((s) => {
-            const loaderUrl = origin + '/loader/' + s.loaderToken + '?ws=' + wsId;
-            const snippet = 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
-            const badge = s.obfuscated
-              ? '🛡️ Obfuscation Açıq (Lv.' + (s.obfuscateLevel || 3) + ')'
-              : 'Obfuscation Bağlı';
-            return (
-              '<div class="script-box"><div class="script-head"><div><strong>📜 ' +
-              s.name +
-              '</strong><div class="brand-meta">' +
-              badge +
-              '</div></div><div style="display:flex;gap:8px;">' +
-              '<button type="button" class="btn btn-teal btn-sm" data-copy-snippet="' +
-              encodeURIComponent(snippet) +
-              '">📋 Get Script Kopyala</button>' +
-              '<button type="button" class="btn btn-rose btn-sm" data-del-script="' +
-              s.id +
-              '">🗑️ Sil</button></div></div>' +
-              '<div class="loader-box">' +
-              snippet.replace(/\n/g, '<br/>') +
-              '</div></div>'
-            );
-          })
-          .join('');
+        setHtml(
+          'existingScriptsList',
+          (data.scripts || [])
+            .map((s) => {
+              const loaderUrl = origin + '/loader/' + s.loaderToken + '?ws=' + wsId;
+              const snippet = 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
+              const badge = s.obfuscated
+                ? '🛡️ Obfuscation Açıq (Lv.' + (s.obfuscateLevel || 3) + ')'
+                : 'Obfuscation Bağlı';
+              return (
+                '<div class="script-box"><div class="script-head"><div><strong>📜 ' +
+                s.name +
+                '</strong><div class="brand-meta">' +
+                badge +
+                '</div></div><div style="display:flex;gap:8px;">' +
+                '<button type="button" class="btn btn-teal btn-sm" data-copy-snippet="' +
+                encodeURIComponent(snippet) +
+                '">📋 Get Script Kopyala</button>' +
+                '<button type="button" class="btn btn-rose btn-sm" data-del-script="' +
+                s.id +
+                '">🗑️ Sil</button></div></div>' +
+                '<div class="loader-box">' +
+                snippet.replace(/\n/g, '<br/>') +
+                '</div></div>'
+              );
+            })
+            .join('')
+        );
 
-        document.getElementById('allKeysTable').innerHTML = (data.keys || []).length
-          ? '<table><tr><th>Key</th><th>Skript</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
-            (data.keys || [])
-              .map(
-                (k) =>
-                  '<tr><td><code>' +
-                  k.key +
-                  '</code></td><td>' +
-                  (k.scriptName || '-') +
-                  '</td><td>' +
-                  (k.duration || 'lifetime') +
-                  '</td><td>' +
-                  renderProfile(k.createdByName, k.createdByAvatar, '-') +
-                  '</td><td>' +
-                  (k.used
-                    ? renderProfile(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
-                    : 'Boş') +
-                  '</td><td><button type="button" class="btn btn-rose btn-sm" data-del-key="' +
-                  encodeURIComponent(k.key) +
-                  '">Sil</button></td></tr>'
-              )
-              .join('') +
-            '</table>'
-          : '<div class="brand-meta">Hələ key yaradılmayıb.</div>';
+        setHtml(
+          'allKeysTable',
+          (data.keys || []).length
+            ? '<table><tr><th>Key</th><th>Skript</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
+                (data.keys || [])
+                  .map(
+                    (k) =>
+                      '<tr><td><code>' +
+                      k.key +
+                      '</code></td><td>' +
+                      (k.scriptName || '-') +
+                      '</td><td>' +
+                      (k.duration || 'lifetime') +
+                      '</td><td>' +
+                      renderProfile(k.createdByName, k.createdByAvatar, '-') +
+                      '</td><td>' +
+                      (k.used
+                        ? renderProfile(k.usedByName, k.usedByAvatar, k.usedByDiscordId)
+                        : 'Boş') +
+                      '</td><td><button type="button" class="btn btn-rose btn-sm" data-del-key="' +
+                      encodeURIComponent(k.key) +
+                      '">Sil</button></td></tr>'
+                  )
+                  .join('') +
+                '</table>'
+            : '<div class="brand-meta">Hələ key yaradılmayıb.</div>'
+        );
 
-        document.getElementById('allWlTable').innerHTML = (data.whitelists || []).length
-          ? '<table><tr><th>İstifadəçi</th><th>Bağlı HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
-            (data.whitelists || [])
-              .map(
-                (w) =>
-                  '<tr><td>' +
-                  renderProfile(w.username, w.avatarUrl, w.discordUserId) +
-                  '<div class="brand-meta">Edən: ' +
-                  (w.addedByName || '-') +
-                  '</div></td><td><code>' +
-                  (w.hwid || 'İlk cihaza bağlanacaq') +
-                  '</code></td><td>' +
-                  (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
-                  '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
-                  '<button type="button" class="btn btn-sky btn-sm" data-lock-wl="' +
-                  w.id +
-                  '">Kilid</button>' +
-                  '<button type="button" class="btn btn-gold btn-sm" data-reset-wl="' +
-                  w.id +
-                  '">Reset HWID</button>' +
-                  '<button type="button" class="btn btn-rose btn-sm" data-del-wl="' +
-                  w.id +
-                  '">Sil</button></div></td></tr>'
-              )
-              .join('') +
-            '</table>'
-          : '<div class="brand-meta">Aktiv whitelist yoxdur.</div>';
+        setHtml(
+          'allWlTable',
+          (data.whitelists || []).length
+            ? '<table><tr><th>İstifadəçi</th><th>Bağlı HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
+                (data.whitelists || [])
+                  .map(
+                    (w) =>
+                      '<tr><td>' +
+                      renderProfile(w.username, w.avatarUrl, w.discordUserId) +
+                      '<div class="brand-meta">Edən: ' +
+                      (w.addedByName || '-') +
+                      '</div></td><td><code>' +
+                      (w.hwid || 'İlk cihaza bağlanacaq') +
+                      '</code></td><td>' +
+                      (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
+                      '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                      '<button type="button" class="btn btn-sky btn-sm" data-lock-wl="' +
+                      w.id +
+                      '">Kilid</button>' +
+                      '<button type="button" class="btn btn-gold btn-sm" data-reset-wl="' +
+                      w.id +
+                      '">Reset HWID</button>' +
+                      '<button type="button" class="btn btn-rose btn-sm" data-del-wl="' +
+                      w.id +
+                      '">Sil</button></div></td></tr>'
+                  )
+                  .join('') +
+                '</table>'
+            : '<div class="brand-meta">Aktiv whitelist yoxdur.</div>'
+        );
 
-        document.getElementById('allBlTable').innerHTML = (data.blacklist || []).length
-          ? '<table><tr><th>İstifadəçi</th><th>ID</th><th>Sil</th></tr>' +
-            (data.blacklist || [])
-              .map(
-                (b) =>
-                  '<tr><td>' +
-                  renderProfile(b.username, b.avatarUrl, b.discordUserId) +
-                  '</td><td>' +
-                  b.discordUserId +
-                  '</td><td><button type="button" class="btn btn-rose btn-sm" data-del-bl="' +
-                  b.id +
-                  '">Çıxar</button></td></tr>'
-              )
-              .join('') +
-            '</table>'
-          : '<div class="brand-meta">Blacklist boşdur.</div>';
+        setHtml(
+          'allBlTable',
+          (data.blacklist || []).length
+            ? '<table><tr><th>İstifadəçi</th><th>ID</th><th>Sil</th></tr>' +
+                (data.blacklist || [])
+                  .map(
+                    (b) =>
+                      '<tr><td>' +
+                      renderProfile(b.username, b.avatarUrl, b.discordUserId) +
+                      '</td><td>' +
+                      b.discordUserId +
+                      '</td><td><button type="button" class="btn btn-rose btn-sm" data-del-bl="' +
+                      b.id +
+                      '">Çıxar</button></td></tr>'
+                  )
+                  .join('') +
+                '</table>'
+            : '<div class="brand-meta">Blacklist boşdur.</div>'
+        );
 
         if (!uiState.hydrated) {
-          document.getElementById('inputGuildId').value = data.guildId || '';
-          document.getElementById('inputOwnerDiscordId').value = data.discordUserId || '';
-          document.getElementById('guildNameLiveBadge').textContent =
-            'Sunucu Adı: ' + (data.guildName || 'Seçilməyib');
+          const gInp = document.getElementById('inputGuildId');
+          const oInp = document.getElementById('inputOwnerDiscordId');
+          if (gInp) gInp.value = data.guildId || '';
+          if (oInp) oInp.value = data.discordUserId || '';
+          setText('guildNameLiveBadge', 'Sunucu Adı: ' + (data.guildName || 'Seçilməyib'));
           const cfg = data.panelConfig || {};
           if (cfg.embedColor) {
-            document.getElementById('cfgEmbedColor').value = cfg.embedColor.toUpperCase();
-            document.getElementById('cfgColorPicker').value = cfg.embedColor;
+            const hexEl = document.getElementById('cfgEmbedColor');
+            const pickEl = document.getElementById('cfgColorPicker');
+            if (hexEl) hexEl.value = cfg.embedColor.toUpperCase();
+            if (pickEl) pickEl.value = cfg.embedColor;
           }
-          if (cfg.title) document.getElementById('cfgTitle').value = cfg.title;
-          if (cfg.description) document.getElementById('cfgDesc').value = cfg.description;
-          if (cfg.redeemLabel) document.getElementById('cfgRedeemLabel').value = cfg.redeemLabel;
-          if (cfg.redeemEmoji) document.getElementById('cfgRedeemEmoji').value = cfg.redeemEmoji;
-          if (cfg.redeemStyle) document.getElementById('cfgRedeemStyle').value = cfg.redeemStyle;
-          if (cfg.getScriptLabel) document.getElementById('cfgGetScriptLabel').value = cfg.getScriptLabel;
-          if (cfg.getScriptEmoji) document.getElementById('cfgGetScriptEmoji').value = cfg.getScriptEmoji;
-          if (cfg.getScriptStyle) document.getElementById('cfgGetScriptStyle').value = cfg.getScriptStyle;
-          if (cfg.resetHwidLabel) document.getElementById('cfgResetHwidLabel').value = cfg.resetHwidLabel;
-          if (cfg.resetHwidEmoji) document.getElementById('cfgResetHwidEmoji').value = cfg.resetHwidEmoji;
-          if (cfg.resetHwidStyle) document.getElementById('cfgResetHwidStyle').value = cfg.resetHwidStyle;
-          if (cfg.statsLabel) document.getElementById('cfgStatsLabel').value = cfg.statsLabel;
-          if (cfg.statsEmoji) document.getElementById('cfgStatsEmoji').value = cfg.statsEmoji;
-          if (cfg.statsStyle) document.getElementById('cfgStatsStyle').value = cfg.statsStyle;
+          const fieldMap = {
+            cfgTitle: cfg.title,
+            cfgDesc: cfg.description,
+            cfgRedeemLabel: cfg.redeemLabel,
+            cfgRedeemEmoji: cfg.redeemEmoji,
+            cfgRedeemStyle: cfg.redeemStyle,
+            cfgGetScriptLabel: cfg.getScriptLabel,
+            cfgGetScriptEmoji: cfg.getScriptEmoji,
+            cfgGetScriptStyle: cfg.getScriptStyle,
+            cfgResetHwidLabel: cfg.resetHwidLabel,
+            cfgResetHwidEmoji: cfg.resetHwidEmoji,
+            cfgResetHwidStyle: cfg.resetHwidStyle,
+            cfgStatsLabel: cfg.statsLabel,
+            cfgStatsEmoji: cfg.statsEmoji,
+            cfgStatsStyle: cfg.statsStyle,
+          };
+          Object.entries(fieldMap).forEach(([id, val]) => {
+            const el = document.getElementById(id);
+            if (el && val !== undefined && val !== null) el.value = val;
+          });
           if (Array.isArray(cfg.buttonOrder) && cfg.buttonOrder.length) {
             uiState.buttonOrder = cfg.buttonOrder.slice();
           }
@@ -2911,7 +2942,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     renderButtonOrderList();
     loadAllData();
     setInterval(loadAllData, 6500);
-  <\/script>
+  </script>
 </body>
 </html>`;
 
