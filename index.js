@@ -1599,6 +1599,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       padding: 7px 11px; border-radius: 10px; font-size: 12px; font-weight: 700;
       background: #1a2036; color: #d1d5db; border: 1px solid #2e3759; cursor: pointer;
     }
+    .nav-chip.active {
+      background: linear-gradient(90deg, #6366f1, #8b5cf6);
+      color: #fff; border-color: #a5b4fc;
+    }
     .container { max-width: 780px; margin: 0 auto; padding: 14px; display: grid; gap: 14px; }
     .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .kpi-card {
@@ -1649,6 +1653,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .color-pair { display: flex; align-items: center; gap: 10px; }
     .color-pair input[type="color"] { width: 54px; height: 42px; padding: 2px; border-radius: 10px; border: 1px solid #2b3352; background: #0c101d; }
     .style-pair { display: grid; grid-template-columns: 1.4fr 1fr; gap: 8px; }
+    .page-section { display: none; gap: 14px; }
+    .page-section.active-page { display: grid; }
     .toast-box {
       position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
       z-index: 40; padding: 10px 16px; border-radius: 12px; font-size: 13px; font-weight: 700;
@@ -1671,17 +1677,19 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="bot-pill" id="botBadge">Bot: Online ✅</div>
   </header>
 
-  <nav class="drawer-nav" id="drawerNav">
-    <button type="button" class="nav-chip" onclick="scrollToCard('secOverview')">📊 Overview & Qrafik</button>
-    <button type="button" class="nav-chip" onclick="scrollToCard('secScripts')">📜 Skriptlər & Panel</button>
-    <button type="button" class="nav-chip" onclick="scrollToCard('secObf')">🛡️ Obfuscator</button>
-    <button type="button" class="nav-chip" onclick="scrollToCard('secKeys')">🔑 Key & Whitelist</button>
-    <button type="button" class="nav-chip" onclick="scrollToCard('secGuild')">🤖 Join Discord & Server</button>
-    <button type="button" class="nav-chip" onclick="scrollToCard('secDesign')">🎨 Panel Dizaynı</button>
+  <nav class="drawer-nav open" id="drawerNav">
+    <button type="button" class="nav-chip active" data-page="secOverview" onclick="openPage('secOverview')">📊 Overview</button>
+    <button type="button" class="nav-chip" data-page="secCharts" onclick="openPage('secCharts')">📈 Qrafiklər</button>
+    <button type="button" class="nav-chip" data-page="secScripts" onclick="openPage('secScripts')">📜 Skriptlər</button>
+    <button type="button" class="nav-chip" data-page="secPanelSend" onclick="openPage('secPanelSend')">📤 Panel Göndər</button>
+    <button type="button" class="nav-chip" data-page="secObf" onclick="openPage('secObf')">🛡️ Obfuscator</button>
+    <button type="button" class="nav-chip" data-page="secKeys" onclick="openPage('secKeys')">🔑 Key &amp; Whitelist</button>
+    <button type="button" class="nav-chip" data-page="secGuild" onclick="openPage('secGuild')">🤖 Join Discord &amp; Server</button>
+    <button type="button" class="nav-chip" data-page="secDesign" onclick="openPage('secDesign')">🎨 Panel Dizaynı</button>
   </nav>
 
   <main class="container">
-    <section id="secOverview" style="display:grid;gap:14px;">
+    <section id="secOverview" class="page-section active-page">
       <div class="grid-2">
         <div class="kpi-card">
           <div class="kpi-label">Skriptlər</div>
@@ -1705,192 +1713,214 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         <h3>🕒 Son Key-lər (Yaradan &amp; İşlədən)</h3>
         <div id="recentKeysBox">Hələ key yaradılmayıb.</div>
       </div>
+    </section>
 
+    <section id="secCharts" class="page-section">
       <div class="card">
         <h3>📈 Canlı Qrafiklər (14 Göstərici)</h3>
         <div id="chartsArea"></div>
       </div>
     </section>
 
-    <section class="card" id="secScripts">
-      <h3>➕ Yeni Skript Yarat</h3>
-      <label class="field-label">Skript Adı</label>
-      <input id="scriptNameInput" type="text" placeholder="Məs: SADO HUB" />
+    <section id="secScripts" class="page-section">
+      <div class="card">
+        <h3>➕ Yeni Skript Yarat</h3>
+        <label class="field-label">Skript Adı</label>
+        <input id="scriptNameInput" type="text" placeholder="Məs: SADO HUB" />
 
-      <label class="field-label">Lua / TXT Dosya Seç (istəyə bağlı)</label>
-      <input id="scriptFileInput" type="file" accept=".lua,.txt" onchange="loadScriptFile(this)" />
+        <label class="field-label">Lua / TXT Dosya Seç (istəyə bağlı)</label>
+        <input id="scriptFileInput" type="file" accept=".lua,.txt" onchange="loadScriptFile(this)" />
 
-      <label class="field-label">Skript Kodu</label>
-      <textarea id="scriptCodeInput" rows="5" placeholder="-- Lua skript kodunu bura yazın və ya dosya seçin"></textarea>
+        <label class="field-label">Skript Kodu</label>
+        <textarea id="scriptCodeInput" rows="5" placeholder="-- Lua skript kodunu bura yazın və ya dosya seçin"></textarea>
 
-      <label class="row-inline">
-        <input id="createObfCheckbox" type="checkbox" />
-        <span>Skripti yadda saxlayanda avtomatik Lua Obfuscate et (kodu şifrələ)</span>
-      </label>
+        <label class="row-inline">
+          <input id="createObfCheckbox" type="checkbox" />
+          <span>Skripti yadda saxlayanda avtomatik Lua Obfuscate et (kodu şifrələ)</span>
+        </label>
 
-      <button type="button" class="btn btn-green" onclick="createScript()">💾 Skripti Yadda Saxla</button>
+        <button type="button" class="btn btn-green" onclick="createScript()">💾 Skripti Yadda Saxla</button>
+      </div>
 
-      <h3 style="margin-top:14px;">📂 Mövcud Skriptlər</h3>
-      <div id="scriptsList"></div>
-
-      <h3 style="margin-top:14px;">📤 Discord Kanalına Panel Göndər</h3>
-      <label class="field-label">Discord Kanal ID</label>
-      <input id="panelChannelIdInput" type="text" placeholder="Məs: 123456789012345678" />
-      <label class="field-label">Panel Skripti Seç</label>
-      <select id="panelScriptSelect"></select>
-      <button type="button" class="btn btn-purple" onclick="sendPanelToChannel()">🚀 Paneli Kanala Göndər</button>
+      <div class="card">
+        <h3>📂 Mövcud Skriptlər</h3>
+        <div id="scriptsList"></div>
+      </div>
     </section>
 
-    <section class="card" id="secObf">
-      <h3>🛡️ Lua Obfuscator</h3>
-      <div class="brand-sub">Lua kodunuzu şifrələyin, nəticəni kopyalayın və ya birbaşa skript kimi yadda saxlayın.</div>
-
-      <label class="field-label">Şifrələmə Səviyyəsi</label>
-      <select id="obfLevelSelect">
-        <option value="1">Səviyyə 1 — Fast Byte Guard</option>
-        <option value="2" selected>Səviyyə 2 — VM Bytecode + Anti-Tamper</option>
-        <option value="3">Səviyyə 3 — Ultra Guard VM + Anti-Dump</option>
-      </select>
-
-      <label class="field-label">Orijinal Lua Kodu</label>
-      <textarea id="obfInputCode" rows="4" placeholder="print('Hello SADO PROTECT')"></textarea>
-
-      <button type="button" class="btn btn-purple" onclick="runStandaloneObf()">⚡ Kodu Şifrələ (Obfuscate)</button>
-
-      <label class="field-label">Şifrələnmiş Nəticə</label>
-      <textarea id="obfResultBox" rows="4" placeholder="Şifrələnmiş kod burada görünəcək..."></textarea>
-
-      <button type="button" class="btn btn-blue" onclick="copyObfCode()">📋 Şifrəli Kodu Kopyala</button>
-
-      <label class="field-label">Yadda Saxlanacaq Skript Adı (istəyə bağlı)</label>
-      <input id="obfSaveNameInput" type="text" placeholder="Məs: SADO Protected" />
-      <button type="button" class="btn btn-green" onclick="saveObfAsScript()">💾 Skript Kimi Yadda Saxla</button>
+    <section id="secPanelSend" class="page-section">
+      <div class="card">
+        <h3>📤 Discord Kanalına Panel Göndər</h3>
+        <label class="field-label">Discord Kanal ID</label>
+        <input id="panelChannelIdInput" type="text" placeholder="Məs: 123456789012345678" />
+        <label class="field-label">Panel Skripti Seç</label>
+        <select id="panelScriptSelect"></select>
+        <button type="button" class="btn btn-purple" onclick="sendPanelToChannel()">🚀 Paneli Kanala Göndər</button>
+      </div>
     </section>
 
-    <section class="card" id="secKeys">
-      <h3>🔑 Yeni Key Yarat</h3>
-      <label class="field-label">Skript Seç</label>
-      <select id="keyScriptSelect"></select>
+    <section id="secObf" class="page-section">
+      <div class="card">
+        <h3>🛡️ Lua Obfuscator</h3>
+        <div class="brand-sub">Lua kodunuzu şifrələyin, nəticəni kopyalayın və ya birbaşa skript kimi yadda saxlayın.</div>
 
-      <label class="field-label">Müddət (0 = Lifetime, məs: 1d, 7d, 30d, 1y)</label>
-      <input id="keyDurationInput" type="text" value="0" />
+        <label class="field-label">Şifrələmə Səviyyəsi</label>
+        <select id="obfLevelSelect">
+          <option value="1">Səviyyə 1 — Fast Byte Guard</option>
+          <option value="2" selected>Səviyyə 2 — VM Bytecode + Anti-Tamper</option>
+          <option value="3">Səviyyə 3 — Ultra Guard VM + Anti-Dump</option>
+        </select>
 
-      <label class="field-label">Say (1 - 100)</label>
-      <input id="keyAmountInput" type="number" min="1" max="100" value="1" />
+        <label class="field-label">Orijinal Lua Kodu</label>
+        <textarea id="obfInputCode" rows="4" placeholder="print('Hello SADO PROTECT')"></textarea>
 
-      <button type="button" class="btn btn-purple" onclick="generateKeys()">✨ Key Yarat</button>
-      <div id="keysList">Hələ key yoxdur.</div>
+        <button type="button" class="btn btn-purple" onclick="runStandaloneObf()">⚡ Kodu Şifrələ (Obfuscate)</button>
 
-      <h3 style="margin-top:16px;">✅ Whitelist Əlavə Et</h3>
-      <label class="field-label">Discord User ID</label>
-      <input id="wlUserIdInput" type="text" placeholder="Məs: 123456789012345678" />
+        <label class="field-label">Şifrələnmiş Nəticə</label>
+        <textarea id="obfResultBox" rows="4" placeholder="Şifrələnmiş kod burada görünəcək..."></textarea>
 
-      <label class="field-label">Skript Seç</label>
-      <select id="wlScriptSelect"></select>
+        <button type="button" class="btn btn-blue" onclick="copyObfCode()">📋 Şifrəli Kodu Kopyala</button>
 
-      <label class="field-label">Müddət (0 = Lifetime, məs: 7d, 30d)</label>
-      <input id="wlDurationInput" type="text" value="0" />
-
-      <label class="row-inline">
-        <input id="wlLockCheckbox" type="checkbox" checked />
-        <span>HWID Kilidli (Kick Qoruması)</span>
-      </label>
-
-      <button type="button" class="btn btn-green" onclick="addWhitelist()">➕ Whitelist-ə Əlavə Et</button>
-      <div id="wlList">Aktiv whitelist yoxdur.</div>
-
-      <h3 style="margin-top:16px;">🚫 Blacklist İdarəetməsi</h3>
-      <label class="field-label">Discord User ID</label>
-      <input id="blUserIdInput" type="text" placeholder="Məs: 123456789012345678" />
-      <button type="button" class="btn btn-red" onclick="addBlacklist()">⛔ Blacklist-ə Sal</button>
-      <div id="blList">Blacklist boşdur.</div>
+        <label class="field-label">Yadda Saxlanacaq Skript Adı (istəyə bağlı)</label>
+        <input id="obfSaveNameInput" type="text" placeholder="Məs: SADO Protected" />
+        <button type="button" class="btn btn-green" onclick="saveObfAsScript()">💾 Skript Kimi Yadda Saxla</button>
+      </div>
     </section>
 
-    <section class="card" id="secGuild">
-      <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
-      <div class="brand-sub" style="line-height:1.5;">
-        1. Aşağıdakı düymə ilə SADO PROTECT botunu öz Discord sunucunuza əlavə edin.<br/>
-        2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bu telefon/cihaz üçün tam müstəqil idarəetmə paneli açılacaq.
+    <section id="secKeys" class="page-section">
+      <div class="card">
+        <h3>🔑 Yeni Key Yarat</h3>
+        <label class="field-label">Skript Seç</label>
+        <select id="keyScriptSelect"></select>
+
+        <label class="field-label">Müddət (0 = Lifetime, məs: 1d, 7d, 30d, 1y)</label>
+        <input id="keyDurationInput" type="text" value="0" />
+
+        <label class="field-label">Say (1 - 100)</label>
+        <input id="keyAmountInput" type="number" min="1" max="100" value="1" />
+
+        <button type="button" class="btn btn-purple" onclick="generateKeys()">✨ Key Yarat</button>
+        <div id="keysList">Hələ key yoxdur.</div>
       </div>
 
-      <a id="joinDiscordLink" href="${JOIN_DISCORD_URL}" target="_blank" style="text-decoration:none;">
-        <button type="button" class="btn btn-green">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</button>
-      </a>
+      <div class="card">
+        <h3>✅ Whitelist Əlavə Et</h3>
+        <label class="field-label">Discord User ID</label>
+        <input id="wlUserIdInput" type="text" placeholder="Məs: 123456789012345678" />
 
-      <label class="field-label">Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
-      <select id="guildSelect"></select>
+        <label class="field-label">Skript Seç</label>
+        <select id="wlScriptSelect"></select>
 
-      <label class="field-label">Və ya Discord Sunucu ID (Server ID)</label>
-      <input id="guildIdInput" type="text" placeholder="1559499280732131348" />
+        <label class="field-label">Müddət (0 = Lifetime, məs: 7d, 30d)</label>
+        <input id="wlDurationInput" type="text" value="0" />
 
-      <label class="field-label">Discord User ID (istəyə bağlı)</label>
-      <input id="discordUserIdInput" type="text" placeholder="Məs: 123456789012345678" />
+        <label class="row-inline">
+          <input id="wlLockCheckbox" type="checkbox" checked />
+          <span>HWID Kilidli (Kick Qoruması)</span>
+        </label>
 
-      <div class="brand-sub" id="liveGuildPreview" style="color:#6ee7b7;"></div>
+        <button type="button" class="btn btn-green" onclick="addWhitelist()">➕ Whitelist-ə Əlavə Et</button>
+        <div id="wlList">Aktiv whitelist yoxdur.</div>
+      </div>
 
-      <button type="button" class="btn btn-purple" onclick="linkWorkspace()">✅ Sunucunu İdarəetmə Panelinə Bağla</button>
+      <div class="card">
+        <h3>🚫 Blacklist İdarəetməsi</h3>
+        <label class="field-label">Discord User ID</label>
+        <input id="blUserIdInput" type="text" placeholder="Məs: 123456789012345678" />
+        <button type="button" class="btn btn-red" onclick="addBlacklist()">⛔ Blacklist-ə Sal</button>
+        <div id="blList">Blacklist boşdur.</div>
+      </div>
     </section>
 
-    <section class="card" id="secDesign">
-      <h3>🎨 Panel Buton və Embed Dizaynı</h3>
+    <section id="secGuild" class="page-section">
+      <div class="card">
+        <h3>🤖 SADO PROTECT Botunu Sunucuna Əlavə Et (Join Discord)</h3>
+        <div class="brand-sub" style="line-height:1.5;">
+          1. Aşağıdakı düymə ilə SADO PROTECT botunu öz Discord sunucunuza əlavə edin.<br/>
+          2. Bot sunucuya girdikdən sonra aşağıdan öz sunucunuzu seçin (və ya Sunucu ID-ni yazın) — yuxarıda öz sunucunuzun adı görünəcək və bu telefon/cihaz üçün tam müstəqil idarəetmə paneli açılacaq.
+        </div>
 
-      <label class="field-label">Embed Rəngi (HEX &amp; Rəng Seçici)</label>
-      <div class="color-pair">
-        <input id="embedColorPicker" type="color" value="#00ff00" oninput="document.getElementById('embedColorInput').value=this.value.toUpperCase()" />
-        <input id="embedColorInput" type="text" value="#00FF00" oninput="syncPickerFromHex(this.value)" />
+        <a id="joinDiscordLink" href="${JOIN_DISCORD_URL}" target="_blank" style="text-decoration:none;">
+          <button type="button" class="btn btn-green">➕ SADO PROTECT Botunu Sunucuna Əlavə Et</button>
+        </a>
+
+        <label class="field-label">Botun Olduğu Sunuculardan Öz Sunucunu Seç</label>
+        <select id="guildSelect"></select>
+
+        <label class="field-label">Və ya Discord Sunucu ID (Server ID)</label>
+        <input id="guildIdInput" type="text" placeholder="1559499280732131348" />
+
+        <label class="field-label">Discord User ID (istəyə bağlı)</label>
+        <input id="discordUserIdInput" type="text" placeholder="Məs: 123456789012345678" />
+
+        <div class="brand-sub" id="liveGuildPreview" style="color:#6ee7b7;font-weight:700;"></div>
+
+        <button type="button" class="btn btn-purple" onclick="linkWorkspace()">✅ Sunucunu İdarəetmə Panelinə Bağla</button>
       </div>
+    </section>
 
-      <label class="field-label">Panel Başlığı</label>
-      <input id="panelTitleInput" type="text" value="SADO PROTECT • Script Panel" />
+    <section id="secDesign" class="page-section">
+      <div class="card">
+        <h3>🎨 Panel Buton və Embed Dizaynı</h3>
 
-      <label class="field-label">Panel Açıqlaması</label>
-      <input id="panelDescInput" type="text" value="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin." />
+        <label class="field-label">Embed Rəngi (HEX &amp; Rəng Seçici)</label>
+        <div class="color-pair">
+          <input id="embedColorPicker" type="color" value="#00ff00" oninput="document.getElementById('embedColorInput').value=this.value.toUpperCase()" />
+          <input id="embedColorInput" type="text" value="#00FF00" oninput="syncPickerFromHex(this.value)" />
+        </div>
 
-      <label class="field-label">Redeem Key Düymə Mətni və Rəngi</label>
-      <div class="style-pair">
-        <input id="redeemLabelInput" type="text" value="Redeem Key" />
-        <select id="redeemStyleInput">
-          <option value="Success" selected>🟢 Yaşıl</option>
-          <option value="Primary">🔵 Mavi</option>
-          <option value="Danger">🔴 Qırmızı</option>
-          <option value="Secondary">⚪ Boz</option>
-        </select>
+        <label class="field-label">Panel Başlığı</label>
+        <input id="panelTitleInput" type="text" value="SADO PROTECT • Script Panel" />
+
+        <label class="field-label">Panel Açıqlaması</label>
+        <input id="panelDescInput" type="text" value="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin." />
+
+        <label class="field-label">Redeem Key Düymə Mətni və Rəngi</label>
+        <div class="style-pair">
+          <input id="redeemLabelInput" type="text" value="Redeem Key" />
+          <select id="redeemStyleInput">
+            <option value="Success" selected>🟢 Yaşıl</option>
+            <option value="Primary">🔵 Mavi</option>
+            <option value="Danger">🔴 Qırmızı</option>
+            <option value="Secondary">⚪ Boz</option>
+          </select>
+        </div>
+
+        <label class="field-label">Get Script Düymə Mətni və Rəngi</label>
+        <div class="style-pair">
+          <input id="getScriptLabelInput" type="text" value="Get Script" />
+          <select id="getScriptStyleInput">
+            <option value="Primary" selected>🔵 Mavi</option>
+            <option value="Success">🟢 Yaşıl</option>
+            <option value="Danger">🔴 Qırmızı</option>
+            <option value="Secondary">⚪ Boz</option>
+          </select>
+        </div>
+
+        <label class="field-label">Reset HWID Düymə Mətni və Rəngi</label>
+        <div class="style-pair">
+          <input id="resetHwidLabelInput" type="text" value="Reset HWID" />
+          <select id="resetHwidStyleInput">
+            <option value="Danger" selected>🔴 Qırmızı</option>
+            <option value="Success">🟢 Yaşıl</option>
+            <option value="Primary">🔵 Mavi</option>
+            <option value="Secondary">⚪ Boz</option>
+          </select>
+        </div>
+
+        <label class="field-label">Stats Düymə Mətni və Rəngi</label>
+        <div class="style-pair">
+          <input id="statsLabelInput" type="text" value="Get Stats" />
+          <select id="statsStyleInput">
+            <option value="Secondary" selected>⚪ Boz</option>
+            <option value="Success">🟢 Yaşıl</option>
+            <option value="Primary">🔵 Mavi</option>
+            <option value="Danger">🔴 Qırmızı</option>
+          </select>
+        </div>
+
+        <button type="button" class="btn btn-purple" onclick="savePanelDesign()">💾 Panel Dizaynını Yadda Saxla</button>
       </div>
-
-      <label class="field-label">Get Script Düymə Mətni və Rəngi</label>
-      <div class="style-pair">
-        <input id="getScriptLabelInput" type="text" value="Get Script" />
-        <select id="getScriptStyleInput">
-          <option value="Primary" selected>🔵 Mavi</option>
-          <option value="Success">🟢 Yaşıl</option>
-          <option value="Danger">🔴 Qırmızı</option>
-          <option value="Secondary">⚪ Boz</option>
-        </select>
-      </div>
-
-      <label class="field-label">Reset HWID Düymə Mətni və Rəngi</label>
-      <div class="style-pair">
-        <input id="resetHwidLabelInput" type="text" value="Reset HWID" />
-        <select id="resetHwidStyleInput">
-          <option value="Danger" selected>🔴 Qırmızı</option>
-          <option value="Success">🟢 Yaşıl</option>
-          <option value="Primary">🔵 Mavi</option>
-          <option value="Secondary">⚪ Boz</option>
-        </select>
-      </div>
-
-      <label class="field-label">Stats Düymə Mətni və Rəngi</label>
-      <div class="style-pair">
-        <input id="statsLabelInput" type="text" value="Get Stats" />
-        <select id="statsStyleInput">
-          <option value="Secondary" selected>⚪ Boz</option>
-          <option value="Success">🟢 Yaşıl</option>
-          <option value="Primary">🔵 Mavi</option>
-          <option value="Danger">🔴 Qırmızı</option>
-        </select>
-      </div>
-
-      <button type="button" class="btn btn-purple" onclick="savePanelDesign()">💾 Panel Dizaynını Yadda Saxla</button>
     </section>
   </main>
 
@@ -1906,7 +1936,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     const wsId = getOrCreateWorkspaceId();
-    const uiFlags = { initialLoaded: false };
+    const uiFlags = { initialLoaded: false, activePage: 'secOverview' };
 
     const apiFetch = (url, opts = {}) => {
       const headers = Object.assign({ 'X-Client-Workspace': wsId }, opts.headers || {});
@@ -1928,12 +1958,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       return res;
     };
 
-    const scrollToCard = (id) => {
-      const target = document.getElementById(id);
-      const nav = document.getElementById('drawerNav');
-      const sc = target ? target.scrollIntoView({ behavior: 'smooth', block: 'start' }) : null;
-      const cl = nav.classList.remove('open');
-      return { sc, cl };
+    const openPage = (pageId) => {
+      const pages = Array.from(document.querySelectorAll('.page-section'));
+      const chips = Array.from(document.querySelectorAll('.nav-chip'));
+      const setActive = uiFlags.activePage = pageId;
+      const hidePages = pages.map((p) => p.classList.toggle('active-page', p.id === pageId));
+      const markChips = chips.map((c) => c.classList.toggle('active', c.getAttribute('data-page') === pageId));
+      const topScroll = window.scrollTo({ top: 0, behavior: 'smooth' });
+      return { setActive, hidePages, markChips, topScroll };
     };
 
     const syncPickerFromHex = (val) => {
@@ -2008,6 +2040,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const guildId = document.getElementById('guildIdInput').value.trim();
       const discordUserId = document.getElementById('discordUserIdInput').value.trim();
       const kpiGuild = document.getElementById('kpiGuild');
+      const subStatus = document.getElementById('subStatus');
       const preview = document.getElementById('liveGuildPreview');
       if (!guildId && !discordUserId) {
         preview.textContent = '';
@@ -2021,10 +2054,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const j = await r.json();
       const gName = j && j.guildName ? j.guildName : '';
       const setK = gName ? (kpiGuild.textContent = gName) : null;
+      const setS = gName ? (subStatus.textContent = 'Control Dashboard • ' + gName) : null;
       const setP = gName
-        ? (preview.textContent = 'Tapılan sunucu: ' + gName + (j.guildId ? ' (' + j.guildId + ')' : ''))
+        ? (preview.textContent = 'Qoşulmuş Sunucu: ' + gName + (j.guildId ? ' (' + j.guildId + ')' : ''))
         : null;
-      return { setK, setP };
+      return { setK, setS, setP };
     };
 
     const renderAll = async () => {
@@ -2060,6 +2094,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const gSel = document.getElementById('guildSelect');
       const gOpts = (data.guilds || []).map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>').join('');
       gSel.innerHTML = '<option value="">-- Sunucu seçin və ya aşağıya ID yazın</option>' + gOpts;
+      if (data.guildId) gSel.value = data.guildId;
       gSel.onchange = () => {
         const picked = gSel.value;
         const setVal = picked ? (guildIdInput.value = picked) : null;
@@ -2130,7 +2165,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         guildIdInput.value = data.guildId || '';
         discordUserIdInput.value = data.discordUserId || '';
         liveGuildPreview.textContent = data.guildName
-          ? 'Tapılan sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
+          ? 'Qoşulmuş Sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
           : '';
         const cfg = data.panelConfig || {};
         if (cfg.embedColor) {
