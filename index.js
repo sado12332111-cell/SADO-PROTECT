@@ -23,7 +23,7 @@ const {
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
-const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
+const KEEP_ALIVE_INTERVAL_MS = 3 * 60 * 1000;
 
 const DEFAULT_CLIENT_ID = '1562080654282199121';
 const DEFAULT_GUILD_ID = '1559499280732131348';
@@ -79,11 +79,7 @@ const DEFAULT_PANEL_DESIGN = Object.freeze({
   }
 });
 
-const resolveProtectedBotToken = (customToken = null) => {
-  const explicit = String(customToken || '').trim();
-  if (explicit && explicit !== '••••••••••') {
-    return explicit;
-  }
+const resolveProtectedBotToken = () => {
   const envToken = String(process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || '').trim();
   if (envToken) {
     return envToken;
@@ -127,7 +123,6 @@ const DEFAULT_OBFUSCATION_SETTINGS = Object.freeze({
 
 const DEFAULT_DATABASE = Object.freeze({
   botConfig: {
-    token: DEFAULT_TOKEN,
     clientId: DEFAULT_CLIENT_ID,
     guildId: DEFAULT_GUILD_ID,
     defaultChannelId: DEFAULT_PANEL_CHANNEL_ID,
@@ -232,8 +227,11 @@ const normalizeDatabase = (rawData) => {
     }
   );
 
+  const cleanedBotConfig = Object.assign({}, DEFAULT_DATABASE.botConfig, safe.botConfig || {});
+  delete cleanedBotConfig.token;
+
   return {
-    botConfig: Object.assign({}, DEFAULT_DATABASE.botConfig, safe.botConfig || {}),
+    botConfig: cleanedBotConfig,
     scripts: Array.isArray(safe.scripts) ? safe.scripts : [],
     keys: Array.isArray(safe.keys) ? safe.keys : [],
     whitelist: Array.isArray(safe.whitelist) ? safe.whitelist : [],
@@ -447,7 +445,7 @@ const resolveConnectedGuildInfo = async () => {
     if (!discordClient.isReady()) {
       return {
         guildId: targetGuildId,
-        guildName: 'Bağlı Deyil'
+        guildName: targetGuildId ? `Sunucu (${targetGuildId})` : 'Bağlı Deyil'
       };
     }
 
@@ -623,7 +621,7 @@ const syncAllPublishedPanels = async () => {
 
 const publishPanelToChannel = async (channelId, replaceExisting = true) => {
   if (!discordClient.isReady()) {
-    throw new Error('Discord bot hazır deyil. Əvvəlcə Bot Token-i yoxlayın və qoşun.');
+    throw new Error('Discord bot hazır deyil.');
   }
 
   const cleanChannelId = String(channelId || '').trim();
@@ -633,7 +631,7 @@ const publishPanelToChannel = async (channelId, replaceExisting = true) => {
 
   const channel = await discordClient.channels.fetch(cleanChannelId);
   if (!channel || !channel.isTextBased()) {
-    throw new Error('Göstərilən kanal tapılmadı və ya mətn/forum kanalı deyil.');
+    throw new Error('Göstərilən kanal tapılmadı və ya mətn kanalı deyil.');
   }
 
   const { embed, components } = buildPanelEmbedAndComponents();
@@ -674,32 +672,31 @@ const publishPanelToChannel = async (channelId, replaceExisting = true) => {
   return record;
 };
 
-const connectDiscordBot = async (customToken = null) => {
-  const tokenToUse = resolveProtectedBotToken(customToken);
+const connectDiscordBot = async () => {
+  const tokenToUse = resolveProtectedBotToken();
   if (!tokenToUse) {
     appState.botStatus.connected = false;
     appState.botStatus.connecting = false;
-    appState.botStatus.lastError = 'Bot token təyin edilməyib.';
+    appState.botStatus.lastError = 'Gizli bot token tapılmadı.';
     return { ok: false, error: appState.botStatus.lastError };
   }
 
+  if (discordClient.isReady() && appState.botStatus.connected) {
+    const guildInfo = await resolveConnectedGuildInfo();
+    appState.botStatus.connectedGuildId = guildInfo.guildId;
+    appState.botStatus.connectedGuildName = guildInfo.guildName;
+    appState.botStatus.guildCount = discordClient.guilds.cache.size;
+    return { ok: true, botStatus: appState.botStatus };
+  }
+
   if (appState.botStatus.connecting) {
-    return { ok: true, status: 'connecting' };
+    return { ok: true, status: 'connecting', botStatus: appState.botStatus };
   }
 
   appState.botStatus.connecting = true;
   appState.botStatus.lastError = null;
 
   try {
-    if (customToken && String(customToken).trim() && String(customToken).trim() !== '••••••••••') {
-      appState.db.botConfig.token = String(customToken).trim();
-      saveDatabase();
-    }
-
-    if (discordClient.isReady()) {
-      await discordClient.destroy();
-    }
-
     await discordClient.login(tokenToUse);
     const guildInfo = await resolveConnectedGuildInfo();
     appState.botStatus.connected = true;
@@ -712,7 +709,7 @@ const connectDiscordBot = async (customToken = null) => {
     appState.botStatus.lastConnectedAt = new Date().toISOString();
     appendActivityLog(
       'BOT',
-      `Bot qoşuldu: ${appState.botStatus.username} | Sunucu: ${guildInfo.guildName}`
+      `Bot aktivdir: ${appState.botStatus.username} | Sunucu: ${guildInfo.guildName}`
     );
 
     if (appState.db.botConfig.syncPanelsOnUpdate && appState.db.publishedPanels.length > 0) {
@@ -723,9 +720,8 @@ const connectDiscordBot = async (customToken = null) => {
   } catch (err) {
     appState.botStatus.connected = false;
     appState.botStatus.connecting = false;
-    appState.botStatus.connectedGuildName = 'Bağlı Deyil';
     appState.botStatus.lastError = err.message;
-    appendActivityLog('BOT_ERROR', `Bot qoşulma xətası: ${err.message}`);
+    appendActivityLog('BOT_ERROR', `Bot bağlantı xətası: ${err.message}`);
     return { ok: false, error: err.message };
   }
 };
@@ -752,12 +748,85 @@ discordClient.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
     const content = String(message.content || '').trim();
-    if (content.toLowerCase() === '/panel' || content.toLowerCase() === '!panel') {
+    const lower = content.toLowerCase();
+
+    if (lower === '/panel' || lower === '!panel') {
       const targetChannelId = appState.db.botConfig.defaultChannelId || message.channel.id;
       const published = await publishPanelToChannel(targetChannelId, true);
       await message.reply({
-        content: `✅ Panel **<#${published.channelId}>** kanalında yayımlandı və canlı sinxronizasiyaya bağlandı. Sonradan dizayn dəyişdikdə yenidən \`/panel\` yazmağa ehtiyac yoxdur.`
+        content: `✅ Panel **<#${published.channelId}>** kanalında yayımlandı və canlı sinxronizasiyaya bağlandı.`
       });
+      return;
+    }
+
+    if (lower.startsWith('!genkey') || lower.startsWith('/genkey')) {
+      const createdKey = generateKeyString('SADO');
+      appState.db.keys.unshift({
+        key: createdKey,
+        scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
+        ownerDiscordId: message.author.id,
+        ownerUsername: message.author.tag,
+        hwid: '',
+        maxDevices: 1,
+        expiresAt: null,
+        active: true,
+        createdBy: 'DiscordCmd',
+        createdAt: new Date().toISOString(),
+        lastUsedAt: null,
+        usageCount: 0
+      });
+      appState.db.stats.keysGenerated = (appState.db.stats.keysGenerated || 0) + 1;
+      saveDatabase();
+      await message.reply({ content: `🔑 Yeni key yaradıldı: \`${createdKey}\`` });
+      return;
+    }
+
+    if (lower.startsWith('!whitelist ') || lower.startsWith('/whitelist ')) {
+      const targetId = content.split(/\s+/)[1] || '';
+      if (targetId) {
+        const autoKey = generateKeyString('SADO-WL');
+        appState.db.whitelist.unshift({
+          id: `wl_${Date.now()}`,
+          discordId: targetId,
+          username: `User_${targetId}`,
+          hwid: '',
+          scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
+          autoKey,
+          note: 'Added via Discord bot',
+          addedAt: new Date().toISOString()
+        });
+        appState.db.keys.unshift({
+          key: autoKey,
+          scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
+          ownerDiscordId: targetId,
+          ownerUsername: `User_${targetId}`,
+          hwid: '',
+          maxDevices: 1,
+          expiresAt: null,
+          active: true,
+          createdBy: 'DiscordWL',
+          createdAt: new Date().toISOString(),
+          lastUsedAt: null,
+          usageCount: 0
+        });
+        saveDatabase();
+        await message.reply({ content: `✅ Whitelist əlavə edildi: \`${targetId}\` | Auto Key: \`${autoKey}\`` });
+      }
+      return;
+    }
+
+    if (lower.startsWith('!blacklist ') || lower.startsWith('/blacklist ')) {
+      const targetId = content.split(/\s+/)[1] || '';
+      if (targetId) {
+        appState.db.blacklist.unshift({
+          id: `bl_${Date.now()}`,
+          discordId: targetId,
+          reason: 'Added via Discord bot',
+          addedAt: new Date().toISOString()
+        });
+        saveDatabase();
+        await message.reply({ content: `⛔ Blacklist-ə əlavə edildi: \`${targetId}\`` });
+      }
     }
   } catch (err) {
     console.log(`[MESSAGE CREATE ERROR] ${err.message}`);
@@ -793,7 +862,7 @@ discordClient.on(Events.InteractionCreate, async (interaction) => {
 
         appState.db.stats.scriptsExecuted = (appState.db.stats.scriptsExecuted || 0) + 1;
         saveDatabase();
-        appendActivityLog('GET_SCRIPT', `Istifadəçi ${interaction.user.tag} (${userId}) birləşik script aldı.`);
+        appendActivityLog('GET_SCRIPT', `İstifadəçi ${interaction.user.tag} (${userId}) birləşik script aldı.`);
 
         const copyRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -916,13 +985,12 @@ discordClient.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({
           content: [
             '📊 **SADO PROTECT Hesab Statusu**',
-            `• Istifadəçi: **${interaction.user.tag}** (\`${userId}\`)`,
+            `• İstifadəçi: **${interaction.user.tag}** (\`${userId}\`)`,
             `• Whitelist: **${isWl ? 'Bəli (Auto Key Aktiv)' : 'Xeyr'}**`,
             ...summaryLines
           ].join('\n'),
           flags: MessageFlags.Ephemeral
         });
-        return;
       }
     }
 
@@ -983,7 +1051,6 @@ const getDashboardSnapshot = async () => {
       connectedGuildName: guildInfo.guildName
     }),
     botConfig: {
-      hasToken: Boolean(resolveProtectedBotToken(appState.db.botConfig.token)),
       clientId: appState.db.botConfig.clientId || DEFAULT_CLIENT_ID,
       guildId: appState.db.botConfig.guildId || '',
       defaultChannelId: appState.db.botConfig.defaultChannelId || '',
@@ -1014,37 +1081,9 @@ app.get('/health', async (_req, res) => {
   return res.status(200).json({
     ok: true,
     uptime: process.uptime(),
-    botConnected: Boolean(appState.botStatus.connected),
+    botConnected: Boolean(appState.botStatus.connected || discordClient.isReady()),
     guildName: guildInfo.guildName
   });
-});
-
-app.post('/api/obfuscate', async (req, res) => {
-  try {
-    const body = req.body || {};
-    if (typeof body.clientId === 'string') appState.db.botConfig.clientId = body.clientId.trim();
-    if (typeof body.guildId === 'string') appState.db.botConfig.guildId = body.guildId.trim();
-    if (typeof body.defaultChannelId === 'string') {
-      appState.db.botConfig.defaultChannelId = body.defaultChannelId.trim();
-    }
-    if (typeof body.syncPanelsOnUpdate === 'boolean') {
-      appState.db.botConfig.syncPanelsOnUpdate = body.syncPanelsOnUpdate;
-    }
-
-    const tokenInput = typeof body.token === 'string' && body.token.trim()
-      ? body.token.trim()
-      : appState.db.botConfig.token;
-
-    const result = await connectDiscordBot(tokenInput);
-    saveDatabase();
-    return res.status(result.ok ? 200 : 400).json({
-      ok: result.ok,
-      error: result.error || null,
-      data: await getDashboardSnapshot()
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
 });
 
 const handleBotConnectRequest = async (req, res) => {
@@ -1063,11 +1102,7 @@ const handleBotConnectRequest = async (req, res) => {
       appState.db.botConfig.syncPanelsOnUpdate = body.syncPanelsOnUpdate;
     }
 
-    const tokenInput = typeof body.token === 'string' && body.token.trim()
-      ? body.token.trim()
-      : appState.db.botConfig.token;
-
-    const result = await connectDiscordBot(tokenInput);
+    const result = await connectDiscordBot();
     if (discordClient.isReady() && appState.db.botConfig.guildId) {
       const guildInfo = await resolveConnectedGuildInfo();
       appState.botStatus.connectedGuildId = guildInfo.guildId;
@@ -1777,7 +1812,7 @@ const DASHBOARD_HTML = [
   '    </div>',
   '    <div class="status-pill" id="botStatusBadge">',
   '      <span class="status-dot" id="botStatusDot"></span>',
-  '      <span id="botStatusText">Bot: Yoxlanılır...</span>',
+  '      <span id="botStatusText">Bot: Aktivləşdirilir...</span>',
   '    </div>',
   '  </header>',
   '  <div id="drawerBackdrop" class="drawer-backdrop"></div>',
@@ -1805,12 +1840,12 @@ const DASHBOARD_HTML = [
   '      </div>',
   '      <div class="grid-2">',
   '        <div class="card">',
-  '          <h3 class="card-title">🤖 Discord Bot & Sunucu Bağlantısı</h3>',
-  '          <div class="field-group"><label class="field-label">Bot Token (Gizli Saxlanır)</label><input type="password" id="botTokenInput" class="input" placeholder="Gizli token hazırdır (yeniləmək üçün yazın)" /></div>',
+  '          <h3 class="card-title">🤖 Discord Bot & Sunucu Bağlantısı (ID İlə)</h3>',
+  '          <div class="list-item" id="overviewGuildBox">Bağlanan Sunucu: Yoxlanılır...</div>',
   '          <div class="field-group"><label class="field-label">Discord ID / Sunucu (Guild) ID</label><input type="text" id="botGuildInput" class="input" placeholder="Sunucu ID və ya Discord ID" /></div>',
   '          <div class="field-group"><label class="field-label">Əsas Panel Kanal ID</label><input type="text" id="botChannelInput" class="input" placeholder="Kanal ID" /></div>',
   '          <div class="btn-row">',
-  '            <button type="button" id="connectBotBtn" class="btn btn-primary">Botu Qoş & Sunucuya Bağlan</button>',
+  '            <button type="button" id="connectBotBtn" class="btn btn-primary">Sunucuya Bağlan & Botu Aktiv Et</button>',
   '            <a id="joinBotLinkOverview" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot" target="_blank" rel="noopener noreferrer" class="btn btn-success" style="text-decoration:none;">➕ Join Bot</a>',
   '          </div>',
   '        </div>',
@@ -1916,8 +1951,9 @@ const DASHBOARD_HTML = [
   '      const drawer = document.getElementById("drawerPanel");',
   '      const backdrop = document.getElementById("drawerBackdrop");',
   '      if (!drawer || !backdrop) return;',
-  '      drawer.classList.toggle("open", Boolean(open));',
-  '      backdrop.classList.toggle("open", Boolean(open));',
+  '      const isOpen = typeof open === "boolean" ? open : !drawer.classList.contains("open");',
+  '      drawer.classList.toggle("open", isOpen);',
+  '      backdrop.classList.toggle("open", isOpen);',
   '    };',
   '    const switchPage = (pageName) => {',
   '      clientState.activePage = pageName;',
@@ -2014,18 +2050,23 @@ const DASHBOARD_HTML = [
   '      clientState.snapshot = snap;',
   '      const dot = document.getElementById("botStatusDot");',
   '      const statusText = document.getElementById("botStatusText");',
+  '      const isOnline = Boolean(snap.botStatus && snap.botStatus.connected);',
   '      if (dot && statusText) {',
-  '        dot.classList.toggle("online", Boolean(snap.botStatus.connected));',
-  '        statusText.textContent = snap.botStatus.connected ? ("Bot: " + (snap.botStatus.username || "Aktiv")) : "Bot: Bağlı Deyil";',
+  '        dot.classList.toggle("online", isOnline);',
+  '        statusText.textContent = isOnline ? ("Bot: " + (snap.botStatus.username || "Aktiv")) : "Bot: Aktivləşdirilir...";',
   '      }',
   '      document.getElementById("statScripts").textContent = String(snap.scripts.length);',
   '      document.getElementById("statKeys").textContent = String(snap.keys.length);',
-  '      const guildNameText = (snap.botStatus && snap.botStatus.connected && snap.botStatus.connectedGuildName) ? snap.botStatus.connectedGuildName : "Bağlı Deyil";',
+  '      const guildNameText = (snap.botStatus && snap.botStatus.connectedGuildName) ? snap.botStatus.connectedGuildName : "Bağlı Deyil";',
   '      document.getElementById("statConnectedGuild").textContent = guildNameText;',
   '      document.getElementById("statWlBl").textContent = String(snap.whitelist.length) + " / " + String(snap.blacklist.length);',
   '      const guildSummary = document.getElementById("botGuildSummaryBox");',
   '      if (guildSummary) {',
   '        guildSummary.textContent = "Bağlanan Sunucu: " + guildNameText + (snap.botStatus.connectedGuildId ? (" (" + snap.botStatus.connectedGuildId + ")") : "");',
+  '      }',
+  '      const ovGuild = document.getElementById("overviewGuildBox");',
+  '      if (ovGuild) {',
+  '        ovGuild.textContent = "Bağlanan Sunucu: " + guildNameText + (snap.botStatus.connectedGuildId ? (" (" + snap.botStatus.connectedGuildId + ")") : "");',
   '      }',
   '      if (snap.botConfig && snap.botConfig.inviteUrl) {',
   '        const l1 = document.getElementById("joinBotLinkOverview");',
@@ -2118,14 +2159,29 @@ const DASHBOARD_HTML = [
   '        showToast("State yüklənərkən xəta: " + err.message);',
   '      }',
   '    };',
-  '    document.getElementById("openMenuBtn").addEventListener("click", () => toggleDrawer(true));',
-  '    document.getElementById("closeMenuBtn").addEventListener("click", () => toggleDrawer(false));',
+  '    document.getElementById("openMenuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleDrawer(true); });',
+  '    document.getElementById("closeMenuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleDrawer(false); });',
   '    document.getElementById("drawerBackdrop").addEventListener("click", () => toggleDrawer(false));',
   '    document.querySelectorAll(".nav-item").forEach((btn) => {',
   '      btn.addEventListener("click", () => switchPage(btn.getAttribute("data-page")));',
   '    });',
   '    document.getElementById("connectBotBtn").addEventListener("click", async () => {',
   '      const out = await apiPost("/api/bot/connect", {',
+  '        guildId: document.getElementById("botGuildInput").value,',
+  '        defaultChannelId: document.getElementById("botChannelInput").value',
+  '      });',
+  '      if (out.data) renderSnapshot(out.data);',
+  '      showToast(out.ok ? ("Sunucuya bağlanıldı: " + ((out.data && out.data.botStatus && out.data.botStatus.connectedGuildName) || "")) : ("Xəta: " + (out.error || "")));',
+  '    });',
+  '    document.getElementById("addScriptBtn").addEventListener("click", async () => {',
+  '      const out = await apiPost("/api/scripts", {',
+  '        name: document.getElementById("quickScriptName").value,',
+  '        loaderUrl: document.getElementById("quickScriptUrl").value,',
+  '        rawCode: document.getElementById("quickScriptCode").value',
+  '      });',
+  '      if (out.data) renderSnapshot(out.data);',
+  '      showToast(out.ok ? "Yeni script yaradıldı!" : ("Xəta: " + (out.error || "")));',
+  '    });',
   '    document.getElementById("scriptFilePicker").addEventListener("change", (ev) => {',
   '      const file = ev.target && ev.target.files && ev.target.files[0];',
   '      if (!file) return;',
@@ -2233,7 +2289,7 @@ const DASHBOARD_HTML = [
   '      showToast(out.ok ? "Mövcud panellər sinxronlaşdırıldı!" : ("Xəta: " + (out.error || "")));',
   '    });',
   '    refreshState();',
-  '    setInterval(refreshState, 15000);',
+  '    setInterval(refreshState, 10000);',
   '  </script>',
   '</body>',
   '</html>'
@@ -2258,8 +2314,12 @@ const startApplication = async () => {
     const keepAliveUrl = String(
       process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL || ''
     ).trim();
+
     setInterval(async () => {
       try {
+        if (!discordClient.isReady()) {
+          await connectDiscordBot();
+        }
         if (discordClient.isReady() && appState.db.botConfig.syncPanelsOnUpdate && appState.db.publishedPanels.length > 0) {
           await syncAllPublishedPanels();
         }
@@ -2267,30 +2327,22 @@ const startApplication = async () => {
           await fetch(`${keepAliveUrl.replace(/\/$/, '')}/health`).catch(() => null);
         }
       } catch (_err) {
-        // Keep-alive tick silent guard
+        // Keep-alive tick guard
       }
     }, KEEP_ALIVE_INTERVAL_MS);
 
-    const startupToken = resolveProtectedBotToken(appState.db.botConfig.token);
-  if (startupToken) {
-    await connectDiscordBot(startupToken);
-  } else {
-    console.log('[SADO PROTECT BOT] No token configured yet. Ready for dashboard setup.');
-  }
+    await connectDiscordBot();
 
-  setInterval(async () => {
-    try {
-      if (!discordClient.isReady() && appState.db.botConfig.autoReconnect !== false) {
-        const reconnectToken = resolveProtectedBotToken(appState.db.botConfig.token);
-        if (reconnectToken) {
-          await connectDiscordBot(reconnectToken);
+    setInterval(async () => {
+      try {
+        if (!discordClient.isReady() && appState.db.botConfig.autoReconnect !== false) {
+          await connectDiscordBot();
         }
+      } catch (_reErr) {
+        // Auto-reconnect guard
       }
-    } catch (_reErr) {
-      // Auto-reconnect guard
-    }
-  }, 45000);
-} catch (err) {
+    }, 30000);
+  } catch (err) {
     console.log(`[FATAL STARTUP ERROR] ${err.message}`);
     process.exit(1);
   }
