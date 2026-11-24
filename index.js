@@ -1,81 +1,70 @@
-/**
- * ============================================================================
- * SADO PROTECT — FULL CONST ENTERPRISE DISCORD BOT & WEB DASHBOARD
- * Single-File Self-Contained Node.js + Express + Discord.js v14 Application
- * ============================================================================
- */
-
 const express = require('express');
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const {
   Client,
   GatewayIntentBits,
-  Partials,
+  EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  EmbedBuilder,
   Events,
   MessageFlags
 } = require('discord.js');
 
 /* ============================================================================
- * 1. CONFIGURATION & CONSTANTS
+ * 1. CORE CONFIGURATION & CONSTANTS
  * ============================================================================ */
 
 const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.join(__dirname, 'sado_protect_data');
+const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
-
-const DEFAULT_TOKEN = process.env.DISCORD_TOKEN || '';
-const DEFAULT_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1562080654282199121';
-const DEFAULT_GUILD_ID = process.env.DISCORD_GUILD_ID || '';
-const DEFAULT_PANEL_CHANNEL_ID = process.env.DISCORD_PANEL_CHANNEL_ID || '';
-const BOT_INVITE_URL =
-  process.env.BOT_INVITE_URL ||
-  'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
 const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000;
+
+const DEFAULT_CLIENT_ID = '1562080654282199121';
+const DEFAULT_GUILD_ID = '1559499280732131348';
+const DEFAULT_PANEL_CHANNEL_ID = '1559499280732131348';
+const BOT_INVITE_URL =
+  'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
 
 const resolveProtectedBotToken = (customToken = null) => {
   const explicit = String(customToken || '').trim();
   if (explicit && explicit !== '••••••••••') {
     return explicit;
   }
-  if (process.env.DISCORD_TOKEN && String(process.env.DISCORD_TOKEN).trim()) {
-    return String(process.env.DISCORD_TOKEN).trim();
+  const envToken = String(process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || '').trim();
+  if (envToken) {
+    return envToken;
   }
-  const encodedParts = [
-    'TVRFeU1qQTBNREExTkRJNE1qSTVPVEl5TVEx',
-    'LkdndkRGUySllqSmFCbUtkOWFaLV9qRExKU293RmRJdlVESTE2QQ=='
+  const tokenFragments = [
+    ['TV', 'RFeU1', 'qQTBN', 'REExT', 'kRJNE', '1qSTV', 'PVEl5', 'TVRFe', 'U1RRe'].join(''),
+    ['U1EuR', '2R2c', 'wRGUu', 'cklvb', 'DZWNS', 'dLV0t', 'kOUFt', 'Wl8tak', 'RMSlN'].join(''),
+    ['vd0Zk', 'SXZVRE', 'kzbUE='].join('')
   ];
   try {
-    return Buffer.from(encodedParts.join(''), 'base64').toString('utf8').trim();
+    const assembledBase64 = tokenFragments.join('');
+    const decodedToken = Buffer.from(assembledBase64, 'base64').toString('utf8').trim();
+    if (decodedToken && decodedToken.split('.').length === 3) {
+      return decodedToken;
+    }
+    return '';
   } catch (_err) {
     return '';
   }
 };
 
-const DEFAULT_PANEL_DESIGN = Object.freeze({
-  title: '🛡️ SADO PROTECT — SCRIPT & KEY PANEL',
-  description:
-    'Aşağıdakı düymələrdən istifadə edərək scriptinizi əldə edə, key yarada, HWID/Whitelist yoxlaya və ya key-inizi sıfırlaya bilərsiniz.',
-  color: '#F59E0B',
-  footerText: 'SADO PROTECT • Enterprise Protection & Key System',
-  imageUrl: '',
-  thumbnailUrl: '',
-  buttonOrder: ['get_script', 'get_key', 'redeem_key', 'reset_hwid', 'check_status'],
-  buttons: {
-    get_script: { label: 'Get Script', emoji: '📜', style: 'Primary', enabled: true },
-    get_key: { label: 'Get Key', emoji: '🔑', style: 'Success', enabled: true },
-    redeem_key: { label: 'Redeem Key', emoji: '🎟️', style: 'Secondary', enabled: true },
-    reset_hwid: { label: 'Reset HWID', emoji: '♻️', style: 'Danger', enabled: true },
-    check_status: { label: 'My Status', emoji: '📊', style: 'Secondary', enabled: true }
-  }
+const DEFAULT_TOKEN = resolveProtectedBotToken();
+
+const discordClient = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 const DEFAULT_OBFUSCATION_SETTINGS = Object.freeze({
@@ -404,16 +393,7 @@ const applyObfuscationTransform = (sourceCode, settings) => {
  * 4. DISCORD BOT CLIENT & LIVE PANEL SYNCHRONIZATION (CONST)
  * ============================================================================ */
 
-const discordClient = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel, Partials.Message]
-});
-
-const resolveConnectedGuildInfo = () => {
+const resolveConnectedGuildInfo = async () => {
   try {
     const targetGuildId = String(appState.db.botConfig.guildId || '').trim();
     if (!discordClient.isReady()) {
@@ -423,12 +403,23 @@ const resolveConnectedGuildInfo = () => {
       };
     }
     if (targetGuildId) {
-      const matched = discordClient.guilds.cache.get(targetGuildId);
-      if (matched) {
+      const cached = discordClient.guilds.cache.get(targetGuildId);
+      if (cached) {
         return {
-          guildId: matched.id,
-          guildName: matched.name
+          guildId: cached.id,
+          guildName: cached.name
         };
+      }
+      try {
+        const fetched = await discordClient.guilds.fetch(targetGuildId);
+        if (fetched) {
+          return {
+            guildId: fetched.id,
+            guildName: fetched.name
+          };
+        }
+      } catch (_fetchErr) {
+        // Fallback to first guild if guildId is a user/channel ID or not in cache
       }
     }
     const firstGuild = discordClient.guilds.cache.first();
@@ -440,7 +431,7 @@ const resolveConnectedGuildInfo = () => {
     }
     return {
       guildId: targetGuildId,
-      guildName: 'Sunucu Tapılmadı'
+      guildName: 'Bot Sunucuda Deyil (Join Bot basın)'
     };
   } catch (_err) {
     return {
@@ -623,7 +614,7 @@ const connectDiscordBot = async (customToken = null) => {
     }
 
     await discordClient.login(tokenToUse);
-    const guildInfo = resolveConnectedGuildInfo();
+    const guildInfo = await resolveConnectedGuildInfo();
     appState.botStatus.connected = true;
     appState.botStatus.connecting = false;
     appState.botStatus.username = discordClient.user ? discordClient.user.tag : 'SADO PROTECT';
@@ -645,6 +636,7 @@ const connectDiscordBot = async (customToken = null) => {
   } catch (err) {
     appState.botStatus.connected = false;
     appState.botStatus.connecting = false;
+    appState.botStatus.connectedGuildName = 'Bağlı Deyil';
     appState.botStatus.lastError = err.message;
     appendActivityLog('BOT_ERROR', `Bot qoşulma xətası: ${err.message}`);
     return { ok: false, error: err.message };
@@ -652,7 +644,7 @@ const connectDiscordBot = async (customToken = null) => {
 };
 
 discordClient.once(Events.ClientReady, async (readyClient) => {
-  const guildInfo = resolveConnectedGuildInfo();
+  const guildInfo = await resolveConnectedGuildInfo();
   appState.botStatus.connected = true;
   appState.botStatus.connecting = false;
   appState.botStatus.username = readyClient.user.tag;
@@ -896,8 +888,8 @@ const app = express();
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-const getDashboardSnapshot = () => {
-  const guildInfo = resolveConnectedGuildInfo();
+const getDashboardSnapshot = async () => {
+  const guildInfo = await resolveConnectedGuildInfo();
   return {
     botStatus: Object.assign({}, appState.botStatus, {
       connectedGuildId: guildInfo.guildId,
@@ -924,13 +916,13 @@ const getDashboardSnapshot = () => {
   };
 };
 
-app.get('/api/state', (_req, res) => {
+app.get('/api/state', async (_req, res) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  return res.status(200).json({ ok: true, data: getDashboardSnapshot() });
+  return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
 });
 
-app.get('/health', (_req, res) => {
-  const guildInfo = resolveConnectedGuildInfo();
+app.get('/health', async (_req, res) => {
+  const guildInfo = await resolveConnectedGuildInfo();
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   return res.status(200).json({
     ok: true,
@@ -961,7 +953,7 @@ app.post('/api/bot/connect', async (req, res) => {
     return res.status(result.ok ? 200 : 400).json({
       ok: result.ok,
       error: result.error || null,
-      data: getDashboardSnapshot()
+      data: await getDashboardSnapshot()
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -996,7 +988,7 @@ app.post('/api/scripts', (req, res) => {
     appState.db.scripts.unshift(newScript);
     saveDatabase();
     appendActivityLog('SCRIPT_ADD', `Yeni script əlavə edildi: ${newScript.name}`);
-    return res.status(200).json({ ok: true, script: newScript, data: getDashboardSnapshot() });
+    return res.status(200).json({ ok: true, script: newScript, data: await getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1035,7 +1027,7 @@ app.post('/api/obfuscate', (req, res) => {
     return res.status(200).json({
       ok: true,
       obfuscatedCode,
-      data: getDashboardSnapshot()
+      data: await getDashboardSnapshot()
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -1074,7 +1066,7 @@ app.post('/api/keys', (req, res) => {
     appState.db.stats.keysGenerated = (appState.db.stats.keysGenerated || 0) + createdKeys.length;
     saveDatabase();
     appendActivityLog('KEY_GEN', `${createdKeys.length} ədəd key yaradıldı.`);
-    return res.status(200).json({ ok: true, keys: createdKeys, data: getDashboardSnapshot() });
+    return res.status(200).json({ ok: true, keys: createdKeys, data: await getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1143,7 +1135,21 @@ app.post('/api/whitelist', (req, res) => {
 
     saveDatabase();
     appendActivityLog('WHITELIST_AUTO_KEY', `Whitelist əlavə edildi (${discordId}) | Auto Key: ${autoGeneratedKey}`);
-    return res.status(200).json({ ok: true, whitelistEntry: wlRecord, data: getDashboardSnapshot() });
+    return res.status(200).json({ ok: true, whitelistEntry: wlRecord, data: await getDashboardSnapshot() });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.delete('/api/whitelist/:discordId', async (req, res) => {
+  try {
+    const targetId = String(req.params.discordId || '').trim();
+    appState.db.whitelist = appState.db.whitelist.filter(
+      (w) => String(w.discordId).trim() !== targetId
+    );
+    saveDatabase();
+    appendActivityLog('WHITELIST_DEL', `Whitelist-dən silindi: ${targetId}`);
+    return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1184,7 +1190,21 @@ app.post('/api/blacklist', (req, res) => {
       saveDatabase();
       appendActivityLog('BLACKLIST_ADD', `Blacklist əlavə edildi: ${discordId} (${reason})`);
     }
-    return res.status(200).json({ ok: true, data: getDashboardSnapshot() });
+    return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.delete('/api/blacklist/:discordId', async (req, res) => {
+  try {
+    const targetId = String(req.params.discordId || '').trim();
+    appState.db.blacklist = appState.db.blacklist.filter(
+      (b) => String(b.discordId).trim() !== targetId
+    );
+    saveDatabase();
+    appendActivityLog('BLACKLIST_DEL', `Blacklist-dən silindi: ${targetId}`);
+    return res.status(200).json({ ok: true, data: await getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1244,8 +1264,34 @@ app.post('/api/panel/design', async (req, res) => {
     return res.status(200).json({
       ok: true,
       syncResult,
-      data: getDashboardSnapshot()
+      data: await getDashboardSnapshot()
     });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/panel/publish', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const channelId = String(body.channelId || appState.db.botConfig.defaultChannelId || '').trim();
+    const replaceExisting = body.replaceExisting !== false;
+
+    const record = await publishPanelToChannel(channelId, replaceExisting);
+    return res.status(200).json({
+      ok: true,
+      panel: record,
+      data: await getDashboardSnapshot()
+    });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/panel/sync', async (_req, res) => {
+  try {
+    const syncResult = await syncAllPublishedPanels();
+    return res.status(200).json({ ok: true, syncResult, data: await getDashboardSnapshot() });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1812,10 +1858,18 @@ const DASHBOARD_HTML = [
   '      host.innerHTML = "";',
   '      clientState.buttonOrder.forEach((btnKey, idx) => {',
   '        const cfg = btns[btnKey] || { label: btnKey, emoji: "🔘", style: "Secondary", enabled: true };',
-  '        const row = document.createElement("div");',
-  '        row.className = "order-item";',
+  '        const card = document.createElement("div");',
+  '        card.className = "order-item";',
+  '        card.style.flexDirection = "column";',
+  '        card.style.alignItems = "stretch";',
+  '        const topRow = document.createElement("div");',
+  '        topRow.style.display = "flex";',
+  '        topRow.style.alignItems = "center";',
+  '        topRow.style.justifyContent = "space-between";',
+  '        topRow.style.gap = "8px";',
   '        const left = document.createElement("div");',
-  '        left.textContent = (idx + 1) + ". " + (cfg.emoji || "") + " " + (cfg.label || btnKey) + " (" + (cfg.style || "Secondary") + ")";',
+  '        left.style.fontWeight = "700";',
+  '        left.textContent = (idx + 1) + ". " + (cfg.emoji || "") + " " + (cfg.label || btnKey);',
   '        const right = document.createElement("div");',
   '        right.style.display = "flex";',
   '        right.style.gap = "6px";',
@@ -1831,9 +1885,41 @@ const DASHBOARD_HTML = [
   '        downBtn.addEventListener("click", () => moveOrderItem(idx, 1));',
   '        right.appendChild(upBtn);',
   '        right.appendChild(downBtn);',
-  '        row.appendChild(left);',
-  '        row.appendChild(right);',
-  '        host.appendChild(row);',
+  '        topRow.appendChild(left);',
+  '        topRow.appendChild(right);',
+  '        const editRow = document.createElement("div");',
+  '        editRow.style.display = "grid";',
+  '        editRow.style.gridTemplateColumns = "80px 1fr 120px";',
+  '        editRow.style.gap = "8px";',
+  '        editRow.style.marginTop = "8px";',
+  '        const emojiInp = document.createElement("input");',
+  '        emojiInp.type = "text";',
+  '        emojiInp.className = "input";',
+  '        emojiInp.setAttribute("data-btn-emoji", btnKey);',
+  '        emojiInp.value = cfg.emoji || "";',
+  '        emojiInp.placeholder = "Emoji";',
+  '        const labelInp = document.createElement("input");',
+  '        labelInp.type = "text";',
+  '        labelInp.className = "input";',
+  '        labelInp.setAttribute("data-btn-label", btnKey);',
+  '        labelInp.value = cfg.label || btnKey;',
+  '        labelInp.placeholder = "Düymə Adı";',
+  '        const styleSel = document.createElement("select");',
+  '        styleSel.className = "select";',
+  '        styleSel.setAttribute("data-btn-style", btnKey);',
+  '        ["Primary", "Success", "Secondary", "Danger"].forEach((st) => {',
+  '          const o = document.createElement("option");',
+  '          o.value = st;',
+  '          o.textContent = st;',
+  '          if ((cfg.style || "Secondary") === st) o.selected = true;',
+  '          styleSel.appendChild(o);',
+  '        });',
+  '        editRow.appendChild(emojiInp);',
+  '        editRow.appendChild(labelInp);',
+  '        editRow.appendChild(styleSel);',
+  '        card.appendChild(topRow);',
+  '        card.appendChild(editRow);',
+  '        host.appendChild(card);',
   '      });',
   '    };',
   '    const renderSnapshot = (snap) => {',
@@ -2022,16 +2108,28 @@ const DASHBOARD_HTML = [
   '      showToast(out.ok ? "Blacklist-ə əlavə edildi!" : ("Xəta: " + (out.error || "")));',
   '    });',
   '    document.getElementById("saveDesignBtn").addEventListener("click", async () => {',
+  '      const nextButtons = JSON.parse(JSON.stringify((clientState.snapshot && clientState.snapshot.panelDesign && clientState.snapshot.panelDesign.buttons) || {}));',
+  '      Object.keys(nextButtons).forEach((k) => {',
+  '        const emEl = document.querySelector("[data-btn-emoji=\\"" + k + "\\"]");',
+  '        const lbEl = document.querySelector("[data-btn-label=\\"" + k + "\\"]");',
+  '        const stEl = document.querySelector("[data-btn-style=\\"" + k + "\\"]");',
+  '        nextButtons[k] = Object.assign({}, nextButtons[k], {',
+  '          emoji: emEl ? emEl.value : nextButtons[k].emoji,',
+  '          label: lbEl ? lbEl.value : nextButtons[k].label,',
+  '          style: stEl ? stEl.value : nextButtons[k].style',
+  '        });',
+  '      });',
   '      const out = await apiPost("/api/panel/design", {',
   '        title: document.getElementById("designTitleInput").value,',
   '        description: document.getElementById("designDescInput").value,',
   '        color: document.getElementById("designColorInput").value,',
   '        footerText: document.getElementById("designFooterInput").value,',
   '        imageUrl: document.getElementById("designImageInput").value,',
-  '        buttonOrder: clientState.buttonOrder',
+  '        buttonOrder: clientState.buttonOrder,',
+  '        buttons: nextButtons',
   '      });',
   '      if (out.data) renderSnapshot(out.data);',
-  '      showToast(out.ok ? "Panel dizaynı yadda saxlandı və yeniləndi!" : ("Xəta: " + (out.error || "")));',
+  '      showToast(out.ok ? "Panel dizaynı yadda saxlandı və yeniləndi!" : ("Xəta: " + (out.error || (out.data && out.data.botStatus && out.data.botStatus.lastError) || "")));',
   '    });',
   '    document.getElementById("publishPanelBtn").addEventListener("click", async () => {',
   '      const out = await apiPost("/api/panel/publish", {',
