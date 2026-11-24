@@ -1038,7 +1038,6 @@ app.post('/api/obfuscate', async (req, res) => {
   }
 });
 
-app.post('/api/scripts', async (req, res) => {
 const handleBotConnectRequest = async (req, res) => {
   try {
     const body = req.body || {};
@@ -1072,7 +1071,41 @@ const handleBotConnectRequest = async (req, res) => {
 };
 
 app.post('/api/bot/connect', handleBotConnectRequest);
-app.post('/api/obfuscate', (req, res) => {
+
+app.post('/api/scripts', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = String(body.name || 'SADO Script').trim() || 'SADO Script';
+    const loaderUrl = String(body.loaderUrl || 'https://api.sadoprotect.local/loader/sado-hub-main.lua').trim();
+    const rawCode = String(body.rawCode || '-- SADO PROTECT Script\nprint("SADO PROTECT Ready")').trim();
+
+    const createdScript = {
+      id: `scr_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`,
+      name,
+      version: '4.2.0',
+      loaderUrl,
+      rawCode,
+      requireKey: true,
+      hwidLock: true,
+      active: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    appState.db.scripts.unshift(createdScript);
+    saveDatabase();
+    appendActivityLog('SCRIPT_CREATE', `Yeni script yaradıldı: ${createdScript.name}`);
+    return res.status(200).json({
+      ok: true,
+      script: createdScript,
+      data: await getDashboardSnapshot()
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/obfuscate', async (req, res) => {
   try {
     const body = req.body || {};
     const settings = {
@@ -1104,7 +1137,8 @@ app.post('/api/obfuscate', (req, res) => {
     appendActivityLog('OBFUSCATE', `Script obfuscate edildi (${settings.mode}).`);
     return res.status(200).json({
       ok: true,
-      obfuscatedCode
+      obfuscatedCode,
+      data: await getDashboardSnapshot()
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
