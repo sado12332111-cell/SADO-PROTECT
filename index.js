@@ -635,15 +635,7 @@ const resolveDiscordUserName = async (userId) => {
 };
 
 const buildBotInviteUrl = () => {
-  const appId =
-    process.env.DISCORD_CLIENT_ID ||
-    (client.application && client.application.id) ||
-    (client.user && client.user.id) ||
-    '';
-  if (!appId) return 'https://discord.com/developers/applications';
-  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
-    appId
-  )}&permissions=8&scope=bot%20applications.commands`;
+  return 'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
 };
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -1711,21 +1703,61 @@ const showMsg = (txt) => {
 
 const renderCharts = (data) => {
   const st = data.stats || {};
+  const keysList = data.keys || [];
+  const wlList = data.whitelists || [];
+  const blList = data.blacklist || [];
+  const scriptsList = data.scripts || [];
+  const panelsList = data.panels || [];
+  const usedKeysCount = keysList.filter((k) => k.used).length;
+  const unusedKeysCount = keysList.length - usedKeysCount;
+  const lockedWlCount = wlList.filter((w) => w.hwidLocked !== false).length;
+  const boundHwidCount = wlList.filter((w) => Boolean(w.hwid)).length;
+
   const metrics = [
-    { label: 'Auth Uğurlu', val: Number(st.authSuccess || 0) },
-    { label: 'Auth Bloklanan', val: Number(st.authBlocked || 0) },
-    { label: 'Redeem Sayı', val: Number(st.redeems || 0) },
-    { label: 'Script Fetch', val: Number(st.scriptFetches || 0) },
-    { label: 'HWID Reset', val: Number(st.hwidResets || 0) },
-    { label: 'Aktiv Keylər', val: (data.keys || []).length },
-    { label: 'Whitelist Sayı', val: (data.whitelists || []).length }
+    { label: 'Auth Uğurlu', val: Number(st.authSuccess || 0), color: '#10b981' },
+    { label: 'Auth Bloklanan', val: Number(st.authBlocked || 0), color: '#ef4444' },
+    { label: 'Redeem Sayı', val: Number(st.redeems || 0), color: '#3b82f6' },
+    { label: 'Script Fetch', val: Number(st.scriptFetches || 0), color: '#8b5cf6' },
+    { label: 'HWID Reset', val: Number(st.hwidResets || 0), color: '#f59e0b' },
+    { label: 'Ümumi Keylər', val: keysList.length, color: '#06b6d4' },
+    { label: 'İşlənmiş Keylər', val: usedKeysCount, color: '#ec4899' },
+    { label: 'Boş Keylər', val: unusedKeysCount, color: '#22c55e' },
+    { label: 'Whitelist Sayı', val: wlList.length, color: '#6366f1' },
+    { label: 'HWID Bağlı İstifadəçi', val: boundHwidCount, color: '#14b8a6' },
+    { label: 'HWID Kilidli Qeyd', val: lockedWlCount, color: '#eab308' },
+    { label: 'Blacklist Sayı', val: blList.length, color: '#dc2626' },
+    { label: 'Skript Sayı', val: scriptsList.length, color: '#a855f7' },
+    { label: 'Göndərilmiş Panellər', val: panelsList.length, color: '#0ea5e9' }
   ];
+
   const maxVal = Math.max(1, ...metrics.map((m) => m.val));
   document.getElementById('chartsArea').innerHTML = metrics.map((m) => {
     const pct = Math.round((m.val / maxVal) * 100);
-    return '<div class="chart-row"><div>' + m.label + ': <b>' + m.val + '</b></div>' +
-      '<div class="bar-wrap"><div class="bar-fill" style="width:' + pct + '%"></div></div></div>';
+    return '<div class="chart-row"><div>' + m.label + ': <b>' + m.val + '</b> (' + pct + '%)</div>' +
+      '<div class="bar-wrap"><div class="bar-fill" style="width:' + pct + '%;background:' + m.color + '"></div></div></div>';
   }).join('');
+};
+
+const previewGuildNameFromInput = async () => {
+  const gId = document.getElementById('guildIdInput').value.trim();
+  const uId = document.getElementById('discordUserIdInput').value.trim();
+  const targetId = gId || uId;
+  if (!targetId) {
+    document.getElementById('linkedGuildName').textContent = '';
+    return;
+  }
+  const res = await api('/api/workspace/link', {
+    method: 'POST',
+    body: JSON.stringify({
+      guildId: gId || document.getElementById('guildIdInput').value.trim(),
+      discordUserId: uId,
+    }),
+  });
+  if (res && res.guildName) {
+    document.getElementById('linkedGuildName').textContent = 'Sunucu adı: ' + res.guildName;
+    document.getElementById('statusBar').textContent =
+      'Workspace: ' + wsId + ' | Sunucu: ' + res.guildName + (res.guildId ? ' (' + res.guildId + ')' : '');
+  }
 };
 
 const refreshAll = async () => {
@@ -1734,10 +1766,12 @@ const refreshAll = async () => {
   document.getElementById('statusBar').textContent =
     'Workspace: ' + wsId + ' | Bot: ' + (st.botReady ? '7/24 Online' : 'Qoşulur...') +
     ' | Sunucu: ' + (data.guildName || 'Seçilməyib') + (data.guildId ? ' (' + data.guildId + ')' : '');
-  document.getElementById('joinDiscordBtn').href = data.inviteUrl || '#';
+  document.getElementById('joinDiscordBtn').href = data.inviteUrl || 'https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot';
   document.getElementById('guildIdInput').value = data.guildId || '';
   document.getElementById('discordUserIdInput').value = data.discordUserId || '';
-  document.getElementById('linkedGuildName').textContent = data.guildName ? 'Bağlı Sunucu: ' + data.guildName : '';
+  document.getElementById('linkedGuildName').textContent = data.guildName ? 'Sunucu adı: ' + data.guildName : '';
+  document.getElementById('guildIdInput').oninput = previewGuildNameFromInput;
+  document.getElementById('discordUserIdInput').oninput = previewGuildNameFromInput;
 
   renderCharts(data);
 
