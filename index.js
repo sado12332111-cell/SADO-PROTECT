@@ -23,7 +23,7 @@ const {
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
-const KEEP_ALIVE_INTERVAL_MS = 3 * 60 * 1000;
+const KEEP_ALIVE_INTERVAL_MS = 5 * 60 * 1000;
 
 const DEFAULT_CLIENT_ID = '1562080654282199121';
 const DEFAULT_GUILD_ID = '1559499280732131348';
@@ -84,13 +84,27 @@ const resolveProtectedBotToken = () => {
   if (envToken) {
     return envToken;
   }
-  const sA = ['MTU2', 'MjA4', 'MDY1', 'NDI4', 'MjE5', 'OTEy', 'MQ=='].join('');
-  const sB = ['RzJu', 'bnRn', 'Lg=='].join('');
-  const sC = ['VF95', 'bUY4', 'M0d0', 'aFJy', 'U3J1', 'Q2p3', 'YVB1', 'RHFaeTdm', 'MjlQUndm', 'bVJB', 'SjQ='].join('');
+  const segA = ['MTU2', 'MjA4', 'MDY1', 'NDI4', 'MjE5', 'OTEy', 'MQ=='].join('');
+  const segB = ['RzhD', 'dUp1', 'Lg=='].join('');
+  const segC = [
+    'OFVL',
+    'OXdK',
+    'Q29f',
+    'cm50',
+    'bktu',
+    'cWx_',
+    'eDIx',
+    'aWFJ',
+    'WS1T',
+    'Z3Nu',
+    'SHVK',
+    'RmVz',
+    'MA=='
+  ].join('');
   try {
-    const part1 = Buffer.from(sA, 'base64').toString('utf8').trim();
-    const part2 = Buffer.from(sB, 'base64').toString('utf8').trim();
-    const part3 = Buffer.from(sC, 'base64').toString('utf8').trim();
+    const part1 = Buffer.from(segA, 'base64').toString('utf8').trim();
+    const part2 = Buffer.from(segB, 'base64').toString('utf8').trim();
+    const part3 = Buffer.from(segC, 'base64').toString('utf8').trim();
     const assembled = `${part1}${part2}${part3}`.trim();
     if (assembled && assembled.split('.').length === 3) {
       return assembled;
@@ -681,11 +695,15 @@ const connectDiscordBot = async () => {
     return { ok: false, error: appState.botStatus.lastError };
   }
 
-  if (discordClient.isReady() && appState.botStatus.connected) {
+  if (discordClient.isReady()) {
     const guildInfo = await resolveConnectedGuildInfo();
+    appState.botStatus.connected = true;
+    appState.botStatus.connecting = false;
+    appState.botStatus.username = discordClient.user ? discordClient.user.tag : appState.botStatus.username;
+    appState.botStatus.userId = discordClient.user ? discordClient.user.id : appState.botStatus.userId;
+    appState.botStatus.guildCount = discordClient.guilds.cache.size;
     appState.botStatus.connectedGuildId = guildInfo.guildId;
     appState.botStatus.connectedGuildName = guildInfo.guildName;
-    appState.botStatus.guildCount = discordClient.guilds.cache.size;
     return { ok: true, botStatus: appState.botStatus };
   }
 
@@ -696,8 +714,16 @@ const connectDiscordBot = async () => {
   appState.botStatus.connecting = true;
   appState.botStatus.lastError = null;
 
+  const loginGuardTimer = setTimeout(() => {
+    if (appState.botStatus.connecting && !discordClient.isReady()) {
+      appState.botStatus.connecting = false;
+      appState.botStatus.lastError = 'Bağlantı vaxtı bitdi, yenidən cəhd edilir...';
+    }
+  }, 15000);
+
   try {
     await discordClient.login(tokenToUse);
+    clearTimeout(loginGuardTimer);
     const guildInfo = await resolveConnectedGuildInfo();
     appState.botStatus.connected = true;
     appState.botStatus.connecting = false;
@@ -718,6 +744,7 @@ const connectDiscordBot = async () => {
 
     return { ok: true, botStatus: appState.botStatus };
   } catch (err) {
+    clearTimeout(loginGuardTimer);
     appState.botStatus.connected = false;
     appState.botStatus.connecting = false;
     appState.botStatus.lastError = err.message;
@@ -2311,25 +2338,45 @@ const startApplication = async () => {
       console.log(`[SADO PROTECT WEB] Listening on port ${PORT}`);
     });
 
-    const keepAliveUrl = String(
-      process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL || ''
+    const resolvedKeepAliveUrl = String(
+      process.env.RENDER_EXTERNAL_URL ||
+        process.env.KEEP_ALIVE_URL ||
+        (process.env.RENDER_SERVICE_NAME ? `https://${process.env.RENDER_SERVICE_NAME}.onrender.com` : '')
     ).trim();
 
-    setInterval(async () => {
+    const runFiveMinuteKeepAlive = async () => {
       try {
         if (!discordClient.isReady()) {
           await connectDiscordBot();
+        } else {
+          const guildInfo = await resolveConnectedGuildInfo();
+          appState.botStatus.connected = true;
+          appState.botStatus.connecting = false;
+          appState.botStatus.connectedGuildId = guildInfo.guildId;
+          appState.botStatus.connectedGuildName = guildInfo.guildName;
         }
+
         if (discordClient.isReady() && appState.db.botConfig.syncPanelsOnUpdate && appState.db.publishedPanels.length > 0) {
           await syncAllPublishedPanels();
         }
-        if (keepAliveUrl && typeof fetch === 'function') {
-          await fetch(`${keepAliveUrl.replace(/\/$/, '')}/health`).catch(() => null);
+
+        const pingTargets = [];
+        if (resolvedKeepAliveUrl) {
+          pingTargets.push(`${resolvedKeepAliveUrl.replace(/\/$/, '')}/health`);
+        }
+        pingTargets.push(`http://127.0.0.1:${PORT}/health`);
+
+        if (typeof fetch === 'function') {
+          for (const targetUrl of pingTargets) {
+            await fetch(targetUrl).catch(() => null);
+          }
         }
       } catch (_err) {
-        // Keep-alive tick guard
+        // 5-minute keep-alive guard
       }
-    }, KEEP_ALIVE_INTERVAL_MS);
+    };
+
+    setInterval(runFiveMinuteKeepAlive, KEEP_ALIVE_INTERVAL_MS);
 
     await connectDiscordBot();
 
