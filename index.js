@@ -1360,14 +1360,53 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
       .sidebar.open {
         display: flex !important;
+        position: relative;
+        width: 100%;
+        z-index: 50;
+        background: #0c1222;
       }
     }
   </style>
+  <script>
+    window.sadoToggleMenu = function (ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      var nav = document.getElementById("sidebarNav");
+      if (nav) {
+        nav.classList.toggle("open");
+      }
+    };
+
+    window.sadoSelectTab = function (tabName) {
+      var btns = document.querySelectorAll(".nav-btn[data-tab]");
+      for (var i = 0; i < btns.length; i++) {
+        if (btns[i].getAttribute("data-tab") === tabName) {
+          btns[i].classList.add("active");
+        } else {
+          btns[i].classList.remove("active");
+        }
+      }
+      var secs = document.querySelectorAll(".tab-section");
+      for (var j = 0; j < secs.length; j++) {
+        if (secs[j].id === "tab-" + tabName) {
+          secs[j].classList.add("active");
+        } else {
+          secs[j].classList.remove("active");
+        }
+      }
+      var nav = document.getElementById("sidebarNav");
+      if (nav && window.innerWidth <= 820) {
+        nav.classList.remove("open");
+      }
+    };
+  </script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand-group">
-      <button type="button" class="menu-toggle-btn" id="mobileMenuBtn">☰</button>
+      <button type="button" class="menu-toggle-btn" id="mobileMenuBtn" onclick="window.sadoToggleMenu(event)">☰</button>
       <div>
         <div class="brand-title">SADO PROTECT</div>
         <div class="brand-sub">Enterprise Script, Key & Bot Control</div>
@@ -1381,11 +1420,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   <div class="layout-shell">
     <aside class="sidebar" id="sidebarNav">
-      <button type="button" class="nav-btn active" data-tab="overview">📊 İdarəetmə</button>
-      <button type="button" class="nav-btn" data-tab="scripts">📜 Scriptlər</button>
-      <button type="button" class="nav-btn" data-tab="keys">🔑 Keylər</button>
-      <button type="button" class="nav-btn" data-tab="design">🎨 Panel Dizaynı</button>
-      <button type="button" class="nav-btn" data-tab="lists">🛡️ Whitelist / Blacklist</button>
+      <button type="button" class="nav-btn active" data-tab="overview" onclick="window.sadoSelectTab('overview')">📊 İdarəetmə</button>
+      <button type="button" class="nav-btn" data-tab="scripts" onclick="window.sadoSelectTab('scripts')">📜 Scriptlər</button>
+      <button type="button" class="nav-btn" data-tab="keys" onclick="window.sadoSelectTab('keys')">🔑 Keylər</button>
+      <button type="button" class="nav-btn" data-tab="design" onclick="window.sadoSelectTab('design')">🎨 Panel Dizaynı</button>
+      <button type="button" class="nav-btn" data-tab="lists" onclick="window.sadoSelectTab('lists')">🛡️ Whitelist / Blacklist</button>
     </aside>
 
     <main class="main-content">
@@ -1836,45 +1875,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     const initDashboard = async () => {
       const mobileMenuBtn = document.getElementById("mobileMenuBtn");
-      const sidebarNav = document.getElementById("sidebarNav");
       const navButtons = [...document.querySelectorAll(".nav-btn[data-tab]")];
-      const tabSections = [...document.querySelectorAll(".tab-section")];
-
-      const activateTab = (tabName) => {
-        navButtons.forEach((btn) => {
-          btn.classList.toggle("active", btn.dataset.tab === tabName);
-        });
-        tabSections.forEach((sec) => {
-          sec.classList.toggle("active", sec.id === ("tab-" + tabName));
-        });
-        if (sidebarNav && window.innerWidth <= 820) {
-          sidebarNav.classList.remove("open");
-        }
-      };
-
-      const toggleMobileDrawer = (ev) => {
-        if (ev) {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-        const navEl = document.getElementById("sidebarNav");
-        if (navEl) {
-          navEl.classList.toggle("open");
-        }
-      };
 
       if (mobileMenuBtn && !mobileMenuBtn.dataset.bound) {
         mobileMenuBtn.dataset.bound = "true";
-        mobileMenuBtn.onclick = toggleMobileDrawer;
-        mobileMenuBtn.addEventListener("click", toggleMobileDrawer);
+        mobileMenuBtn.addEventListener("click", window.sadoToggleMenu);
       }
 
       navButtons.forEach((btn) => {
         if (!btn.dataset.bound) {
           btn.dataset.bound = "true";
-          btn.onclick = () => activateTab(btn.dataset.tab);
           btn.addEventListener("click", () => {
-            activateTab(btn.dataset.tab);
+            window.sadoSelectTab(btn.dataset.tab);
           });
         }
       });
