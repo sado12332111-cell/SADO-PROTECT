@@ -3352,56 +3352,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
                   .join('');
         }
 
-        const whitelistBox = document.getElementById('whitelistBox');
-        if (whitelistBox) {
-          const wl = data.whitelist || [];
-          whitelistBox.innerHTML =
-            wl.length === 0
-              ? '<div class="field-label">Whitelist boşdur.</div>'
-              : wl
-                  .map((w) => {
-                    const prof = w.profile || {};
-                    return `
-                      <div class="record-row">
-                        <div class="user-chip">
-                          <img class="avatar-img" src="${escapeHtml(prof.avatarUrl || '')}" alt="avatar" />
-                          <div>
-                            <div style="font-weight:800;font-size:13px;">${escapeHtml(prof.globalName || w.discordTag || w.discordId)}</div>
-                            <div class="field-label">ID: ${escapeHtml(w.discordId)} • Vaxt: ${escapeHtml(w.durationLabel)} (${escapeHtml(w.remainingLabel)})</div>
-                          </div>
-                        </div>
-                        <button type="button" class="btn btn-danger" onclick="window.__spRemoveWhitelist('${escapeHtml(w.discordId)}')">Çıxar</button>
-                      </div>
-                    `;
-                  })
-                  .join('');
-        }
-
-        const blacklistBox = document.getElementById('blacklistBox');
-        if (blacklistBox) {
-          const bl = data.blacklist || [];
-          blacklistBox.innerHTML =
-            bl.length === 0
-              ? '<div class="field-label">Blacklist boşdur.</div>'
-              : bl
-                  .map((b) => {
-                    const prof = b.profile || {};
-                    return `
-                      <div class="record-row">
-                        <div class="user-chip">
-                          <img class="avatar-img" src="${escapeHtml(prof.avatarUrl || '')}" alt="avatar" />
-                          <div>
-                            <div style="font-weight:800;font-size:13px;color:#fda4af;">${escapeHtml(prof.globalName || b.discordTag || b.discordId)}</div>
-                            <div class="field-label">ID: ${escapeHtml(b.discordId)} • Səbəb: ${escapeHtml(b.reason)} • Vaxt: ${escapeHtml(b.durationLabel)}</div>
-                          </div>
-                        </div>
-                        <button type="button" class="btn btn-danger" onclick="window.__spRemoveBlacklist('${escapeHtml(b.discordId)}')">Sil</button>
-                      </div>
-                    `;
-                  })
-                  .join('');
-        }
-
         const joinBtn = document.getElementById('joinDiscordBtn');
         if (joinBtn && data.bot?.inviteUrl) {
           joinBtn.href = data.bot.inviteUrl;
