@@ -21,7 +21,9 @@ const {
 } = require('discord.js');
 
 const PORT = Number(process.env.PORT || 3000);
-const BOT_TOKEN = process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || '';
+const BOT_TOKEN = String(
+  process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || ''
+).trim();
 const DATA_DIR = path.join(__dirname, 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
 const MAX_BACKUPS = 5;
@@ -518,11 +520,14 @@ const registerSlashCommands = async () => {
 };
 
 const ensureBotOnline = async () => {
-  if (!BOT_TOKEN) return;
+  if (!BOT_TOKEN) {
+    console.warn('[BOT] Token tapılmadı. Render Environment bölməsində DISCORD_TOKEN və ya BOT_TOKEN əlavə edin.');
+    return;
+  }
   if (client.isReady()) return;
   if (isConnectingNow) return;
   const now = Date.now();
-  if (now - lastConnectAttempt < 12000) return;
+  if (now - lastConnectAttempt < 5000) return;
   isConnectingNow = true;
   lastConnectAttempt = now;
   try {
@@ -532,6 +537,19 @@ const ensureBotOnline = async () => {
   } finally {
     isConnectingNow = false;
   }
+};
+
+const startWatchdog = () => {
+  setInterval(async () => {
+    try {
+      if (!client.isReady() && !isConnectingNow && BOT_TOKEN) {
+        await ensureBotOnline();
+      }
+      if (client.isReady() && !commandsRegistered) {
+        await registerSlashCommands().catch(() => {});
+      }
+    } catch (_e) {}
+  }, 15000);
 };
 
 const startWatchdog = () => {
