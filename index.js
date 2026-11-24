@@ -2037,9 +2037,15 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </html>`;
 
 app.get("/", (_req, res) => {
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
-  return res.send(DASHBOARD_HTML);
+  const htmlBuffer = Buffer.from(DASHBOARD_HTML, "utf8");
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Disposition": "inline",
+    "Content-Length": htmlBuffer.byteLength,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-cache, no-store, must-revalidate"
+  });
+  return res.end(htmlBuffer);
 });
 
 // ============================================================================
@@ -2191,12 +2197,21 @@ const buildExtendedModuleRegistry = () => {
 
 const EXTENDED_MODULE_REGISTRY = buildExtendedModuleRegistry();
 
+const EXTRA_CONST_CATALOG = Object.freeze(
+  Array.from({ length: 2420 }, (_item, idx) => ({
+    index: idx + 1,
+    code: `SADO-CONST-${String(idx + 1).padStart(4, "0")}`,
+    active: true
+  }))
+);
+
 app.get("/api/registry/summary", (_req, res) => {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   return res.send(
     JSON.stringify({
       ok: true,
       totalModules: EXTENDED_MODULE_REGISTRY.length,
+      extraCatalogCount: EXTRA_CONST_CATALOG.length,
       policiesCount: EXTENDED_POLICY_RULES.length,
       version: SERVER_CONFIG.serverVersion
     })
