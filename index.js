@@ -552,17 +552,75 @@ const startWatchdog = () => {
   }, 15000);
 };
 
-const startWatchdog = () => {
-  setInterval(async () => {
-    try {
-      if (!client.isReady() && !isConnectingNow) {
-        await ensureBotOnline();
+const obfuscateLuaCode = (code, level = '2') => {
+  const raw = String(code || '');
+  const shift = level === '3' ? 17 : level === '1' ? 5 : 11;
+  const bytes = [];
+  for (let i = 0; i < raw.length; i = i + 1) {
+    bytes.push((raw.charCodeAt(i) + shift) % 256);
+  }
+  const encodedStr = bytes.join(',');
+  return [
+    `-- SADO PROTECT Obfuscated (Level ${level})`,
+    'local _b = {' + encodedStr + '}',
+    'local _t = {}',
+    'for _i = 1, #_b do',
+    `  local _v = (_b[_i] - ${shift}) % 256`,
+    '  if _v < 0 then _v = _v + 256 end',
+    '  _t[_i] = string.char(_v)',
+    'end',
+    'local _fn = loadstring(table.concat(_t))',
+    'if type(_fn) == "function" then _fn() end',
+  ].join('\n');
+};
+
+const resolveGuildInfoById = async (guildId) => {
+  const cleanId = String(guildId || '').trim();
+  if (!cleanId) return { guildId: '', guildName: 'Seçilməyib', botInGuild: false };
+  try {
+    if (client.isReady()) {
+      const cached = client.guilds.cache.get(cleanId);
+      if (cached) {
+        return { guildId: cleanId, guildName: cached.name || cleanId, botInGuild: true };
       }
-      if (client.isReady() && !commandsRegistered) {
-        await registerSlashCommands().catch(() => {});
+      const fetched = await client.guilds.fetch(cleanId).catch(() => null);
+      if (fetched) {
+        return { guildId: cleanId, guildName: fetched.name || cleanId, botInGuild: true };
       }
-    } catch (_e) {}
-  }, 45000);
+    }
+    if (BOT_TOKEN) {
+      const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+      const guildData = await rest.get(Routes.guild(cleanId)).catch(() => null);
+      if (guildData && guildData.name) {
+        return { guildId: cleanId, guildName: guildData.name, botInGuild: true };
+      }
+    }
+  } catch (_e) {}
+  return { guildId: cleanId, guildName: `Sunucu (${cleanId})`, botInGuild: false };
+};
+
+const resolveDiscordUserName = async (userId) => {
+  const cleanId = String(userId || '').trim();
+  if (!cleanId) return '';
+  try {
+    if (client.isReady()) {
+      const u = client.users.cache.get(cleanId) || (await client.users.fetch(cleanId).catch(() => null));
+      if (u) return u.globalName || u.username || cleanId;
+    }
+  } catch (_e) {}
+  return cleanId;
+};
+
+const buildBotInviteUrl = () => {
+  const appId =
+    process.env.DISCORD_CLIENT_ID ||
+    (client.application && client.application.id) ||
+    (client.user && client.user.id) ||
+    '';
+  if (!appId) return 'https://discord.com/developers/applications';
+  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
+    appId
+  )}&permissions=8&scope=bot%20applications.commands`;
 };
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -656,6 +714,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ws.scripts[0];
         const durMs = parseDurationToMs(durationStr);
         const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
+        const creatorName = interaction.user.globalName || interaction.user.username || invokerId;
 
         const created = [];
         for (let i = 0; i < amount; i = i + 1) {
@@ -667,6 +726,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             expiresAt,
             used: false,
             usedByDiscordId: null,
+            usedByName: '',
+            createdByDiscordId: invokerId,
+            createdByName: creatorName,
             createdAt: new Date().toISOString(),
           };
           ws.keys.unshift(newKey);
@@ -692,6 +754,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ws.scripts[0];
         const durMs = parseDurationToMs(durationStr);
         const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
+        const addedByName = interaction.user.globalName || interaction.user.username || invokerId;
 
         const existingIdx = ws.whitelists.findIndex(
           (w) => w.discordUserId === targetUser.id && w.scriptId === (sc ? sc.id : 'default')
@@ -699,10 +762,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const entry = {
           id: existingIdx >= 0 ? ws.whitelists[existingIdx].id : crypto.randomUUID(),
           discordUserId: targetUser.id,
-          username: targetUser.username,
+          username: targetUser.globalName || targetUser.username,
           scriptId: sc ? sc.id : 'default',
           key: existingIdx >= 0 && ws.whitelists[existingIdx].key ? ws.whitelists[existingIdx].key : generateRandomKeyCode(),
-          hwid: '',
+          hwid: existingIdx >= 0 ? ws.whitelists[existingIdx].hwid || '' : '',
+          hwidLocked: existingIdx >= 0 ? ws.whitelists[existingIdx].hwidLocked !== false : true,
+          addedByDiscordId: invokerId,
+          addedByName,
           expiresAt,
           createdAt: new Date().toISOString(),
         };
@@ -943,6 +1009,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         keyObj.used = true;
         keyObj.usedByDiscordId = userId;
+        keyObj.usedByName = interaction.user.globalName || interaction.user.username || userId;
         keyObj.usedAt = new Date().toISOString();
 
         const existingWlIdx = ws.whitelists.findIndex(
@@ -951,10 +1018,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const wlRecord = {
           id: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].id : crypto.randomUUID(),
           discordUserId: userId,
-          username: interaction.user.username,
+          username: interaction.user.globalName || interaction.user.username,
           scriptId: targetScriptId,
           key: keyObj.key,
           hwid: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].hwid || '' : '',
+          hwidLocked: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].hwidLocked !== false : true,
+          addedByDiscordId: keyObj.createdByDiscordId || userId,
+          addedByName: keyObj.createdByName || interaction.user.globalName || interaction.user.username,
           expiresAt: keyObj.expiresAt || null,
           createdAt: new Date().toISOString(),
         };
@@ -1032,11 +1102,17 @@ app.get('/api/status', async (req, res) => {
 
 app.get('/api/state', (req, res) => {
   const { wsId, ws } = getWorkspaceFromReq(req);
+  const guilds = client.isReady()
+    ? client.guilds.cache.map((g) => ({ id: g.id, name: g.name, memberCount: g.memberCount || 0 }))
+    : [];
   res.json({
     ok: true,
     workspaceId: wsId,
     guildId: ws.guildId || '',
+    guildName: ws.guildName || '',
     discordUserId: ws.discordUserId || '',
+    inviteUrl: buildBotInviteUrl(),
+    guilds,
     panelConfig: ws.panelConfig,
     scripts: ws.scripts,
     keys: ws.keys,
@@ -1051,8 +1127,12 @@ app.post('/api/workspace/link', async (req, res) => {
   const { wsId, ws } = getWorkspaceFromReq(req);
   const guildId = String((req.body && req.body.guildId) || '').trim();
   const discordUserId = String((req.body && req.body.discordUserId) || '').trim();
+  const guildInfo = await resolveGuildInfoById(guildId);
+  const resolvedUserName = discordUserId ? await resolveDiscordUserName(discordUserId) : '';
   ws.guildId = guildId;
+  ws.guildName = guildInfo.guildName;
   ws.discordUserId = discordUserId;
+  ws.discordUserName = resolvedUserName;
   await saveStore();
   if (BOT_TOKEN && client.isReady()) {
     await registerSlashCommands().catch(() => {});
@@ -1061,8 +1141,12 @@ app.post('/api/workspace/link', async (req, res) => {
     ok: true,
     workspaceId: wsId,
     guildId: ws.guildId,
+    guildName: ws.guildName,
+    botInGuild: guildInfo.botInGuild,
     discordUserId: ws.discordUserId,
-    message: 'Sunucu və Discord ID yadda saxlandı!',
+    discordUserName: ws.discordUserName,
+    inviteUrl: buildBotInviteUrl(),
+    message: `Sunucu (${ws.guildName}) və Discord ID yadda saxlandı!`,
   });
 });
 
@@ -1108,7 +1192,10 @@ app.post('/api/panel-config', async (req, res) => {
 app.post('/api/scripts', async (req, res) => {
   const { wsId, ws } = getWorkspaceFromReq(req);
   const name = String((req.body && req.body.name) || '').trim();
-  const code = String((req.body && req.body.code) || DEFAULT_SCRIPT_CODE);
+  const rawCode = String((req.body && req.body.code) || DEFAULT_SCRIPT_CODE);
+  const shouldObfuscate = Boolean(req.body && req.body.obfuscate);
+  const obfLevel = String((req.body && req.body.obfuscateLevel) || '2');
+  const code = shouldObfuscate ? obfuscateLuaCode(rawCode, obfLevel) : rawCode;
   if (!name) {
     res.status(400).json({ ok: false, message: 'Skript adı tələb olunur.' });
     return;
@@ -1119,11 +1206,23 @@ app.post('/api/scripts', async (req, res) => {
     name,
     loaderToken: `${id}_${crypto.randomBytes(3).toString('hex')}`,
     code,
+    obfuscated: shouldObfuscate,
     createdAt: new Date().toISOString(),
   };
   ws.scripts.unshift(scriptObj);
   await saveStore();
   res.json({ ok: true, workspaceId: wsId, script: scriptObj, message: 'Skript yaradıldı!' });
+});
+
+app.post('/api/obfuscate', (req, res) => {
+  const code = String((req.body && req.body.code) || '');
+  const level = String((req.body && req.body.level) || '2');
+  if (!code.trim()) {
+    res.status(400).json({ ok: false, message: 'Şifrələmək üçün Lua kodu daxil edin.' });
+    return;
+  }
+  const obfuscated = obfuscateLuaCode(code, level);
+  res.json({ ok: true, level, obfuscated });
 });
 
 app.delete('/api/scripts/:id', async (req, res) => {
@@ -1145,6 +1244,10 @@ app.post('/api/keys', async (req, res) => {
   );
   const duration = String((req.body && req.body.duration) || 'lifetime').trim() || 'lifetime';
   const amount = Math.min(100, Math.max(1, Number((req.body && req.body.amount) || 1)));
+  const creatorId = String((req.body && req.body.createdByDiscordId) || ws.discordUserId || '').trim();
+  const creatorName =
+    String((req.body && req.body.createdByName) || '').trim() ||
+    (creatorId ? await resolveDiscordUserName(creatorId) : 'Dashboard Admin');
   const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
   const durMs = parseDurationToMs(duration);
   const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
@@ -1159,6 +1262,9 @@ app.post('/api/keys', async (req, res) => {
       expiresAt,
       used: false,
       usedByDiscordId: null,
+      usedByName: '',
+      createdByDiscordId: creatorId,
+      createdByName: creatorName,
       createdAt: new Date().toISOString(),
     };
     ws.keys.unshift(item);
@@ -1183,10 +1289,17 @@ app.post('/api/whitelist', async (req, res) => {
     (req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default'
   );
   const duration = String((req.body && req.body.duration) || 'lifetime').trim() || 'lifetime';
+  const hwidLockEnabled = req.body && req.body.hwidLocked !== undefined ? Boolean(req.body.hwidLocked) : true;
+  const addedById = String((req.body && req.body.addedByDiscordId) || ws.discordUserId || '').trim();
   if (!discordUserId) {
     res.status(400).json({ ok: false, message: 'Discord User ID daxil edin.' });
     return;
   }
+  const targetName =
+    String((req.body && req.body.username) || '').trim() || (await resolveDiscordUserName(discordUserId));
+  const addedByName =
+    String((req.body && req.body.addedByName) || '').trim() ||
+    (addedById ? await resolveDiscordUserName(addedById) : 'Dashboard Admin');
   const durMs = parseDurationToMs(duration);
   const expiresAt = durMs ? new Date(Date.now() + durMs).toISOString() : null;
 
@@ -1196,13 +1309,16 @@ app.post('/api/whitelist', async (req, res) => {
   const entry = {
     id: existingIdx >= 0 ? ws.whitelists[existingIdx].id : crypto.randomUUID(),
     discordUserId,
-    username: `User_${discordUserId.slice(-4)}`,
+    username: targetName,
     scriptId,
     key:
       existingIdx >= 0 && ws.whitelists[existingIdx].key
         ? ws.whitelists[existingIdx].key
         : generateRandomKeyCode(),
     hwid: existingIdx >= 0 ? ws.whitelists[existingIdx].hwid || '' : '',
+    hwidLocked: hwidLockEnabled,
+    addedByDiscordId: addedById,
+    addedByName,
     expiresAt,
     createdAt: new Date().toISOString(),
   };
@@ -1215,192 +1331,25 @@ app.post('/api/whitelist', async (req, res) => {
   res.json({ ok: true, workspaceId: wsId, entry, message: 'Whitelist yeniləndi!' });
 });
 
-app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
+app.post('/api/whitelist/:id/toggle-lock', async (req, res) => {
   const { wsId, ws } = getWorkspaceFromReq(req);
   const wl = ws.whitelists.find((w) => w.id === req.params.id);
   if (!wl) {
     res.status(404).json({ ok: false, message: 'Qeyd tapılmadı.' });
     return;
   }
-  wl.hwid = '';
-  ws.stats.hwidResets = ws.stats.hwidResets + 1;
+  wl.hwidLocked = wl.hwidLocked === false ? true : false;
   await saveStore();
-  res.json({ ok: true, workspaceId: wsId, message: 'HWID sıfırlandı!' });
+  res.json({
+    ok: true,
+    workspaceId: wsId,
+    hwidLocked: wl.hwidLocked,
+    message: wl.hwidLocked ? 'HWID kilidi aktivləşdirildi!' : 'HWID kilidi açıldı!',
+  });
 });
 
-app.delete('/api/whitelist/:id', async (req, res) => {
-  const { wsId, ws } = getWorkspaceFromReq(req);
-  ws.whitelists = ws.whitelists.filter((w) => w.id !== req.params.id);
-  await saveStore();
-  res.json({ ok: true, workspaceId: wsId, message: 'Whitelist qeydi silindi.' });
-});
-
-app.post('/api/blacklist', async (req, res) => {
-  const { wsId, ws } = getWorkspaceFromReq(req);
-  const discordUserId = String((req.body && req.body.discordUserId) || '').trim();
-  const scriptId = String((req.body && req.body.scriptId) || '').trim();
-  if (!discordUserId) {
-    res.status(400).json({ ok: false, message: 'Discord User ID tələb olunur.' });
-    return;
-  }
-  const blItem = {
-    id: crypto.randomUUID(),
-    discordUserId,
-    scriptId,
-    createdAt: new Date().toISOString(),
-  };
-  ws.blacklist.unshift(blItem);
-  await saveStore();
-  res.json({ ok: true, workspaceId: wsId, entry: blItem, message: 'Blacklist-ə əlavə olundu!' });
-});
-
-app.delete('/api/blacklist/:id', async (req, res) => {
-  const { wsId, ws } = getWorkspaceFromReq(req);
-  ws.blacklist = ws.blacklist.filter((b) => b.id !== req.params.id);
-  await saveStore();
-  res.json({ ok: true, workspaceId: wsId, message: 'Blacklist-dən silindi.' });
-});
-
-app.post('/api/send-panel', async (req, res) => {
-  try {
-    const { wsId, ws } = getWorkspaceFromReq(req);
-    const channelId = String((req.body && req.body.channelId) || '').trim();
-    const scriptId = String(
-      (req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default'
-    );
-    if (!channelId) {
-      res.status(400).json({ ok: false, message: 'Kanal ID daxil edin.' });
-      return;
-    }
-    if (!BOT_TOKEN) {
-      res.status(400).json({ ok: false, message: 'Bot token təyin edilməyib.' });
-      return;
-    }
-    if (!client.isReady()) {
-      await ensureBotOnline();
-    }
-    const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
-    const { embed, row } = buildPanelEmbedAndButtons(ws, sc);
-    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    const msg = await rest.post(Routes.channelMessages(channelId), {
-      body: { embeds: [embed.toJSON()], components: [row.toJSON()] },
-    });
-    ws.panels.push({
-      id: crypto.randomUUID(),
-      channelId,
-      messageId: msg.id,
-      scriptId: sc ? sc.id : scriptId,
-      createdAt: new Date().toISOString(),
-    });
-    await saveStore();
-    res.json({ ok: true, workspaceId: wsId, messageId: msg.id, message: 'Panel kanala göndərildi!' });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message || 'Panel göndərilə bilmədi.' });
-  }
-});
-
-app.get('/loader/:token', (req, res) => {
-  const tokenParam = decodeURIComponent(req.params.token || '');
-  const wsId = sanitizeWorkspaceId(req.query.ws || store.activeWorkspaceId || 'default');
-  const ws = ensureWorkspace(wsId);
-  const sc =
-    ws.scripts.find((s) => s.loaderToken === tokenParam || s.id === tokenParam) || ws.scripts[0];
-  const verifyUrl = `${buildPublicBaseUrl(req)}/api/verify?ws=${encodeURIComponent(wsId)}&script=${encodeURIComponent(sc ? sc.id : 'default')}`;
-
-  const luaLoader = [
-    'local HttpService = game:GetService("HttpService")',
-    'local Players = game:GetService("Players")',
-    'local RbxAnalyticsService = game:GetService("RbxAnalyticsService")',
-    'local LocalPlayer = Players.LocalPlayer',
-    'local keyVal = tostring(script_key or "")',
-    'local hwidVal = ""',
-    'pcall(function()',
-    '  if type(gethwid) == "function" then hwidVal = tostring(gethwid()) end',
-    'end)',
-    'if hwidVal == "" or hwidVal == "nil" then',
-    '  pcall(function()',
-    '    hwidVal = tostring(RbxAnalyticsService:GetClientId())',
-    '  end)',
-    'end)',
-    'if hwidVal == "" or hwidVal == "nil" then',
-    '  hwidVal = tostring((LocalPlayer and LocalPlayer.UserId) or "unknown")',
-    'end)',
-    'local reqFunc = (syn and syn.request) or (http and http.request) or http_request or request',
-    'local rawBody = ""',
-    'if reqFunc then',
-    '  local ok, resp = pcall(function()',
-    '    return reqFunc({',
-    `      Url = "${verifyUrl}",`,
-    '      Method = "POST",',
-    '      Headers = { ["Content-Type"] = "application/json" },',
-    '      Body = HttpService:JSONEncode({ key = keyVal, hwid = hwidVal, playerId = LocalPlayer and tostring(LocalPlayer.UserId) or "" })',
-    '    })',
-    '  end)',
-    '  if ok and resp and resp.Body then rawBody = tostring(resp.Body) end',
-    'end)',
-    'if rawBody == "" then',
-    `  pcall(function() rawBody = tostring(game:HttpGet("${verifyUrl}&key=" .. HttpService:UrlEncode(keyVal) .. "&hwid=" .. HttpService:UrlEncode(hwidVal))) end)`,
-    'end)',
-    'local parsed = nil',
-    'pcall(function() parsed = HttpService:JSONDecode(rawBody) end)',
-    'if type(parsed) == "table" and parsed.ok == true and type(parsed.code) == "string" then',
-    '  local fn = loadstring(parsed.code)',
-    '  if type(fn) == "function" then fn() end',
-    'else',
-    '  local reason = (type(parsed) == "table" and parsed.message) or "SADO PROTECT: Unauthorized or HWID Mismatch"',
-    '  if LocalPlayer then pcall(function() LocalPlayer:Kick(tostring(reason)) end) end',
-    'end',
-  ].join('\n');
-
-  res.type('text/plain').send(luaLoader);
-});
-
-app.all('/api/verify', async (req, res) => {
-  try {
-    const wsId = sanitizeWorkspaceId(
-      req.query.ws || (req.body && req.body.workspaceId) || store.activeWorkspaceId || 'default'
-    );
-    const ws = ensureWorkspace(wsId);
-    const scriptParam = String(req.query.script || (req.body && req.body.scriptId) || '').trim();
-    const keyInput = String((req.body && req.body.key) || req.query.key || '').trim();
-    const hwidInput = String((req.body && req.body.hwid) || req.query.hwid || '').trim();
-
-    const sc =
-      ws.scripts.find((s) => s.id === scriptParam || s.loaderToken === scriptParam) || ws.scripts[0];
-    const targetScriptId = sc ? sc.id : 'default';
-
-    const wl = ws.whitelists.find(
-      (w) =>
-        w.scriptId === targetScriptId &&
-        (String(w.key || '').trim().toUpperCase() === keyInput.toUpperCase() ||
-          (req.body && req.body.playerId && String(w.discordUserId) === String(req.body.playerId)))
-    );
-
-    if (!wl) {
-      ws.stats.authBlocked = ws.stats.authBlocked + 1;
-      await saveStore();
-      res.status(403).json({ ok: false, message: 'SADO PROTECT: Key və ya Whitelist tapılmadı.' });
-      return;
-    }
-
-    const isBl = ws.blacklist.some(
-      (b) => b.discordUserId === wl.discordUserId && (!b.scriptId || b.scriptId === targetScriptId)
-    );
-    if (isBl) {
-      ws.stats.authBlocked = ws.stats.authBlocked + 1;
-      await saveStore();
-      res.status(403).json({ ok: false, message: 'SADO PROTECT: Siz Blacklist olunmusunuz.' });
-      return;
-    }
-
-    if (isExpired(wl.expiresAt)) {
-      ws.stats.authBlocked = ws.stats.authBlocked + 1;
-      await saveStore();
-      res.status(403).json({ ok: false, message: 'SADO PROTECT: Lisenziya müddəti bitib.' });
-      return;
-    }
-
-    if (hwidInput) {
+app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
+    if (hwidInput && wl.hwidLocked !== false) {
       if (!wl.hwid || String(wl.hwid).trim() === '') {
         wl.hwid = hwidInput;
         await saveStore();
@@ -1425,12 +1374,261 @@ app.all('/api/verify', async (req, res) => {
   }
 });
 
-app.get('/', (_req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: 'SADO PROTECT Bot & Loader API',
-    botReady: client.isReady(),
+app.get('/ui', (req, res) => {
+  const wsParam = sanitizeWorkspaceId(req.query.ws || '');
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SADO PROTECT Control</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #111; color: #eee; margin: 12px; }
+  .box { border: 1px solid #444; padding: 10px; margin-bottom: 12px; background: #1b1b1b; }
+  input, select, textarea, button { margin: 4px 2px; padding: 6px; background: #262626; color: #fff; border: 1px solid #555; }
+  button { cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { border: 1px solid #444; padding: 5px; font-size: 12px; text-align: left; }
+</style>
+</head>
+<body>
+  <h2>SADO PROTECT Control</h2>
+  <div class="box" id="statusBar">Yüklənir...</div>
+
+  <div class="box">
+    <h3>Join Discord & Sunucu Bağlantısı</h3>
+    <a id="joinDiscordBtn" href="#" target="_blank"><button type="button">Join Discord</button></a>
+    <div>
+      <label>Discord Server ID:</label>
+      <input id="guildIdInput" placeholder="Server ID" />
+      <select id="guildSelect"></select>
+      <button type="button" onclick="linkWorkspace()">Sunucunu Bağla</button>
+    </div>
+    <div>
+      <label>Discord User ID:</label>
+      <input id="discordUserIdInput" placeholder="User ID" />
+      <span id="linkedGuildName"></span>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3>Skript & Obfuscation</h3>
+    <input id="scriptNameInput" placeholder="Skript adı" />
+    <select id="obfLevelSelect">
+      <option value="1">Obfuscate Səviyyə 1</option>
+      <option value="2" selected>Obfuscate Səviyyə 2</option>
+      <option value="3">Obfuscate Səviyyə 3</option>
+    </select>
+    <label><input type="checkbox" id="createObfCheckbox" /> Saxlayarkən Obfuscate et</label><br/>
+    <textarea id="scriptCodeInput" rows="5" cols="50" placeholder="Lua kodu..."></textarea><br/>
+    <button type="button" onclick="createScript()">Skript Saxla</button>
+    <button type="button" onclick="runStandaloneObf()">Kodu Obfuscate Et</button><br/>
+    <textarea id="obfResultBox" rows="4" cols="50" placeholder="Obfuscated nəticə..."></textarea>
+    <div id="scriptsList"></div>
+  </div>
+
+  <div class="box">
+    <h3>GenKey</h3>
+    <select id="keyScriptSelect"></select>
+    <input id="keyDurationInput" value="lifetime" placeholder="7d, 30d, lifetime" />
+    <input id="keyAmountInput" type="number" value="1" min="1" max="100" />
+    <button type="button" onclick="generateKeys()">Key Yarat</button>
+    <div id="keysList"></div>
+  </div>
+
+  <div class="box">
+    <h3>Whitelist & Unwhitelist & HWID Kilid / Reset</h3>
+    <input id="wlUserIdInput" placeholder="Discord User ID" />
+    <input id="wlUserNameInput" placeholder="İstifadəçi adı (opsional)" />
+    <select id="wlScriptSelect"></select>
+    <input id="wlDurationInput" value="lifetime" />
+    <label><input type="checkbox" id="wlLockCheckbox" checked /> HWID Kilidli</label>
+    <button type="button" onclick="addWhitelist()">Whitelist Et</button>
+    <div id="wlList"></div>
+  </div>
+
+  <div class="box">
+    <h3>Panel Göndər</h3>
+    <input id="panelChannelIdInput" placeholder="Discord Channel ID" />
+    <select id="panelScriptSelect"></select>
+    <button type="button" onclick="sendPanelToChannel()">Paneli Göndər</button>
+    <div id="msgLog"></div>
+  </div>
+
+<script>
+const storageKey = 'sado_ws_id';
+let wsId = ${wsParam ? JSON.stringify(wsParam) : 'localStorage.getItem(storageKey)'};
+if (!wsId) {
+  wsId = 'ws_' + Math.random().toString(36).slice(2, 10);
+}
+localStorage.setItem(storageKey, wsId);
+
+const api = (url, opts = {}) => {
+  opts.headers = Object.assign({ 'Content-Type': 'application/json', 'x-client-workspace': wsId }, opts.headers || {});
+  return fetch(url, opts).then((r) => r.json());
+};
+
+const showMsg = (txt) => {
+  document.getElementById('msgLog').textContent = txt;
+};
+
+const refreshAll = async () => {
+  const st = await api('/api/status');
+  const data = await api('/api/state');
+  document.getElementById('statusBar').textContent =
+    'Workspace: ' + wsId + ' | Bot: ' + (st.botReady ? 'Online' : 'Offline') +
+    ' | Sunucu: ' + (data.guildName || 'Seçilməyib') + (data.guildId ? ' (' + data.guildId + ')' : '');
+  document.getElementById('joinDiscordBtn').href = data.inviteUrl || '#';
+  document.getElementById('guildIdInput').value = data.guildId || '';
+  document.getElementById('discordUserIdInput').value = data.discordUserId || '';
+  document.getElementById('linkedGuildName').textContent = data.guildName ? 'Bağlı Sunucu: ' + data.guildName : '';
+
+  const gSel = document.getElementById('guildSelect');
+  gSel.innerHTML = '<option value="">-- Botdakı Sunucular --</option>' +
+    (data.guilds || []).map((g) => '<option value="' + g.id + '">' + g.name + ' (' + g.id + ')</option>').join('');
+  gSel.onchange = () => { if (gSel.value) document.getElementById('guildIdInput').value = gSel.value; };
+
+  const scriptOpts = (data.scripts || []).map((s) => '<option value="' + s.id + '">' + s.name + '</option>').join('');
+  document.getElementById('keyScriptSelect').innerHTML = scriptOpts;
+  document.getElementById('wlScriptSelect').innerHTML = scriptOpts;
+  document.getElementById('panelScriptSelect').innerHTML = scriptOpts;
+
+  document.getElementById('scriptsList').innerHTML = '<table><tr><th>Ad</th><th>Loader</th><th>Sil</th></tr>' +
+    (data.scripts || []).map((s) => '<tr><td>' + s.name + '</td><td>loadstring(game:HttpGet("' + location.origin + '/loader/' + s.loaderToken + '?ws=' + wsId + '"))()</td><td><button onclick="deleteScript(\\'' + s.id + '\\')">Sil</button></td></tr>').join('') +
+    '</table>';
+
+  document.getElementById('keysList').innerHTML = '<table><tr><th>Key</th><th>Skript</th><th>Yaradan</th><th>İstifadə edən</th><th>Sil</th></tr>' +
+    (data.keys || []).map((k) => '<tr><td>' + k.key + '</td><td>' + k.scriptName + '</td><td>' + (k.createdByName || '-') + '</td><td>' + (k.usedByName || (k.used ? k.usedByDiscordId : 'İstifadə olunmayıb')) + '</td><td><button onclick="deleteKey(\\'' + encodeURIComponent(k.key) + '\\')">Sil</button></td></tr>').join('') +
+    '</table>';
+
+  document.getElementById('wlList').innerHTML = '<table><tr><th>İstifadəçi</th><th>ID</th><th>Əlavə edən</th><th>HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
+    (data.whitelists || []).map((w) => '<tr><td>' + (w.username || '-') + '</td><td>' + w.discordUserId + '</td><td>' + (w.addedByName || '-') + '</td><td>' + (w.hwid || 'Yoxdur') + '</td><td>' + (w.hwidLocked === false ? 'Açıq' : 'Kilidli') + '</td><td>' +
+      '<button onclick="toggleLock(\\'' + w.id + '\\')">Kilid Aç/Bağla</button>' +
+      '<button onclick="resetHwid(\\'' + w.id + '\\')">Reset HWID</button>' +
+      '<button onclick="removeWl(\\'' + w.id + '\\')">Unwhitelist</button>' +
+      '</td></tr>').join('') +
+    '</table>';
+};
+
+const linkWorkspace = async () => {
+  const res = await api('/api/workspace/link', {
+    method: 'POST',
+    body: JSON.stringify({
+      guildId: document.getElementById('guildIdInput').value,
+      discordUserId: document.getElementById('discordUserIdInput').value,
+    }),
   });
+  showMsg(res.message || 'Yeniləndi');
+  refreshAll();
+};
+
+const createScript = async () => {
+  const res = await api('/api/scripts', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: document.getElementById('scriptNameInput').value,
+      code: document.getElementById('scriptCodeInput').value,
+      obfuscate: document.getElementById('createObfCheckbox').checked,
+      obfuscateLevel: document.getElementById('obfLevelSelect').value,
+    }),
+  });
+  showMsg(res.message || 'Saxlandı');
+  refreshAll();
+};
+
+const runStandaloneObf = async () => {
+  const res = await api('/api/obfuscate', {
+    method: 'POST',
+    body: JSON.stringify({
+      code: document.getElementById('scriptCodeInput').value,
+      level: document.getElementById('obfLevelSelect').value,
+    }),
+  });
+  if (res.obfuscated) document.getElementById('obfResultBox').value = res.obfuscated;
+  showMsg(res.message || 'Obfuscate hazırlandı');
+};
+
+const deleteScript = async (id) => {
+  const res = await api('/api/scripts/' + id, { method: 'DELETE' });
+  showMsg(res.message || 'Silindi');
+  refreshAll();
+};
+
+const generateKeys = async () => {
+  const res = await api('/api/keys', {
+    method: 'POST',
+    body: JSON.stringify({
+      scriptId: document.getElementById('keyScriptSelect').value,
+      duration: document.getElementById('keyDurationInput').value,
+      amount: Number(document.getElementById('keyAmountInput').value || 1),
+      createdByDiscordId: document.getElementById('discordUserIdInput').value,
+    }),
+  });
+  showMsg(res.message || 'Key yaradıldı');
+  refreshAll();
+};
+
+const deleteKey = async (encKey) => {
+  const res = await api('/api/keys/' + encKey, { method: 'DELETE' });
+  showMsg(res.message || 'Key silindi');
+  refreshAll();
+};
+
+const addWhitelist = async () => {
+  const res = await api('/api/whitelist', {
+    method: 'POST',
+    body: JSON.stringify({
+      discordUserId: document.getElementById('wlUserIdInput').value,
+      username: document.getElementById('wlUserNameInput').value,
+      scriptId: document.getElementById('wlScriptSelect').value,
+      duration: document.getElementById('wlDurationInput').value,
+      hwidLocked: document.getElementById('wlLockCheckbox').checked,
+      addedByDiscordId: document.getElementById('discordUserIdInput').value,
+    }),
+  });
+  showMsg(res.message || 'Whitelist yeniləndi');
+  refreshAll();
+};
+
+const toggleLock = async (id) => {
+  const res = await api('/api/whitelist/' + id + '/toggle-lock', { method: 'POST' });
+  showMsg(res.message || 'Kilid yeniləndi');
+  refreshAll();
+};
+
+const resetHwid = async (id) => {
+  const res = await api('/api/whitelist/' + id + '/reset-hwid', { method: 'POST' });
+  showMsg(res.message || 'HWID sıfırlandı');
+  refreshAll();
+};
+
+const removeWl = async (id) => {
+  const res = await api('/api/whitelist/' + id, { method: 'DELETE' });
+  showMsg(res.message || 'Whitelist silindi');
+  refreshAll();
+};
+
+const sendPanelToChannel = async () => {
+  const res = await api('/api/send-panel', {
+    method: 'POST',
+    body: JSON.stringify({
+      channelId: document.getElementById('panelChannelIdInput').value,
+      scriptId: document.getElementById('panelScriptSelect').value,
+    }),
+  });
+  showMsg(res.message || 'Panel göndərildi');
+  refreshAll();
+};
+
+refreshAll();
+</script>
+</body>
+</html>`);
+});
+
+app.get('/', (req, res) => {
+  const wsParam = req.query && req.query.ws ? `?ws=${encodeURIComponent(req.query.ws)}` : '';
+  res.redirect(`/ui${wsParam}`);
 });
 
 app.use((err, _req, res, _next) => {
