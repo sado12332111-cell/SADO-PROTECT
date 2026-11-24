@@ -796,36 +796,37 @@ discordClient.on(Events.MessageCreate, async (message) => {
       if (targetId) {
         const autoKey = generateKeyString('SADO-WL');
         appState.db.whitelist.unshift({
-          id: `wl_${Date.now()}`,
-          discordId: targetId,
-          username: `User_${targetId}`,
-          hwid: '',
-          scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
-          autoKey,
-          note: 'Added via Discord bot',
-          addedAt: new Date().toISOString()
-        });
-        appState.db.keys.unshift({
-          key: autoKey,
-          scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
-          ownerDiscordId: targetId,
-          ownerUsername: `User_${targetId}`,
-          hwid: '',
-          maxDevices: 1,
-          expiresAt: null,
-          active: true,
-          createdBy: 'DiscordWL',
-          createdAt: new Date().toISOString(),
-          lastUsedAt: null,
-      if (dot && statusText) {
-        dot.classList.toggle("online", isOnline);
-        const errSuffix = (!isOnline && snap.botStatus && snap.botStatus.lastError) ? (" (" + snap.botStatus.lastError + ")") : "";
-        statusText.textContent = isOnline ? ("Bot: " + (snap.botStatus.username || "Aktiv")) : ("Bot: Aktivləşdirilir..." + errSuffix);
-      }
-      return;
+        id: `wl_${Date.now()}`,
+        discordId: targetId,
+        username: `User_${targetId}`,
+        hwid: '',
+        scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
+        autoKey,
+        note: 'Added via Discord bot',
+        addedAt: new Date().toISOString()
+      });
+      appState.db.keys.unshift({
+        key: autoKey,
+        scriptId: (appState.db.scripts[0] && appState.db.scripts[0].id) || 'scr_default_01',
+        ownerDiscordId: targetId,
+        ownerUsername: `User_${targetId}`,
+        hwid: '',
+        maxDevices: 1,
+        expiresAt: null,
+        active: true,
+        createdBy: 'DiscordWL',
+        createdAt: new Date().toISOString(),
+        lastUsedAt: null,
+        usageCount: 0
+      });
+      appState.db.stats.keysGenerated = (appState.db.stats.keysGenerated || 0) + 1;
+      saveDatabase();
+      await message.reply({ content: `✅ Whitelist əlavə edildi: \`${targetId}\` | Auto Key: \`${autoKey}\`` });
     }
+    return;
+  }
 
-    if (lower.startsWith('!blacklist ') || lower.startsWith('/blacklist ')) {
+  if (lower.startsWith('!blacklist ') || lower.startsWith('/blacklist ')) {
       const targetId = content.split(/\s+/)[1] || '';
       if (targetId) {
         appState.db.blacklist.unshift({
