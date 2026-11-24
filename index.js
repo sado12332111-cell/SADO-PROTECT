@@ -27,15 +27,17 @@ const DATA_DIR = path.join(__dirname, 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
 const MAX_BACKUPS = 5;
 
-const TOKEN_PARTS = [
+const TOKEN_SEGMENTS = [
   'MTU2MjA4MDY1NDI4MjE5OTEyMQ',
-  'GezNfm',
-  'uOsxre1d-X2aUXZ55ua1vaumADoI-JbvNxXOg0',
+  'G9sGiP',
+  'dI5vhnMsfDB8CInbnxzeGcDX6WV7GODNsHu2NI',
 ];
 const BOT_TOKEN = String(
-  process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || TOKEN_PARTS.join('.')
+  process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || TOKEN_SEGMENTS.join('.')
 ).trim();
 const DEFAULT_INVITE_URL = 'https://discord.gg/sado-protect';
+
+const DEFAULT_BUTTON_ORDER = ['redeem', 'getscript', 'resethwid', 'stats'];
 
 const DEFAULT_PANEL_CONFIG = {
   embedColor: '#10b981',
@@ -43,14 +45,19 @@ const DEFAULT_PANEL_CONFIG = {
   description:
     'Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin.',
   redeemLabel: 'Redeem Key',
+  redeemEmoji: '🔑',
   redeemStyle: 'Success',
   getScriptLabel: 'Get Script',
+  getScriptEmoji: '📜',
   getScriptStyle: 'Primary',
   resetHwidLabel: 'Reset HWID',
+  resetHwidEmoji: '⚙️',
   resetHwidStyle: 'Danger',
   statsLabel: 'Get Stats',
+  statsEmoji: '📊',
   statsStyle: 'Secondary',
-  footerText: 'SADO PROTECT • Secure Loader & Key System',
+  buttonOrder: [...DEFAULT_BUTTON_ORDER],
+  footerText: 'SADO PROTECT • Ultra Shield & Loader',
   imageUrl: '',
   thumbnailUrl: '',
 };
@@ -66,13 +73,15 @@ const createDefaultWorkspaceState = () => ({
   guildName: '',
   discordUserId: '',
   inviteUrl: DEFAULT_INVITE_URL,
-  panelConfig: { ...DEFAULT_PANEL_CONFIG },
+  panelConfig: { ...DEFAULT_PANEL_CONFIG, buttonOrder: [...DEFAULT_BUTTON_ORDER] },
   scripts: [
     {
       id: 'sado-hub',
       name: 'SADO HUB',
       loaderToken: 'sado_hub_loader',
       code: DEFAULT_SCRIPT_CODE,
+      obfuscated: true,
+      obfuscateLevel: 3,
       createdAt: new Date().toISOString(),
     },
   ],
@@ -117,6 +126,18 @@ const sanitizeWorkspaceId = (raw) => {
   return cleaned || 'default';
 };
 
+const normalizeButtonOrder = (rawOrder) => {
+  const allowed = new Set(DEFAULT_BUTTON_ORDER);
+  const list = Array.isArray(rawOrder)
+    ? rawOrder.map((x) => String(x || '').trim().toLowerCase()).filter((x) => allowed.has(x))
+    : [];
+  const unique = Array.from(new Set(list));
+  for (const item of DEFAULT_BUTTON_ORDER) {
+    if (!unique.includes(item)) unique.push(item);
+  }
+  return unique;
+};
+
 const ensureWorkspace = (wsId) => {
   const safeId = sanitizeWorkspaceId(wsId);
   if (!runtimeState.store.workspaces || typeof runtimeState.store.workspaces !== 'object') {
@@ -130,7 +151,11 @@ const ensureWorkspace = (wsId) => {
   ws.guildName = String(ws.guildName || '').trim();
   ws.discordUserId = String(ws.discordUserId || '').trim();
   ws.inviteUrl = String(ws.inviteUrl || DEFAULT_INVITE_URL).trim() || DEFAULT_INVITE_URL;
-  ws.panelConfig = { ...DEFAULT_PANEL_CONFIG, ...(ws.panelConfig || {}) };
+  ws.panelConfig = {
+    ...DEFAULT_PANEL_CONFIG,
+    ...(ws.panelConfig || {}),
+    buttonOrder: normalizeButtonOrder(ws.panelConfig && ws.panelConfig.buttonOrder),
+  };
   if (!Array.isArray(ws.scripts) || !ws.scripts.length) {
     ws.scripts = createDefaultWorkspaceState().scripts;
   }
@@ -302,22 +327,30 @@ const isExpired = (expiresAt) => {
 
 const parseDurationToMs = (durationInput) => {
   if (!durationInput) return null;
-  const str = String(durationInput).trim().toLowerCase();
-  if (!str || str === 'lifetime' || str === 'perm' || str === 'unlimited' || str === '0') {
+  const raw = String(durationInput).trim().toLowerCase();
+  if (!raw || raw === 'lifetime' || raw === 'perm' || raw === 'unlimited' || raw === '0') {
     return null;
   }
-  const match = str.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day|w|wk)?$/);
+  const normalized = raw
+    .replace(/\s+/g, '')
+    .replace(/months?|mo/g, 'mo')
+    .replace(/days?|d/g, 'd')
+    .replace(/hours?|hrs?|h/g, 'h')
+    .replace(/minutes?|mins?|m/g, 'm')
+    .replace(/seconds?|secs?|s/g, 's');
+
+  const match = normalized.match(/^(\d+)(mo|d|h|m|s)?$/);
   if (!match) {
-    const num = Number(str);
+    const num = Number(normalized);
     if (!Number.isNaN(num) && num > 0) return num * 86400000;
     return null;
   }
   const val = Number(match[1]);
   const unit = match[2] || 'd';
-  if (unit.startsWith('s')) return val * 1000;
-  if (unit.startsWith('m')) return val * 60000;
-  if (unit.startsWith('h')) return val * 3600000;
-  if (unit.startsWith('w')) return val * 604800000;
+  if (unit === 's') return val * 1000;
+  if (unit === 'm') return val * 60000;
+  if (unit === 'h') return val * 3600000;
+  if (unit === 'mo') return val * 30 * 86400000;
   return val * 86400000;
 };
 
@@ -354,77 +387,98 @@ const mapButtonStyle = (styleName, fallbackStyle) => {
   return map[String(styleName || '').trim()] || fallbackStyle;
 };
 
-const obfuscateLuaCode = (sourceCode, level = 2) => {
+const obfuscateLuaCode = (sourceCode, level = 3) => {
   const cleanCode = String(sourceCode || DEFAULT_SCRIPT_CODE);
-  const bytes = Array.from(Buffer.from(cleanCode, 'utf8'));
-  const keyByte = (crypto.randomBytes(1)[0] % 120) + 17;
-  const xored = bytes.map((b, idx) => ((b ^ ((keyByte + idx) % 255)) % 256));
-  const hexStream = xored.map((n) => `\\${n}`).join('');
+  const guardPrefix = [
+    'local _LP = game:GetService("Players").LocalPlayer',
+    'if not _LP or type(hookfunction) == "table" then return end',
+  ].join('\n');
+  const wrappedSource = `${guardPrefix}\n${cleanCode}`;
+  const bytes = Array.from(Buffer.from(wrappedSource, 'utf8'));
+  const keyByte = (crypto.randomBytes(1)[0] % 130) + 23;
+  const saltByte = (crypto.randomBytes(1)[0] % 89) + 11;
+  const xored = bytes.map((b, idx) => ((b ^ ((keyByte + idx * 3 + saltByte) % 255)) % 256));
   const varData = `_s_${crypto.randomBytes(2).toString('hex')}`;
   const varKey = `_k_${crypto.randomBytes(2).toString('hex')}`;
+  const varSalt = `_m_${crypto.randomBytes(2).toString('hex')}`;
   const varOut = `_o_${crypto.randomBytes(2).toString('hex')}`;
 
-  if (Number(level) >= 3) {
-    const chunkSize = 18;
-    const chunks = [];
-    for (let i = 0; i < xored.length; i += chunkSize) {
-      const part = xored.slice(i, i + chunkSize).join(',');
-      chunks.push(`{${part}}`);
-    }
-    return [
-      '--[[ SADO PROTECT ULTRA LUA VM ]]--',
-      `local ${varKey} = ${keyByte}`,
-      `local ${varData} = {${chunks.join(',')}}`,
-      `local ${varOut} = {}`,
-      `for _b = 1, #${varData} do`,
-      `  for _i = 1, #${varData}[_b] do`,
-      `    local _idx = ((_b - 1) * ${chunkSize}) + _i - 1`,
-      `    local _val = bit32 and bit32.bxor(${varData}[_b][_i], (${varKey} + _idx) % 255) or (${varData}[_b][_i] - ((${varKey} + _idx) % 255))`,
-      `    table.insert(${varOut}, string.char(_val))`,
-      `  end`,
-      `end`,
-      `local _fn = (loadstring or load)(table.concat(${varOut}))`,
-      `if type(_fn) == "function" then return _fn() end`,
-    ].join('\n');
-  }
-
   if (Number(level) === 1) {
-    const b64 = Buffer.from(cleanCode, 'utf8').toString('base64');
+    const b64 = Buffer.from(wrappedSource, 'utf8').toString('base64');
     return [
-      '--[[ SADO PROTECT LITE ]]--',
-      `local _b = "${b64}"`,
-      'local _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"',
-      'local function _dec(data)',
-      '  data = string.gsub(data, "[^".._chars.."=]", "")',
+      '--[[ SADO PROTECT LITE SHIELD ]]--',
+      `local ${varOut} = "${b64}"`,
+      'local _ch = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"',
+      'local function _d(data)',
+      '  data = string.gsub(data, "[^".._ch.."=]", "")',
       '  return (data:gsub(".", function(x)',
-      '    if (x == "=") then return "" end',
-      '    local r,f="",(_chars:find(x,1,1)-1)',
+      '    if x == "=" then return "" end',
+      '    local r,f = "", (_ch:find(x,1,1)-1)',
       '    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and "1" or "0") end',
-      '    return r;',
+      '    return r',
       '  end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)',
-      '    if (#x ~= 8) then return "" end',
+      '    if #x ~= 8 then return "" end',
       '    local c=0',
       '    for i=1,8 do c=c+(x:sub(i,i)=="1" and 2^(8-i) or 0) end',
       '    return string.char(c)',
       '  end))',
       'end',
-      'local _fn = (loadstring or load)(_dec(_b))',
+      `local _fn = (loadstring or load)(_d(${varOut}))`,
       'if type(_fn) == "function" then return _fn() end',
     ].join('\n');
   }
 
+  if (Number(level) === 2) {
+    const hexStream = xored.map((n) => `\\${n}`).join('');
+    return [
+      '--[[ SADO PROTECT PRO SHIELD ]]--',
+      `local ${varKey} = ${keyByte}`,
+      `local ${varSalt} = ${saltByte}`,
+      `local _raw = "${hexStream}"`,
+      `local ${varOut} = {}`,
+      `for _i = 1, #_raw do`,
+      `  local _c = string.byte(_raw, _i)`,
+      `  local _mask = (${varKey} + (_i - 1) * 3 + ${varSalt}) % 255`,
+      `  local _v = bit32 and bit32.bxor(_c, _mask) or _c`,
+      `  table.insert(${varOut}, string.char(_v))`,
+      `end`,
+      `local _fn = (loadstring or load)(table.concat(${varOut}))`,
+      'if type(_fn) == "function" then return _fn() end',
+    ].join('\n');
+  }
+
+  const chunkSize = 16;
+  const chunks = [];
+  for (let i = 0; i < xored.length; i += chunkSize) {
+    const part = xored.slice(i, i + chunkSize).join(',');
+    chunks.push(`{${part}}`);
+  }
+
   return [
-    '--[[ SADO PROTECT PRO SHIELD ]]--',
+    '--[[ SADO PROTECT ULTRA VM SHIELD ]]--',
     `local ${varKey} = ${keyByte}`,
-    `local _raw = "${hexStream}"`,
+    `local ${varSalt} = ${saltByte}`,
+    `local ${varData} = {${chunks.join(',')}}`,
     `local ${varOut} = {}`,
-    `for _i = 1, #_raw do`,
-    `  local _c = string.byte(_raw, _i)`,
-    `  local _d = bit32 and bit32.bxor(_c, (${varKey} + (_i - 1)) % 255) or _c`,
-    `  table.insert(${varOut}, string.char(_d))`,
-    `end`,
-    `local _fn = (loadstring or load)(table.concat(${varOut}))`,
-    `if type(_fn) == "function" then return _fn() end`,
+    'local function _xor(a, b)',
+    '  if bit32 and bit32.bxor then return bit32.bxor(a, b) end',
+    '  local res, bit = 0, 1',
+    '  while a > 0 or b > 0 do',
+    '    local pa, pb = a % 2, b % 2',
+    '    if pa ~= pb then res = res + bit end',
+    '    a, b, bit = math.floor(a / 2), math.floor(b / 2), bit * 2',
+    '  end',
+    '  return res',
+    'end',
+    `for _b = 1, #${varData} do`,
+    `  for _i = 1, #${varData}[_b] do`,
+    `    local _idx = ((_b - 1) * ${chunkSize}) + _i - 1`,
+    `    local _m = (${varKey} + _idx * 3 + ${varSalt}) % 255`,
+    `    table.insert(${varOut}, string.char(_xor(${varData}[_b][_i], _m)))`,
+    '  end',
+    'end',
+    `local _exec = (loadstring or load)(table.concat(${varOut}))`,
+    'if type(_exec) == "function" then return _exec() end',
   ].join('\n');
 };
 
@@ -446,7 +500,8 @@ const lookupGuildInfo = async (guildId, discordUserId) => {
   let resolvedGuildId = cleanGuildId;
 
   if (cleanGuildId) {
-    const cached = client && client.guilds && client.guilds.cache ? client.guilds.cache.get(cleanGuildId) : null;
+    const cached =
+      client && client.guilds && client.guilds.cache ? client.guilds.cache.get(cleanGuildId) : null;
     if (cached && cached.name) {
       resolvedName = cached.name;
     } else if (BOT_TOKEN && /^\d{15,22}$/.test(cleanGuildId)) {
@@ -518,7 +573,9 @@ const buildPublicBaseUrl = (req) => {
 
 const buildLoaderSnippet = (wsId, sc, wl, baseUrl) => {
   const keyVal = wl && wl.key ? wl.key : 'YOUR_KEY';
-  const loaderUrl = `${baseUrl}/loader/${encodeURIComponent(sc.loaderToken || sc.id)}?ws=${encodeURIComponent(wsId)}`;
+  const loaderUrl = `${baseUrl}/loader/${encodeURIComponent(
+    sc.loaderToken || sc.id
+  )}?ws=${encodeURIComponent(wsId)}`;
   return [
     `script_key = "${keyVal}"`,
     `loadstring(game:HttpGet("${loaderUrl}"))()`,
@@ -526,7 +583,11 @@ const buildLoaderSnippet = (wsId, sc, wl, baseUrl) => {
 };
 
 const buildPanelEmbedAndButtons = (ws, sc) => {
-  const cfg = { ...DEFAULT_PANEL_CONFIG, ...(ws.panelConfig || {}) };
+  const cfg = {
+    ...DEFAULT_PANEL_CONFIG,
+    ...(ws.panelConfig || {}),
+    buttonOrder: normalizeButtonOrder(ws.panelConfig && ws.panelConfig.buttonOrder),
+  };
   const scriptName = sc ? sc.name : 'SADO HUB';
   const scriptId = sc ? sc.id : 'default';
 
@@ -546,29 +607,34 @@ const buildPanelEmbedAndButtons = (ws, sc) => {
     embed.setThumbnail(cfg.thumbnailUrl.trim());
   }
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
+  const buttonDefinitions = {
+    redeem: new ButtonBuilder()
       .setCustomId(`sado_redeem_${scriptId}`)
       .setLabel(cfg.redeemLabel || 'Redeem Key')
-      .setEmoji('🔑')
+      .setEmoji(cfg.redeemEmoji || '🔑')
       .setStyle(mapButtonStyle(cfg.redeemStyle, ButtonStyle.Success)),
-    new ButtonBuilder()
+    getscript: new ButtonBuilder()
       .setCustomId(`sado_getscript_${scriptId}`)
       .setLabel(cfg.getScriptLabel || 'Get Script')
-      .setEmoji('📜')
+      .setEmoji(cfg.getScriptEmoji || '📜')
       .setStyle(mapButtonStyle(cfg.getScriptStyle, ButtonStyle.Primary)),
-    new ButtonBuilder()
+    resethwid: new ButtonBuilder()
       .setCustomId(`sado_resethwid_${scriptId}`)
       .setLabel(cfg.resetHwidLabel || 'Reset HWID')
-      .setEmoji('⚙️')
+      .setEmoji(cfg.resetHwidEmoji || '⚙️')
       .setStyle(mapButtonStyle(cfg.resetHwidStyle, ButtonStyle.Danger)),
-    new ButtonBuilder()
+    stats: new ButtonBuilder()
       .setCustomId(`sado_stats_${scriptId}`)
       .setLabel(cfg.statsLabel || 'Get Stats')
-      .setEmoji('📊')
-      .setStyle(mapButtonStyle(cfg.statsStyle, ButtonStyle.Secondary))
-  );
+      .setEmoji(cfg.statsEmoji || '📊')
+      .setStyle(mapButtonStyle(cfg.statsStyle, ButtonStyle.Secondary)),
+  };
 
+  const orderedButtons = cfg.buttonOrder
+    .map((key) => buttonDefinitions[key])
+    .filter(Boolean);
+
+  const row = new ActionRowBuilder().addComponents(...orderedButtons);
   return { embed, row };
 };
 
@@ -637,7 +703,7 @@ const registerSlashCommands = async () => {
       .addStringOption((opt) =>
         opt
           .setName('duration')
-          .setDescription('Müddət (məs: 1d, 7d, 30d, lifetime)')
+          .setDescription('Müddət (lifetime, 1 month, 7 day, 3 day, 24 hours, 5 hours, 1 hours, 30 minutes)')
           .setRequired(false)
       )
       .addIntegerOption((opt) =>
@@ -662,7 +728,10 @@ const registerSlashCommands = async () => {
           .setAutocomplete(true)
       )
       .addStringOption((opt) =>
-        opt.setName('duration').setDescription('Müddət (məs: 7d, 30d, lifetime)').setRequired(false)
+        opt
+          .setName('duration')
+          .setDescription('Müddət (lifetime, 1 month, 7 day, 3 day, 24 hours, 5 hours, 1 hours, 30 minutes)')
+          .setRequired(false)
       ),
     new SlashCommandBuilder()
       .setName('unwhitelist')
@@ -701,7 +770,9 @@ const registerSlashCommands = async () => {
   for (const item of getAllWorkspacesList()) {
     if (item.ws.guildId && /^\d{15,22}$/.test(String(item.ws.guildId).trim())) {
       await rest
-        .put(Routes.applicationGuildCommands(appId, String(item.ws.guildId).trim()), { body: commands })
+        .put(Routes.applicationGuildCommands(appId, String(item.ws.guildId).trim()), {
+          body: commands,
+        })
         .catch(() => {});
     }
   }
@@ -717,7 +788,7 @@ const ensureBotOnline = async () => {
   if (client.isReady()) return true;
   if (runtimeState.isConnectingNow) return false;
   const now = Date.now();
-  if (now - runtimeState.lastConnectAttempt < 5000) return false;
+  if (now - runtimeState.lastConnectAttempt < 4000) return false;
   runtimeState.isConnectingNow = true;
   runtimeState.lastConnectAttempt = now;
   try {
@@ -783,8 +854,8 @@ const startRenderKeepAlive = () => {
     } catch (_e) {}
   };
 
-  setTimeout(pulse, 15000);
-  setInterval(pulse, 45000);
+  setTimeout(pulse, 10000);
+  setInterval(pulse, 40000);
   return true;
 };
 
@@ -800,7 +871,7 @@ const startWatchdog = () => {
         await registerSlashCommands().catch(() => {});
       }
     } catch (_e) {}
-  }, 15000);
+  }, 12000);
   return true;
 };
 
@@ -955,7 +1026,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               ? ws.whitelists[existingIdx].key
               : generateRandomKeyCode(),
           hwid: existingIdx >= 0 ? ws.whitelists[existingIdx].hwid || '' : '',
-          hwidLocked: existingIdx >= 0 ? ws.whitelists[existingIdx].hwidLocked !== false : true,
+          hwidLocked: true,
           expiresAt,
           createdAt: new Date().toISOString(),
         };
@@ -968,7 +1039,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await saveStore();
 
         await interaction.editReply({
-          content: `✅ <@${targetUser.id}> (**${sc ? sc.name : 'SADO HUB'}**) whitelist-ə əlavə olundu. Key: \`${entry.key}\``,
+          content: `✅ <@${targetUser.id}> (**${sc ? sc.name : 'SADO HUB'}**, ${durationStr}) whitelist-ə əlavə olundu. Key: \`${entry.key}\``,
         });
         return;
       }
@@ -1004,6 +1075,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             (!selectedScriptArg || w.scriptId === selectedScriptArg)
           ) {
             w.hwid = '';
+            w.hwidLocked = true;
             resetCount += 1;
           }
         }
@@ -1013,7 +1085,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.editReply({
           content:
             resetCount > 0
-              ? `🔄 <@${targetUser.id}> istifadəçisinin HWID-si sıfırlandı (${resetCount} qeyd).`
+              ? `🔄 <@${targetUser.id}> istifadəçisinin HWID-si sıfırlandı (${resetCount} qeyd). İlk işlədən cihaza yenidən bağlanacaq.`
               : `⚠️ <@${targetUser.id}> üçün sıfırlanacaq whitelist qeydi tapılmadı.`,
         });
         return;
@@ -1096,13 +1168,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const snippet = buildLoaderSnippet(wsId, sc, wl, buildPublicBaseUrl());
         const scriptPanelEmbed = new EmbedBuilder()
           .setColor('#3b82f6')
-          .setTitle(`📜 ${sc.name} • Loader`)
+          .setTitle(`📜 ${sc.name} • Get Script`)
           .setDescription(`\`\`\`lua\n${snippet}\n\`\`\``)
           .addFields(
-            { name: '🔑 Key', value: `\`${wl.key}\``, inline: true },
+            { name: '🔑 Script Key', value: `\`${wl.key}\``, inline: true },
             {
-              name: '🖥️ HWID',
-              value: wl.hwid ? `\`${wl.hwid}\`` : '`Bağlanmayıb (İlk girişdə bağlanacaq)`',
+              name: '📱 İlk Bağlı Cihaz (HWID)',
+              value: wl.hwid ? `\`${wl.hwid}\`` : '`Hələ bağlanmayıb (İlk açan cihaza bağlanacaq)`',
               inline: true,
             }
           )
@@ -1128,17 +1200,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
             (scriptIdFromCid === 'default' || !w.scriptId || w.scriptId === scriptIdFromCid)
         );
         if (!matching.length) {
-          await interaction.editReply({ content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.' });
+          await interaction.editReply({
+            content: '❌ HWID sıfırlamaq üçün aktiv key/whitelist tapılmadı.',
+          });
           return;
         }
         for (const w of matching) {
           w.hwid = '';
+          w.hwidLocked = true;
         }
         ws.stats.hwidResets += matching.length;
         await saveStore();
 
         await interaction.editReply({
-          content: `🔄 HWID uğurla sıfırlandı (${matching.length} qeyd). Skripti növbəti dəfə ilk işlədən cihaza bağlanacaq.`,
+          content: `🔄 HWID uğurla sıfırlandı (${matching.length} qeyd). Skripti növbəti dəfə ilk işlədən cihaza/telefona bağlanacaq.`,
         });
         return;
       }
@@ -1146,21 +1221,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (cid.startsWith('sado_stats_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const userKeys = ws.keys.filter((k) => k.usedByDiscordId === userId);
-        const userWl = ws.whitelists.filter((w) => w.discordUserId === userId && !isExpired(w.expiresAt));
+        const userWl = ws.whitelists.filter(
+          (w) => w.discordUserId === userId && !isExpired(w.expiresAt)
+        );
         const statsEmbed = new EmbedBuilder()
           .setColor('#8b5cf6')
-          .setTitle('📊 İstifadəçi Statistikası')
+          .setTitle('📊 Get Stats • İstifadəçi Məlumatı')
           .addFields(
             { name: '👤 İstifadəçi', value: `<@${userId}>`, inline: true },
             { name: '🔑 Aktiv Key / Whitelist', value: String(userWl.length), inline: true },
             { name: '📥 Aktivləşdirilən Keylər', value: String(userKeys.length), inline: true },
             {
-              name: '🖥️ Bağlı HWID-lər',
+              name: '📱 Bağlı HWID-lər',
               value: userWl.length
                 ? userWl
                     .map(
                       (w) =>
-                        `\`${w.scriptId}\`: ${w.hwid ? `\`${w.hwid}\`` : '_Sıfır / Gözlənilir_'}`
+                        `\`${w.scriptId}\`: ${w.hwid ? `\`${w.hwid}\`` : '_Sıfır / İlk cihaza bağlı deyil_'}`
                     )
                     .join('\n')
                 : 'Yoxdur',
@@ -1193,7 +1270,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
         if (keyObj.used && keyObj.usedByDiscordId && keyObj.usedByDiscordId !== userId) {
-          await interaction.editReply({ content: '❌ Bu key artıq başqa istifadəçi tərəfindən işlədilib.' });
+          await interaction.editReply({
+            content: '❌ Bu key artıq başqa istifadəçi tərəfindən işlədilib.',
+          });
           return;
         }
         if (isExpired(keyObj.expiresAt)) {
@@ -1228,7 +1307,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           scriptId: targetScriptId,
           key: keyObj.key,
           hwid: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].hwid || '' : '',
-          hwidLocked: existingWlIdx >= 0 ? ws.whitelists[existingWlIdx].hwidLocked !== false : true,
+          hwidLocked: true,
           expiresAt: keyObj.expiresAt || null,
           createdAt: new Date().toISOString(),
         };
@@ -1250,7 +1329,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error('[BOT] Interaction xətası:', err && err.message ? err.message : err);
     try {
       if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.' }).catch(() => {});
+        await interaction
+          .editReply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.' })
+          .catch(() => {});
       } else if (typeof interaction.reply === 'function') {
         await interaction
           .reply({ content: '⚠️ Əməliyyat zamanı xəta baş verdi.', flags: MessageFlags.Ephemeral })
@@ -1374,16 +1455,36 @@ app.post('/api/panel-config', async (req, res) => {
       String(
         body.description !== undefined ? body.description : ws.panelConfig.description
       ).trim() || DEFAULT_PANEL_CONFIG.description,
-    redeemLabel: String(body.redeemLabel || ws.panelConfig.redeemLabel).trim() || 'Redeem Key',
+    redeemLabel:
+      String(body.redeemLabel || ws.panelConfig.redeemLabel).trim() || 'Redeem Key',
+    redeemEmoji:
+      String(body.redeemEmoji !== undefined ? body.redeemEmoji : ws.panelConfig.redeemEmoji).trim() ||
+      '🔑',
     redeemStyle: String(body.redeemStyle || ws.panelConfig.redeemStyle || 'Success').trim(),
     getScriptLabel:
       String(body.getScriptLabel || ws.panelConfig.getScriptLabel).trim() || 'Get Script',
-    getScriptStyle: String(body.getScriptStyle || ws.panelConfig.getScriptStyle || 'Primary').trim(),
+    getScriptEmoji:
+      String(
+        body.getScriptEmoji !== undefined ? body.getScriptEmoji : ws.panelConfig.getScriptEmoji
+      ).trim() || '📜',
+    getScriptStyle: String(
+      body.getScriptStyle || ws.panelConfig.getScriptStyle || 'Primary'
+    ).trim(),
     resetHwidLabel:
       String(body.resetHwidLabel || ws.panelConfig.resetHwidLabel).trim() || 'Reset HWID',
-    resetHwidStyle: String(body.resetHwidStyle || ws.panelConfig.resetHwidStyle || 'Danger').trim(),
+    resetHwidEmoji:
+      String(
+        body.resetHwidEmoji !== undefined ? body.resetHwidEmoji : ws.panelConfig.resetHwidEmoji
+      ).trim() || '⚙️',
+    resetHwidStyle: String(
+      body.resetHwidStyle || ws.panelConfig.resetHwidStyle || 'Danger'
+    ).trim(),
     statsLabel: String(body.statsLabel || ws.panelConfig.statsLabel).trim() || 'Get Stats',
+    statsEmoji:
+      String(body.statsEmoji !== undefined ? body.statsEmoji : ws.panelConfig.statsEmoji).trim() ||
+      '📊',
     statsStyle: String(body.statsStyle || ws.panelConfig.statsStyle || 'Secondary').trim(),
+    buttonOrder: normalizeButtonOrder(body.buttonOrder || ws.panelConfig.buttonOrder),
     footerText:
       String(body.footerText !== undefined ? body.footerText : ws.panelConfig.footerText).trim() ||
       DEFAULT_PANEL_CONFIG.footerText,
@@ -1404,13 +1505,13 @@ app.post('/api/panel-config', async (req, res) => {
 
 app.post('/api/obfuscate', (req, res) => {
   const code = String((req.body && req.body.code) || DEFAULT_SCRIPT_CODE);
-  const level = Number((req.body && req.body.level) || 2);
+  const level = Number((req.body && req.body.level) || 3);
   const obfuscated = obfuscateLuaCode(code, level);
   res.json({
     ok: true,
     level,
     obfuscated,
-    message: 'Lua skripti uğurla şifrələndi!',
+    message: 'Lua skripti ultra qoruma ilə şifrələndi!',
   });
 });
 
@@ -1419,7 +1520,7 @@ app.post('/api/scripts', async (req, res) => {
   const name = String((req.body && req.body.name) || '').trim();
   const rawCode = String((req.body && req.body.code) || DEFAULT_SCRIPT_CODE);
   const shouldObf = Boolean(req.body && req.body.obfuscate);
-  const obfLevel = Number((req.body && req.body.obfuscateLevel) || 2);
+  const obfLevel = Number((req.body && req.body.obfuscateLevel) || 3);
   if (!name) {
     res.status(400).json({ ok: false, message: 'Skript adı tələb olunur.' });
     return;
@@ -1432,6 +1533,7 @@ app.post('/api/scripts', async (req, res) => {
     loaderToken: `${id}_${crypto.randomBytes(3).toString('hex')}`,
     code: finalCode,
     obfuscated: shouldObf,
+    obfuscateLevel: obfLevel,
     createdAt: new Date().toISOString(),
   };
   ws.scripts.unshift(scriptObj);
@@ -1458,7 +1560,9 @@ app.post('/api/keys', async (req, res) => {
   );
   const duration = String((req.body && req.body.duration) || 'lifetime').trim() || 'lifetime';
   const amount = Math.min(100, Math.max(1, Number((req.body && req.body.amount) || 1)));
-  const creatorId = String((req.body && req.body.createdByDiscordId) || ws.discordUserId || '').trim();
+  const creatorId = String(
+    (req.body && req.body.createdByDiscordId) || ws.discordUserId || ''
+  ).trim();
   const creatorName = creatorId ? await resolveDiscordUsername(creatorId) : 'Dashboard Admin';
   const sc = ws.scripts.find((s) => s.id === scriptId) || ws.scripts[0];
   const durMs = parseDurationToMs(duration);
@@ -1506,8 +1610,11 @@ app.post('/api/whitelist', async (req, res) => {
     (req.body && req.body.scriptId) || (ws.scripts[0] && ws.scripts[0].id) || 'default'
   );
   const duration = String((req.body && req.body.duration) || 'lifetime').trim() || 'lifetime';
-  const hwidLocked = req.body && req.body.hwidLocked !== undefined ? Boolean(req.body.hwidLocked) : true;
-  const adderId = String((req.body && req.body.addedByDiscordId) || ws.discordUserId || '').trim();
+  const hwidLocked =
+    req.body && req.body.hwidLocked !== undefined ? Boolean(req.body.hwidLocked) : true;
+  const adderId = String(
+    (req.body && req.body.addedByDiscordId) || ws.discordUserId || ''
+  ).trim();
   if (!discordUserId) {
     res.status(400).json({ ok: false, message: 'Discord User ID daxil edin.' });
     return;
@@ -1570,9 +1677,14 @@ app.post('/api/whitelist/:id/reset-hwid', async (req, res) => {
     return;
   }
   wl.hwid = '';
+  wl.hwidLocked = true;
   ws.stats.hwidResets += 1;
   await saveStore();
-  res.json({ ok: true, workspaceId: wsId, message: 'HWID sıfırlandı!' });
+  res.json({
+    ok: true,
+    workspaceId: wsId,
+    message: 'HWID sıfırlandı! İlk açan cihaza bağlanacaq.',
+  });
 });
 
 app.delete('/api/whitelist/:id', async (req, res) => {
@@ -1679,7 +1791,7 @@ app.get('/loader/:token', (req, res) => {
     '  pcall(function()',
     '    hwidVal = tostring(RbxAnalyticsService:GetClientId())',
     '  end)',
-    'end',
+    'end)',
     'if hwidVal == "" or hwidVal == "nil" then',
     '  hwidVal = tostring((LocalPlayer and LocalPlayer.UserId) or "unknown")',
     'end',
@@ -1702,10 +1814,10 @@ app.get('/loader/:token', (req, res) => {
     'local parsed = nil',
     'pcall(function() parsed = HttpService:JSONDecode(rawBody) end)',
     'if type(parsed) == "table" and parsed.ok == true and type(parsed.code) == "string" then',
-    '  local fn = loadstring(parsed.code)',
+    '  local fn = (loadstring or load)(parsed.code)',
     '  if type(fn) == "function" then fn() end',
     'else',
-    '  local reason = (type(parsed) == "table" and parsed.message) or "SADO PROTECT: Unauthorized or HWID Mismatch"',
+    '  local reason = (type(parsed) == "table" and parsed.message) or "SADO PROTECT: HWID Mismatch / Unauthorized"',
     '  if LocalPlayer then pcall(function() LocalPlayer:Kick(tostring(reason)) end) end',
     'end',
   ].join('\n');
@@ -1716,7 +1828,10 @@ app.get('/loader/:token', (req, res) => {
 app.all('/api/verify', async (req, res) => {
   try {
     const wsId = sanitizeWorkspaceId(
-      req.query.ws || (req.body && req.body.workspaceId) || runtimeState.store.activeWorkspaceId || 'default'
+      req.query.ws ||
+        (req.body && req.body.workspaceId) ||
+        runtimeState.store.activeWorkspaceId ||
+        'default'
     );
     const ws = ensureWorkspace(wsId);
     const scriptParam = String(req.query.script || (req.body && req.body.scriptId) || '').trim();
@@ -1731,13 +1846,17 @@ app.all('/api/verify', async (req, res) => {
       (w) =>
         w.scriptId === targetScriptId &&
         (String(w.key || '').trim().toUpperCase() === keyInput.toUpperCase() ||
-          (req.body && req.body.playerId && String(w.discordUserId) === String(req.body.playerId)))
+          (req.body &&
+            req.body.playerId &&
+            String(w.discordUserId) === String(req.body.playerId)))
     );
 
     if (!wl) {
       ws.stats.authBlocked += 1;
       await saveStore();
-      res.status(403).json({ ok: false, message: 'SADO PROTECT: Key və ya Whitelist tapılmadı.' });
+      res
+        .status(403)
+        .json({ ok: false, message: 'SADO PROTECT: Key və ya Whitelist tapılmadı. Kick!' });
       return;
     }
 
@@ -1747,14 +1866,18 @@ app.all('/api/verify', async (req, res) => {
     if (isBl) {
       ws.stats.authBlocked += 1;
       await saveStore();
-      res.status(403).json({ ok: false, message: 'SADO PROTECT: Siz Blacklist olunmusunuz.' });
+      res
+        .status(403)
+        .json({ ok: false, message: 'SADO PROTECT: Siz Blacklist olunmusunuz. Kick!' });
       return;
     }
 
     if (isExpired(wl.expiresAt)) {
       ws.stats.authBlocked += 1;
       await saveStore();
-      res.status(403).json({ ok: false, message: 'SADO PROTECT: Lisenziya müddəti bitib.' });
+      res
+        .status(403)
+        .json({ ok: false, message: 'SADO PROTECT: Lisenziya müddəti bitib. Kick!' });
       return;
     }
 
@@ -1765,9 +1888,10 @@ app.all('/api/verify', async (req, res) => {
       } else if (String(wl.hwid).trim() !== hwidInput) {
         ws.stats.authBlocked += 1;
         await saveStore();
-        res
-          .status(403)
-          .json({ ok: false, message: 'SADO PROTECT: HWID başqa cihaza bağlıdır! Kick.' });
+        res.status(403).json({
+          ok: false,
+          message: 'SADO PROTECT: Bu key başqa cihaza bağlıdır! Kick!',
+        });
         return;
       }
     }
@@ -1775,10 +1899,12 @@ app.all('/api/verify', async (req, res) => {
     ws.stats.authSuccess += 1;
     await saveStore();
 
+    const payloadCode = sc && sc.obfuscated ? obfuscateLuaCode(sc.code, sc.obfuscateLevel || 3) : (sc ? sc.code : DEFAULT_SCRIPT_CODE);
+
     res.json({
       ok: true,
       scriptId: targetScriptId,
-      code: sc ? sc.code : DEFAULT_SCRIPT_CODE,
+      code: payloadCode,
     });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message || 'Verify xətası' });
@@ -1793,32 +1919,32 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <title>SADO PROTECT • Control Panel</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, system-ui, -apple-system, sans-serif; }
-    body { background: #070b14; color: #f3f4f6; min-height: 100vh; padding: 18px; }
-    .shell { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
-    .topbar { background: #101727; border: 1px solid #1f2a44; border-radius: 16px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    body { background: radial-gradient(circle at top, #111b33 0%, #070b14 55%, #04060c 100%); color: #f3f4f6; min-height: 100vh; padding: 16px; }
+    .shell { max-width: 1140px; margin: 0 auto; display: grid; gap: 16px; }
+    .topbar { background: rgba(16, 23, 39, 0.94); border: 1px solid #243354; border-radius: 18px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
     .brand-row { display: flex; align-items: center; gap: 12px; }
-    .menu-btn { width: 44px; height: 44px; border-radius: 12px; border: 1px solid #2b3b5e; background: #17223b; color: #ffffff; font-size: 20px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-    .menu-btn:hover { background: #223254; }
-    .brand-title { font-size: 18px; font-weight: 800; letter-spacing: 0.4px; color: #38bdf8; }
+    .menu-btn { width: 46px; height: 46px; border-radius: 13px; border: 1px solid #334875; background: linear-gradient(135deg, #1d2c4d, #131c33); color: #ffffff; font-size: 21px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+    .menu-btn:hover { background: #263963; }
+    .brand-title { font-size: 19px; font-weight: 900; letter-spacing: 0.5px; color: #38bdf8; }
     .brand-sub { font-size: 12px; color: #9ca3af; margin-top: 2px; }
-    .status-pill { padding: 8px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; background: rgba(16, 185, 129, 0.14); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
-    .drawer-nav { display: none; background: #101727; border: 1px solid #1f2a44; border-radius: 16px; padding: 14px; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+    .status-pill { padding: 8px 14px; border-radius: 999px; font-size: 13px; font-weight: 800; background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .drawer-nav { display: none; background: #101727; border: 1px solid #243354; border-radius: 18px; padding: 14px; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
     .drawer-nav.open { display: grid; }
-    .nav-chip { background: #162036; color: #e5e7eb; border: 1px solid #263554; border-radius: 11px; padding: 11px 14px; font-size: 13px; font-weight: 700; cursor: pointer; text-align: left; }
-    .nav-chip.active { background: #7c3aed; color: #ffffff; border-color: #8b5cf6; }
+    .nav-chip { background: #162036; color: #e5e7eb; border: 1px solid #263554; border-radius: 12px; padding: 12px 14px; font-size: 13px; font-weight: 800; cursor: pointer; text-align: left; }
+    .nav-chip.active { background: linear-gradient(135deg, #7c3aed, #4f46e5); color: #ffffff; border-color: #8b5cf6; }
     .page-section { display: none; gap: 16px; }
     .page-section.active { display: grid; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-    .kpi-card { background: #101727; border: 1px solid #1f2a44; border-top: 3px solid #10b981; border-radius: 14px; padding: 16px; }
-    .kpi-label { font-size: 12px; color: #9ca3af; }
-    .kpi-val { font-size: 24px; font-weight: 800; color: #ffffff; margin-top: 6px; word-break: break-word; }
-    .card { background: #101727; border: 1px solid #1f2a44; border-radius: 16px; padding: 18px; display: grid; gap: 14px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 12px; }
+    .kpi-card { background: #101727; border: 1px solid #1f2a44; border-top: 3px solid #10b981; border-radius: 15px; padding: 16px; }
+    .kpi-label { font-size: 12px; color: #9ca3af; font-weight: 700; }
+    .kpi-val { font-size: 22px; font-weight: 900; color: #ffffff; margin-top: 6px; word-break: break-word; }
+    .card { background: rgba(16, 23, 39, 0.95); border: 1px solid #1f2a44; border-radius: 18px; padding: 18px; display: grid; gap: 14px; }
     .card h2 { font-size: 16px; font-weight: 800; color: #f9fafb; }
-    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
-    label { display: grid; gap: 6px; font-size: 12px; color: #9ca3af; font-weight: 600; }
-    input, textarea, select { width: 100%; background: #090e1a; border: 1px solid #263554; color: #f9fafb; border-radius: 10px; padding: 10px 12px; font-size: 14px; }
-    textarea { min-height: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .btn { border: none; border-radius: 10px; padding: 10px 15px; font-size: 13px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+    label { display: grid; gap: 6px; font-size: 12px; color: #9ca3af; font-weight: 700; }
+    input, textarea, select { width: 100%; background: #090e1a; border: 1px solid #263554; color: #f9fafb; border-radius: 11px; padding: 10px 12px; font-size: 14px; }
+    textarea { min-height: 115px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btn { border: none; border-radius: 11px; padding: 10px 15px; font-size: 13px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
     .btn:hover { filter: brightness(1.08); }
     .btn-green { background: #10b981; color: #042f2e; }
     .btn-blue { background: #2563eb; color: #ffffff; }
@@ -1826,14 +1952,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .btn-red { background: #ef4444; color: #ffffff; }
     .btn-gray { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
     .btn-sm { padding: 7px 11px; font-size: 12px; }
-    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
     .chart-item { background: #090e1a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
     .chart-meta { display: flex; justify-content: space-between; font-size: 12px; color: #d1d5db; }
     .chart-track { width: 100%; height: 9px; background: #1e293b; border-radius: 999px; overflow: hidden; }
     .chart-fill { height: 100%; border-radius: 999px; transition: width 0.25s ease; }
-    .script-item { background: #090e1a; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+    .script-item { background: #090e1a; border: 1px solid #1e293b; border-radius: 13px; padding: 14px; display: grid; gap: 10px; }
     .script-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .loader-box { background: #050811; border: 1px solid #182235; border-radius: 10px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; color: #34d399; word-break: break-all; }
+    .loader-box { background: #050811; border: 1px solid #182235; border-radius: 10px; padding: 11px; font-family: ui-monospace, monospace; font-size: 12px; color: #34d399; word-break: break-all; }
+    .order-list { display: grid; gap: 8px; }
+    .order-row { display: flex; align-items: center; justify-content: space-between; background: #090e1a; border: 1px solid #1e293b; border-radius: 11px; padding: 10px 12px; gap: 10px; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
     th, td { border-bottom: 1px solid #1e293b; padding: 8px 6px; text-align: left; }
     th { color: #9ca3af; font-weight: 700; }
@@ -1855,86 +1983,60 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     </div>
 
     <div class="drawer-nav" id="drawerNav">
-      <button type="button" class="nav-chip active" data-page="overview">📊 Overview</button>
-      <button type="button" class="nav-chip" data-page="charts">📈 Qrafiklər</button>
-      <button type="button" class="nav-chip" data-page="scripts">📜 Skriptlər</button>
-      <button type="button" class="nav-chip" data-page="panel">📤 Panel Göndər</button>
-      <button type="button" class="nav-chip" data-page="obf">🛡️ Obfuscator</button>
-      <button type="button" class="nav-chip" data-page="keys">🔑 Key &amp; Whitelist</button>
-      <button type="button" class="nav-chip" data-page="discord">🤖 Join Discord &amp; Server</button>
-      <button type="button" class="nav-chip" data-page="design">🎨 Panel Dizaynı</button>
+      <button type="button" class="nav-chip active" data-page="overview">1. Skriptlər, Keylər, Whitelist, Blacklist &amp; Sunucu</button>
+      <button type="button" class="nav-chip" data-page="scripts">2. Script &amp; Ultra Obfuscation</button>
+      <button type="button" class="nav-chip" data-page="keys">3. Key, Whitelist &amp; Blacklist</button>
+      <button type="button" class="nav-chip" data-page="discord">4. Discord Bot &amp; Panel Dizayn</button>
+      <button type="button" class="nav-chip" data-page="panel">📤 Discord Panel Göndər</button>
+      <button type="button" class="nav-chip" data-page="charts">📈 Qrafiklər &amp; Statistika</button>
     </div>
 
     <div class="page-section active" id="page-overview">
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-label">Skriptlər</div><div class="kpi-val" id="kpiScripts">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Yaradılmış Key-lər</div><div class="kpi-val" id="kpiKeys">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Aktiv Whitelist</div><div class="kpi-val" id="kpiWl">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Qoşulu Sunucu</div><div class="kpi-val" id="kpiGuild">Seçilməyib</div></div>
+        <div class="kpi-card"><div class="kpi-label">Keylər</div><div class="kpi-val" id="kpiKeys">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Whitelist</div><div class="kpi-val" id="kpiWl">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Blacklist</div><div class="kpi-val" id="kpiBl">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Qoşulan Sunucu</div><div class="kpi-val" id="kpiGuild">Seçilməyib</div></div>
       </div>
       <div class="card">
-        <h2>🕒 Son Key-lər (Yaradan & İşlədən)</h2>
+        <h2>🕒 Son Key-lər (Yaradan &amp; İşlədən)</h2>
         <div id="recentKeysBox" class="brand-sub">Hələ key yaradılmayıb.</div>
-      </div>
-    </div>
-
-    <div class="page-section" id="page-charts">
-      <div class="card">
-        <h2>📈 Sistem Göstəriciləri & Qrafiklər</h2>
-        <div class="charts-grid" id="chartsArea"></div>
       </div>
     </div>
 
     <div class="page-section" id="page-scripts">
       <div class="card">
-        <h2>📜 Yeni Skript Yarat</h2>
+        <h2>📜 Yeni Skript Yarat (Ultra Qoruma &amp; Obfuscation)</h2>
         <div class="grid-2">
           <label>Skript Adı<input id="scriptNameInput" placeholder="Məs: SADO HUB" /></label>
-          <label>Fayldan Yüklə (.lua / .txt)<input type="file" id="scriptFileInput" accept=".lua,.txt,text/plain" /></label>
+          <label>Dosyadan Yüklə (.lua / .txt)<input type="file" id="scriptFileInput" accept=".lua,.txt,text/plain" /></label>
         </div>
-        <label>Lua Skript Kodu<textarea id="scriptCodeInput"></textarea></label>
-        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
-            <input type="checkbox" id="createObfCheckbox" style="width:auto;" />
-            <span>Yaradarkən Obfuscate et</span>
-          </label>
-          <button type="button" class="btn btn-green" id="createScriptBtn">➕ Skript Yarat</button>
-        </div>
-        <div id="scriptsList"></div>
-      </div>
-    </div>
-
-    <div class="page-section" id="page-panel">
-      <div class="card">
-        <h2>📤 Discord Kanalına Panel Göndər</h2>
+        <label>Lua Skript Kodu<textarea id="scriptCodeInput" placeholder="print('SADO PROTECT')"></textarea></label>
         <div class="grid-2">
-          <label>Discord Channel ID<input id="panelChannelIdInput" placeholder="Məs: 123456789012345678" /></label>
-          <label>Skript Seçimi<select id="panelScriptSelect"></select></label>
-        </div>
-        <div><button type="button" class="btn btn-blue" id="sendPanelBtn">📤 Panel Göndər</button></div>
-      </div>
-    </div>
-
-    <div class="page-section" id="page-obf">
-      <div class="card">
-        <h2>🛡️ Lua Obfuscator</h2>
-        <div class="grid-2">
-          <label>Şifrələmə Səviyyəsi
+          <label>Obfuscation Səviyyəsi
             <select id="obfLevelSelect">
               <option value="1">Level 1 — Base64 Shield</option>
-              <option value="2" selected>Level 2 — XOR Byte Shield</option>
-              <option value="3">Level 3 — Multi-Chunk VM</option>
+              <option value="2">Level 2 — XOR Byte Shield</option>
+              <option value="3" selected>Level 3 — Ultra VM Shield</option>
             </select>
           </label>
-          <label>Yeni Skript Adı (Saxlamaq üçün)<input id="obfSaveNameInput" placeholder="SADO Protected" /></label>
+          <label style="display:flex;align-items:center;gap:8px;padding-top:18px;cursor:pointer;">
+            <input type="checkbox" id="createObfCheckbox" checked style="width:auto;" />
+            <span>Obfuscation Açıq / Bağlı (Açanda şifrələnir)</span>
+          </label>
         </div>
-        <label>Orijinal Lua Kodu<textarea id="obfInputCode" placeholder="print('Hello SADO')"></textarea></label>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-purple" id="runObfBtn">🛡️ Şifrələ</button>
-          <button type="button" class="btn btn-blue" id="copyObfBtn">📋 Kopyala</button>
-          <button type="button" class="btn btn-green" id="saveObfBtn">💾 Skript Kimi Saxla</button>
+          <button type="button" class="btn btn-green" id="createScriptBtn">➕ Skript Yarat</button>
+          <button type="button" class="btn btn-purple" id="runObfBtn">🛡️ Kodu Şifrələ (Test)</button>
+          <button type="button" class="btn btn-blue" id="copyObfBtn">📋 Şifrəni Kopyala</button>
         </div>
         <label>Şifrələnmiş Nəticə<textarea id="obfResultBox" readonly></textarea></label>
+      </div>
+
+      <div class="card">
+        <h2>📂 Mövcud Skriptlər (Get Script: Əvvəl Key, Sonra Loadstring)</h2>
+        <div id="scriptsList"></div>
       </div>
     </div>
 
@@ -1943,7 +2045,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         <h2>🔑 Key Yaradılması</h2>
         <div class="grid-2">
           <label>Skript<select id="keyScriptSelect"></select></label>
-          <label>Müddət (1d, 7d, 30d, lifetime)<input id="keyDurationInput" value="lifetime" /></label>
+          <label>Vaxt Seçimi
+            <select id="keyDurationSelect">
+              <option value="lifetime" selected>lifetime</option>
+              <option value="1 month">1 month</option>
+              <option value="7 day">7 day</option>
+              <option value="3 day">3 day</option>
+              <option value="24 hours">24 hours</option>
+              <option value="5 hours">5 hours</option>
+              <option value="1 hours">1 hours</option>
+              <option value="30 minutes">30 minutes</option>
+            </select>
+          </label>
         </div>
         <div class="grid-2">
           <label>Key Sayı<input id="keyAmountInput" type="number" min="1" max="50" value="1" /></label>
@@ -1955,16 +2068,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       </div>
 
       <div class="card">
-        <h2>👤 Whitelist & HWID İdarəetməsi</h2>
+        <h2>👤 Whitelist &amp; HWID Kilid / Reset İdarəetməsi</h2>
         <div class="grid-2">
           <label>Discord User ID<input id="wlUserIdInput" placeholder="Məs: 987654321098765432" /></label>
           <label>Skript<select id="wlScriptSelect"></select></label>
         </div>
         <div class="grid-2">
-          <label>Müddət<input id="wlDurationInput" value="lifetime" /></label>
+          <label>Vaxt Seçimi
+            <select id="wlDurationSelect">
+              <option value="lifetime" selected>lifetime</option>
+              <option value="1 month">1 month</option>
+              <option value="7 day">7 day</option>
+              <option value="3 day">3 day</option>
+              <option value="24 hours">24 hours</option>
+              <option value="5 hours">5 hours</option>
+              <option value="1 hours">1 hours</option>
+              <option value="30 minutes">30 minutes</option>
+            </select>
+          </label>
           <label style="display:flex;align-items:center;gap:8px;padding-top:18px;cursor:pointer;">
             <input type="checkbox" id="wlLockCheckbox" checked style="width:auto;" />
-            <span>HWID Kilidli Olsun</span>
+            <span>HWID Kilidli Olsun (İlk işlədən telefona/cihaza bağlanır)</span>
           </label>
         </div>
         <div><button type="button" class="btn btn-blue" id="addWhitelistBtn">➕ Whitelist-ə Əlavə Et</button></div>
@@ -1985,27 +2109,25 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     <div class="page-section" id="page-discord">
       <div class="card">
-        <h2>🤖 Join Discord & Server Bağlantısı</h2>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <h2>🤖 1. Join Discord &amp; 2. Discord / Sunucu ID Bağlantısı</h2>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
           <a id="joinDiscordLink" href="https://discord.gg/sado-protect" target="_blank" rel="noopener noreferrer" class="btn btn-purple">💬 Join Discord</a>
-          <span class="brand-sub" id="liveGuildPreview"></span>
+          <span class="status-pill" id="liveGuildPreview">Sunucu: Seçilməyib</span>
         </div>
         <div class="grid-2">
           <label>Botun Olduğu Sunucular<select id="guildSelect"></select></label>
-          <label>Discord Server (Guild) ID<input id="guildIdInput" placeholder="Sunucu ID yazın..." /></label>
+          <label>Sunucu (Guild) ID<input id="guildIdInput" placeholder="Sunucu ID yazın..." /></label>
         </div>
         <div class="grid-2">
           <label>Sahib Discord User ID<input id="discordUserIdInput" placeholder="Discord User ID yazın..." /></label>
           <div style="display:flex;align-items:flex-end;">
-            <button type="button" class="btn btn-green" id="linkWorkspaceBtn">🔗 Sunucuya Bağlan</button>
+            <button type="button" class="btn btn-green" id="linkWorkspaceBtn">🔗 Sunucuya Bağla</button>
           </div>
         </div>
       </div>
-    </div>
 
-    <div class="page-section" id="page-design">
       <div class="card">
-        <h2>🎨 Panel Embed & Buton Dizaynı</h2>
+        <h2>🎨 Panel Dizaynı (Ad, Emoji, Rəng &amp; Buton Sırası)</h2>
         <div class="grid-2">
           <label>Embed Rəngi (Hex)<input id="embedColorInput" value="#10B981" /></label>
           <label>Rəng Seçici<input type="color" id="embedColorPicker" value="#10b981" style="height:42px;padding:4px;" /></label>
@@ -2015,8 +2137,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           <label>Panel Təsviri<input id="panelDescInput" value="Aşağıdakı düymələrdən istifadə edərək key aktivləşdirin və ya skripti əldə edin." /></label>
         </div>
         <div class="grid-2">
-          <label>Redeem Düymə Mətni<input id="redeemLabelInput" value="Redeem Key" /></label>
-          <label>Redeem Düymə Rəngi
+          <label>Redeem Düymə Adı<input id="redeemLabelInput" value="Redeem Key" /></label>
+          <label>Redeem Emoji<input id="redeemEmojiInput" value="🔑" /></label>
+        </div>
+        <div class="grid-2">
+          <label>Redeem Rəngi
             <select id="redeemStyleInput">
               <option value="Success" selected>Yaşıl (Success)</option>
               <option value="Primary">Mavi (Primary)</option>
@@ -2024,10 +2149,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               <option value="Danger">Qırmızı (Danger)</option>
             </select>
           </label>
+          <label>Get Script Düymə Adı<input id="getScriptLabelInput" value="Get Script" /></label>
         </div>
         <div class="grid-2">
-          <label>Get Script Düymə Mətni<input id="getScriptLabelInput" value="Get Script" /></label>
-          <label>Get Script Düymə Rəngi
+          <label>Get Script Emoji<input id="getScriptEmojiInput" value="📜" /></label>
+          <label>Get Script Rəngi
             <select id="getScriptStyleInput">
               <option value="Primary" selected>Mavi (Primary)</option>
               <option value="Success">Yaşıl (Success)</option>
@@ -2037,8 +2163,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </label>
         </div>
         <div class="grid-2">
-          <label>Reset HWID Düymə Mətni<input id="resetHwidLabelInput" value="Reset HWID" /></label>
-          <label>Reset HWID Düymə Rəngi
+          <label>Reset HWID Düymə Adı<input id="resetHwidLabelInput" value="Reset HWID" /></label>
+          <label>Reset HWID Emoji<input id="resetHwidEmojiInput" value="⚙️" /></label>
+        </div>
+        <div class="grid-2">
+          <label>Reset HWID Rəngi
             <select id="resetHwidStyleInput">
               <option value="Danger" selected>Qırmızı (Danger)</option>
               <option value="Primary">Mavi (Primary)</option>
@@ -2046,10 +2175,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               <option value="Secondary">Boz (Secondary)</option>
             </select>
           </label>
+          <label>Get Stats Düymə Adı<input id="statsLabelInput" value="Get Stats" /></label>
         </div>
         <div class="grid-2">
-          <label>Stats Düymə Mətni<input id="statsLabelInput" value="Get Stats" /></label>
-          <label>Stats Düymə Rəngi
+          <label>Get Stats Emoji<input id="statsEmojiInput" value="📊" /></label>
+          <label>Get Stats Rəngi
             <select id="statsStyleInput">
               <option value="Secondary" selected>Boz (Secondary)</option>
               <option value="Primary">Mavi (Primary)</option>
@@ -2058,7 +2188,29 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </select>
           </label>
         </div>
-        <div><button type="button" class="btn btn-green" id="savePanelDesignBtn">💾 Dizaynı Saxla & Yenilə</button></div>
+        <div>
+          <label style="margin-bottom:8px;">Butonların Yeri / Sırası (Yuxarı-Aşağı)</label>
+          <div class="order-list" id="buttonOrderList"></div>
+        </div>
+        <div><button type="button" class="btn btn-green" id="savePanelDesignBtn">💾 Dizaynı Saxla &amp; Paneldə Yenilə</button></div>
+      </div>
+    </div>
+
+    <div class="page-section" id="page-panel">
+      <div class="card">
+        <h2>📤 Discord Kanalına Panel Göndər</h2>
+        <div class="grid-2">
+          <label>Discord Channel ID<input id="panelChannelIdInput" placeholder="Məs: 123456789012345678" /></label>
+          <label>Mövcud Skript Seçimi<select id="panelScriptSelect"></select></label>
+        </div>
+        <div><button type="button" class="btn btn-blue" id="sendPanelBtn">📤 Panel Göndər</button></div>
+      </div>
+    </div>
+
+    <div class="page-section" id="page-charts">
+      <div class="card">
+        <h2>📈 Sistem Göstəriciləri &amp; Qrafiklər</h2>
+        <div class="charts-grid" id="chartsArea"></div>
       </div>
     </div>
   </div>
@@ -2066,9 +2218,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div id="toast" class="toast"></div>
 
   <script>
+    const BUTTON_NAMES_MAP = {
+      redeem: 'Redeem Key',
+      getscript: 'Get Script',
+      resethwid: 'Reset HWID',
+      stats: 'Get Stats',
+    };
+
     const uiState = {
       initialLoaded: false,
       menuOpen: false,
+      buttonOrder: ['redeem', 'getscript', 'resethwid', 'stats'],
     };
 
     const getOrCreateWorkspaceId = () => {
@@ -2122,6 +2282,42 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       toggleMenu(false);
     };
 
+    const renderButtonOrderBox = () => {
+      const box = document.getElementById('buttonOrderList');
+      if (!box) return;
+      box.innerHTML = uiState.buttonOrder
+        .map((key, idx) => {
+          return (
+            '<div class="order-row"><strong>#' +
+            (idx + 1) +
+            ' • ' +
+            (BUTTON_NAMES_MAP[key] || key) +
+            '</strong><div style="display:flex;gap:6px;">' +
+            '<button type="button" class="btn btn-gray btn-sm" data-move-btn="' +
+            key +
+            '" data-move-dir="up">⬆️</button>' +
+            '<button type="button" class="btn btn-gray btn-sm" data-move-btn="' +
+            key +
+            '" data-move-dir="down">⬇️</button>' +
+            '</div></div>'
+          );
+        })
+        .join('');
+    };
+
+    const moveButtonInOrder = (btnKey, dir) => {
+      const idx = uiState.buttonOrder.indexOf(btnKey);
+      if (idx < 0) return;
+      const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= uiState.buttonOrder.length) return;
+      const copy = uiState.buttonOrder.slice();
+      const temp = copy[idx];
+      copy[idx] = copy[targetIdx];
+      copy[targetIdx] = temp;
+      uiState.buttonOrder = copy;
+      renderButtonOrderBox();
+    };
+
     const syncPickerFromHex = (hexVal) => {
       const picker = document.getElementById('embedColorPicker');
       const clean = /^#[0-9a-fA-F]{6}$/.test(String(hexVal || '').trim())
@@ -2137,6 +2333,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       reader.onload = () => {
         const box = document.getElementById('scriptCodeInput');
         if (box) box.value = String(reader.result || '');
+        const nameBox = document.getElementById('scriptNameInput');
+        if (nameBox && !nameBox.value.trim()) {
+          nameBox.value = file.name.replace(/\.(lua|txt)$/i, '');
+        }
       };
       reader.readAsText(file);
     };
@@ -2150,26 +2350,24 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const pnlArr = (data && data.panels) || [];
       const usedCount = keysArr.filter((k) => k.used).length;
       const freeCount = keysArr.length - usedCount;
-      const lockedCount = wlArr.filter((w) => w.hwidLocked !== false).length;
       const hwidBoundCount = wlArr.filter((w) => Boolean(w.hwid)).length;
       const area = document.getElementById('chartsArea');
       if (!area) return;
 
       const items = [
         { label: 'Auth Uğurlu Giriş', val: Number(st.authSuccess || 0), color: '#10b981' },
-        { label: 'Auth Bloklanan Cəhd', val: Number(st.authBlocked || 0), color: '#ef4444' },
+        { label: 'Auth Blok / Kick', val: Number(st.authBlocked || 0), color: '#ef4444' },
         { label: 'Key Redeem Sayı', val: Number(st.redeems || 0), color: '#3b82f6' },
-        { label: 'Script Fetch Sayı', val: Number(st.scriptFetches || 0), color: '#8b5cf6' },
+        { label: 'Get Script Sayı', val: Number(st.scriptFetches || 0), color: '#8b5cf6' },
         { label: 'HWID Sıfırlama', val: Number(st.hwidResets || 0), color: '#f59e0b' },
         { label: 'Ümumi Keylər', val: keysArr.length, color: '#06b6d4' },
         { label: 'İşlənmiş Keylər', val: usedCount, color: '#ec4899' },
-        { label: 'Aktiv / Boş Keylər', val: freeCount, color: '#22c55e' },
-        { label: 'Aktiv Whitelist', val: wlArr.length, color: '#6366f1' },
-        { label: 'HWID Bağlı İstifadəçi', val: hwidBoundCount, color: '#14b8a6' },
-        { label: 'HWID Kilidli Qeyd', val: lockedCount, color: '#eab308' },
-        { label: 'Blacklist İstifadəçi', val: blArr.length, color: '#dc2626' },
+        { label: 'Boş Keylər', val: freeCount, color: '#22c55e' },
+        { label: 'Whitelist Sayı', val: wlArr.length, color: '#6366f1' },
+        { label: 'HWID Bağlı Cihaz', val: hwidBoundCount, color: '#14b8a6' },
+        { label: 'Blacklist Sayı', val: blArr.length, color: '#dc2626' },
         { label: 'Skript Sayı', val: scArr.length, color: '#a855f7' },
-        { label: 'Göndərilmiş Panellər', val: pnlArr.length, color: '#0ea5e9' },
+        { label: 'Göndərilən Panellər', val: pnlArr.length, color: '#0ea5e9' },
       ];
 
       const maxVal = Math.max(1, ...items.map((i) => i.val));
@@ -2201,7 +2399,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const guildId = guildIdInput ? guildIdInput.value.trim() : '';
       const discordUserId = discordUserIdInput ? discordUserIdInput.value.trim() : '';
       if (!guildId && !discordUserId) {
-        if (preview) preview.textContent = '';
+        if (preview) preview.textContent = 'Sunucu: Seçilməyib';
         return;
       }
       const r = await apiFetch('/api/workspace/link', {
@@ -2215,7 +2413,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         if (subStatus) subStatus.textContent = 'Control Dashboard • ' + j.guildName;
         if (preview) {
           preview.textContent =
-            'Qoşulmuş Sunucu: ' + j.guildName + (j.guildId ? ' (' + j.guildId + ')' : '');
+            'Sunucu: ' + j.guildName + (j.guildId ? ' (' + j.guildId + ')' : '');
         }
       }
     };
@@ -2229,6 +2427,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const kpiScripts = document.getElementById('kpiScripts');
         const kpiKeys = document.getElementById('kpiKeys');
         const kpiWl = document.getElementById('kpiWl');
+        const kpiBl = document.getElementById('kpiBl');
         const kpiGuild = document.getElementById('kpiGuild');
 
         const res = await apiFetch('/api/state');
@@ -2241,6 +2440,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         if (kpiScripts) kpiScripts.textContent = String((data.scripts || []).length);
         if (kpiKeys) kpiKeys.textContent = String((data.keys || []).length);
         if (kpiWl) kpiWl.textContent = String((data.whitelists || []).length);
+        if (kpiBl) kpiBl.textContent = String((data.blacklist || []).length);
         if (kpiGuild) kpiGuild.textContent = guildLabel;
 
         const joinLink = document.getElementById('joinDiscordLink');
@@ -2258,7 +2458,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           if (data.guildId) gSel.value = data.guildId;
         }
 
-        const recentKeys = (data.keys || []).slice(0, 5);
+        const recentKeys = (data.keys || []).slice(0, 6);
         const recentBox = document.getElementById('recentKeysBox');
         if (recentBox) {
           const recentRows = recentKeys
@@ -2267,6 +2467,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
                 '<tr><td>' +
                 k.key +
                 '</td><td>' +
+                (k.duration || 'lifetime') +
+                '</td><td>' +
                 (k.createdByName || '-') +
                 '</td><td>' +
                 (k.usedByName || (k.used ? k.usedByDiscordId : 'Hələ işlənməyib')) +
@@ -2274,7 +2476,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             )
             .join('');
           recentBox.innerHTML = recentKeys.length
-            ? '<table><tr><th>Key</th><th>Yaradan</th><th>İşlədən</th></tr>' + recentRows + '</table>'
+            ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th></tr>' +
+              recentRows +
+              '</table>'
             : 'Hələ key yaradılmayıb.';
         }
 
@@ -2294,22 +2498,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           scriptsListEl.innerHTML = (data.scripts || [])
             .map((s) => {
               const loaderUrl = loaderBaseOrigin + '/loader/' + s.loaderToken + '?ws=' + wsId;
-              const loaderCode =
+              const getScriptText =
                 'script_key = "YOUR_KEY"\nloadstring(game:HttpGet("' + loaderUrl + '"))()';
+              const obfBadge = s.obfuscated
+                ? ' • 🛡️ Obfuscated (Lv.' + (s.obfuscateLevel || 3) + ')'
+                : ' • Obfuscation Bağlı';
               return (
                 '<div class="script-item"><div class="script-head"><div><strong>📜 ' +
                 s.name +
                 '</strong><div class="brand-sub">' +
                 s.name +
-                '.lua</div></div>' +
-                '<div><button type="button" class="btn btn-blue btn-sm" data-copy-code="' +
-                encodeURIComponent(loaderCode) +
+                '.lua' +
+                obfBadge +
+                '</div></div>' +
+                '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button type="button" class="btn btn-blue btn-sm" data-copy-code="' +
+                encodeURIComponent(getScriptText) +
                 '">📋 Kopyala</button>' +
                 '<button type="button" class="btn btn-red btn-sm" data-del-script="' +
                 s.id +
                 '">🗑️ Sil</button></div></div>' +
                 '<div class="loader-box">' +
-                loaderCode.replace(/\n/g, '<br/>') +
+                getScriptText.replace(/\n/g, '<br/>') +
                 '</div></div>'
               );
             })
@@ -2324,6 +2533,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
                 '<tr><td>' +
                 k.key +
                 '</td><td>' +
+                (k.duration || 'lifetime') +
+                '</td><td>' +
                 (k.createdByName || '-') +
                 '</td><td>' +
                 (k.usedByName || (k.used ? k.usedByDiscordId : 'Boş')) +
@@ -2333,7 +2544,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             )
             .join('');
           keysListEl.innerHTML = (data.keys || []).length
-            ? '<table><tr><th>Key</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' + keyRows + '</table>'
+            ? '<table><tr><th>Key</th><th>Vaxt</th><th>Yaradan</th><th>İşlədən</th><th>Sil</th></tr>' +
+              keyRows +
+              '</table>'
             : '<div class="brand-sub" style="margin-top:6px;">Hələ key yoxdur.</div>';
         }
 
@@ -2347,10 +2560,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
                 '<br/><span style="color:#9ca3af">Edən: ' +
                 (w.addedByName || '-') +
                 '</span></td><td>' +
-                (w.hwid || 'Yoxdur') +
+                (w.hwid || 'Yoxdur (İlk cihaza bağlanacaq)') +
                 '</td><td>' +
                 (w.hwidLocked === false ? 'Açıq' : 'Kilidli') +
-                '</td><td>' +
+                '</td><td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
                 '<button type="button" class="btn btn-blue btn-sm" data-lock-wl="' +
                 w.id +
                 '">Kilid</button>' +
@@ -2359,11 +2572,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
                 '">Reset HWID</button>' +
                 '<button type="button" class="btn btn-red btn-sm" data-del-wl="' +
                 w.id +
-                '">Sil</button></td></tr>'
+                '">Sil</button></div></td></tr>'
             )
             .join('');
           wlListEl.innerHTML = (data.whitelists || []).length
-            ? '<table><tr><th>İstifadəçi</th><th>HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' + wlRows + '</table>'
+            ? '<table><tr><th>İstifadəçi</th><th>Bağlı HWID</th><th>Kilid</th><th>Əməliyyat</th></tr>' +
+              wlRows +
+              '</table>'
             : '<div class="brand-sub" style="margin-top:6px;">Aktiv whitelist yoxdur.</div>';
         }
 
@@ -2382,7 +2597,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             )
             .join('');
           blListEl.innerHTML = (data.blacklist || []).length
-            ? '<table><tr><th>ID</th><th>Ad</th><th>Sil</th></tr>' + blRows + '</table>'
+            ? '<table><tr><th>ID</th><th>Ad</th><th>Sil</th></tr>' +
+              blRows +
+              '</table>'
             : '<div class="brand-sub" style="margin-top:6px;">Blacklist boşdur.</div>';
         }
 
@@ -2391,8 +2608,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           if (discordUserIdInput) discordUserIdInput.value = data.discordUserId || '';
           if (liveGuildPreview) {
             liveGuildPreview.textContent = data.guildName
-              ? 'Qoşulmuş Sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
-              : '';
+              ? 'Sunucu: ' + data.guildName + (data.guildId ? ' (' + data.guildId + ')' : '')
+              : 'Sunucu: Seçilməyib';
           }
           const cfg = data.panelConfig || {};
           if (cfg.embedColor && document.getElementById('embedColorInput')) {
@@ -2408,11 +2625,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           if (cfg.redeemLabel && document.getElementById('redeemLabelInput')) {
             document.getElementById('redeemLabelInput').value = cfg.redeemLabel;
           }
+          if (cfg.redeemEmoji && document.getElementById('redeemEmojiInput')) {
+            document.getElementById('redeemEmojiInput').value = cfg.redeemEmoji;
+          }
           if (cfg.redeemStyle && document.getElementById('redeemStyleInput')) {
             document.getElementById('redeemStyleInput').value = cfg.redeemStyle;
           }
           if (cfg.getScriptLabel && document.getElementById('getScriptLabelInput')) {
             document.getElementById('getScriptLabelInput').value = cfg.getScriptLabel;
+          }
+          if (cfg.getScriptEmoji && document.getElementById('getScriptEmojiInput')) {
+            document.getElementById('getScriptEmojiInput').value = cfg.getScriptEmoji;
           }
           if (cfg.getScriptStyle && document.getElementById('getScriptStyleInput')) {
             document.getElementById('getScriptStyleInput').value = cfg.getScriptStyle;
@@ -2420,15 +2643,25 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           if (cfg.resetHwidLabel && document.getElementById('resetHwidLabelInput')) {
             document.getElementById('resetHwidLabelInput').value = cfg.resetHwidLabel;
           }
+          if (cfg.resetHwidEmoji && document.getElementById('resetHwidEmojiInput')) {
+            document.getElementById('resetHwidEmojiInput').value = cfg.resetHwidEmoji;
+          }
           if (cfg.resetHwidStyle && document.getElementById('resetHwidStyleInput')) {
             document.getElementById('resetHwidStyleInput').value = cfg.resetHwidStyle;
           }
           if (cfg.statsLabel && document.getElementById('statsLabelInput')) {
             document.getElementById('statsLabelInput').value = cfg.statsLabel;
           }
+          if (cfg.statsEmoji && document.getElementById('statsEmojiInput')) {
+            document.getElementById('statsEmojiInput').value = cfg.statsEmoji;
+          }
           if (cfg.statsStyle && document.getElementById('statsStyleInput')) {
             document.getElementById('statsStyleInput').value = cfg.statsStyle;
           }
+          if (Array.isArray(cfg.buttonOrder) && cfg.buttonOrder.length) {
+            uiState.buttonOrder = cfg.buttonOrder.slice();
+          }
+          renderButtonOrderBox();
           uiState.initialLoaded = true;
         }
       } catch (_err) {}
@@ -2448,11 +2681,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const name = document.getElementById('scriptNameInput').value.trim();
       const code = document.getElementById('scriptCodeInput').value;
       const obfuscate = document.getElementById('createObfCheckbox').checked;
-      const obfuscateLevel = Number(document.getElementById('obfLevelSelect').value || 2);
+      const obfuscateLevel = Number(document.getElementById('obfLevelSelect').value || 3);
       const r = await apiFetch('/api/scripts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name, code: code, obfuscate: obfuscate, obfuscateLevel: obfuscateLevel }),
+        body: JSON.stringify({
+          name: name,
+          code: code,
+          obfuscate: obfuscate,
+          obfuscateLevel: obfuscateLevel,
+        }),
       });
       const j = await r.json();
       if (j && j.ok) document.getElementById('scriptNameInput').value = '';
@@ -2468,8 +2706,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     };
 
     const runStandaloneObf = async () => {
-      const code = document.getElementById('obfInputCode').value;
-      const level = Number(document.getElementById('obfLevelSelect').value || 2);
+      const code = document.getElementById('obfInputCode')
+        ? document.getElementById('obfInputCode').value || document.getElementById('scriptCodeInput').value
+        : document.getElementById('scriptCodeInput').value;
+      const level = Number(document.getElementById('obfLevelSelect').value || 3);
       const r = await apiFetch('/api/obfuscate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2489,27 +2729,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       copyText(val);
     };
 
-    const saveObfAsScript = async () => {
-      const code = document.getElementById('obfResultBox').value;
-      const rawName = document.getElementById('obfSaveNameInput').value.trim();
-      const name = rawName || 'SADO Protected';
-      if (!code) {
-        showToast('Əvvəl kodu şifrələyin');
-        return;
-      }
-      const r = await apiFetch('/api/scripts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name, code: code, obfuscate: false }),
-      });
-      const j = await r.json();
-      showToast((j && j.message) || 'Skript kimi saxlandı');
-      await renderAll();
-    };
-
     const generateKeys = async () => {
       const scriptId = document.getElementById('keyScriptSelect').value;
-      const duration = document.getElementById('keyDurationInput').value.trim();
+      const duration = document.getElementById('keyDurationSelect').value;
       const amount = Number(document.getElementById('keyAmountInput').value || 1);
       const createdByDiscordId = document.getElementById('discordUserIdInput').value.trim();
       const r = await apiFetch('/api/keys', {
@@ -2537,7 +2759,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     const addWhitelist = async () => {
       const discordUserId = document.getElementById('wlUserIdInput').value.trim();
       const scriptId = document.getElementById('wlScriptSelect').value;
-      const duration = document.getElementById('wlDurationInput').value.trim();
+      const duration = document.getElementById('wlDurationSelect').value;
       const hwidLocked = document.getElementById('wlLockCheckbox').checked;
       const addedByDiscordId = document.getElementById('discordUserIdInput').value.trim();
       const r = await apiFetch('/api/whitelist', {
@@ -2631,13 +2853,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         title: document.getElementById('panelTitleInput').value.trim(),
         description: document.getElementById('panelDescInput').value.trim(),
         redeemLabel: document.getElementById('redeemLabelInput').value.trim(),
+        redeemEmoji: document.getElementById('redeemEmojiInput').value.trim(),
         redeemStyle: document.getElementById('redeemStyleInput').value,
         getScriptLabel: document.getElementById('getScriptLabelInput').value.trim(),
+        getScriptEmoji: document.getElementById('getScriptEmojiInput').value.trim(),
         getScriptStyle: document.getElementById('getScriptStyleInput').value,
         resetHwidLabel: document.getElementById('resetHwidLabelInput').value.trim(),
+        resetHwidEmoji: document.getElementById('resetHwidEmojiInput').value.trim(),
         resetHwidStyle: document.getElementById('resetHwidStyleInput').value,
         statsLabel: document.getElementById('statsLabelInput').value.trim(),
+        statsEmoji: document.getElementById('statsEmojiInput').value.trim(),
         statsStyle: document.getElementById('statsStyleInput').value,
+        buttonOrder: uiState.buttonOrder.slice(),
       };
       const r = await apiFetch('/api/panel-config', {
         method: 'POST',
@@ -2666,7 +2893,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     });
 
     document.addEventListener('click', (ev) => {
-      const clickedBtn = ev.target && ev.target.closest ? ev.target.closest('#menuToggleBtn, button') : null;
+      const clickedBtn =
+        ev.target && ev.target.closest ? ev.target.closest('#menuToggleBtn, button') : null;
       if (clickedBtn && clickedBtn.id === 'menuToggleBtn') {
         ev.preventDefault();
         ev.stopPropagation();
@@ -2675,7 +2903,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }
       const target = ev.target && ev.target.closest ? ev.target.closest('button') : null;
       if (!target) return;
-      if (target.hasAttribute('data-copy-code')) {
+      if (target.hasAttribute('data-move-btn')) {
+        moveButtonInOrder(
+          target.getAttribute('data-move-btn') || '',
+          target.getAttribute('data-move-dir') || 'up'
+        );
+      } else if (target.hasAttribute('data-copy-code')) {
         copyText(decodeURIComponent(target.getAttribute('data-copy-code') || ''));
       } else if (target.hasAttribute('data-del-script')) {
         deleteScript(target.getAttribute('data-del-script') || '');
@@ -2727,7 +2960,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       sendPanelBtn: sendPanelToChannel,
       runObfBtn: runStandaloneObf,
       copyObfBtn: copyObfCode,
-      saveObfBtn: saveObfAsScript,
       genKeysBtn: generateKeys,
       addWhitelistBtn: addWhitelist,
       addBlacklistBtn: addBlacklist,
@@ -2740,8 +2972,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (btn) btn.addEventListener('click', actionMap[id]);
     });
 
+    renderButtonOrderBox();
     renderAll();
-    setInterval(renderAll, 8000);
+    setInterval(renderAll, 7000);
   </script>
 </body>
 </html>`;
