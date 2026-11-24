@@ -2428,6 +2428,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     window.__sadoSwitchPage = activatePage;
     window.__sadoCloseMenu = () => setMenuVisible(false);
+
+    const renderButtonOrderList = () => {
+      const box = document.getElementById('btnOrderStack');
+      if (!box) return;
+      box.innerHTML = uiState.buttonOrder
+        .map((key, idx) => {
+          return (
             '<div class="order-row"><strong>#' +
             (idx + 1) +
             ' • ' +
