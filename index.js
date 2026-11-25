@@ -2075,7 +2075,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           const isActive = sc.id === activeScriptId;
           const loaderDisplay = sc.loaderUrl
             ? sc.loaderUrl
-            : `${window.location.origin}/raw/${sc.id}`;
+            : window.location.origin + "/raw/" + sc.id;
           const encName = encodeURIComponent(sc.name || "");
           const encUrl = encodeURIComponent(sc.loaderUrl || "");
           return `
