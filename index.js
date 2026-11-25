@@ -181,6 +181,41 @@ const buildShortLoaderString = (scriptItem, keyString = "") => {
   return `getgenv().SADO_KEY="${cleanKey}";loadstring(game:HttpGet("${targetUrl}"))()`;
 };
 
+const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT") => {
+  const cleanScript = String(rawCodeText || "");
+  const encodedPayload = Buffer.from(cleanScript, "utf8").toString("base64");
+  const expectedKey = sanitizeText(keyString, "");
+
+  return [
+    `-- [[ SADO PROTECT ANTI-LEAK SHIELD — ${sanitizeText(scriptName, "PROTECTED")} ]]`,
+    `local _K = tostring(getgenv().SADO_KEY or "${expectedKey}")`,
+    `if _K == "" then error("[SADO PROTECT] Key tələb olunur — Script bloklandı!", 0) end`,
+    `if hookfunction or clonefunction or getgc then`,
+    `  pcall(function() getgenv().SADO_KEY = nil end)`,
+    `end`,
+    `local _B = "${encodedPayload}"`,
+    `local _CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"`,
+    `local function _DEC(data)`,
+    `  data = string.gsub(data, "[^".._CHARS.."=]", "")`,
+    `  return (data:gsub(".", function(x)`,
+    `    if x == "=" then return "" end`,
+    `    local r, f = "", (_CHARS:find(x, 1, true) - 1)`,
+    `    for i = 6, 1, -1 do r = r .. (f % 2^i - f % 2^(i-1) > 0 and "1" or "0") end`,
+    `    return r`,
+    `  end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)`,
+    `    if #x ~= 8 then return "" end`,
+    `    local c = 0`,
+    `    for i = 1, 8 do c = c + (x:sub(i,i) == "1" and 2^(8-i) or 0) end`,
+    `    return string.char(c)`,
+    `  end))`,
+    `end`,
+    `local _FN = loadstring(_DEC(_B))`,
+    `_B = nil`,
+    `if not _FN then error("[SADO PROTECT] Qorunan payload oxuna bilmədi!", 0) end`,
+    `return _FN()`
+  ].join("\n");
+};
+
 const parseJsonSafe = (rawText, fallback = null) => {
   try {
     return JSON.parse(rawText);
@@ -828,6 +863,30 @@ const buildSlashCommandsPayload = () => {
       options: [scriptOption]
     },
     {
+      name: "whitelist",
+      description: "İstifadəçini Whitelist-ə əlavə edir və avtomatik Key yaradır",
+      options: [
+        {
+          name: "istifadeci",
+          description: "Discord User ID, Nick və ya HWID",
+          type: 3,
+          required: true
+        }
+      ]
+    },
+    {
+      name: "unwhitelist",
+      description: "İstifadəçini Whitelist-dən çıxarır və girişini bağlayır",
+      options: [
+        {
+          name: "istifadeci",
+          description: "Discord User ID, Nick və ya HWID",
+          type: 3,
+          required: true
+        }
+      ]
+    },
+    {
       name: "scripts",
       description: "Bütün mövcud scriptlərin siyahısını göstərir",
       options: []
@@ -1060,24 +1119,91 @@ const handleDiscordInteractionCreate = async (interaction) => {
       return;
     }
 
-    if (cmdName === "scripts") {
-      const listLines = (APP_STATE.scripts || []).map((sc, index) => {
-        const scName = sanitizeText(sc.name, "Adsız Script");
-        const scMode = sc.sourceType === "file" ? `Fayl (${sanitizeText(sc.fileName, "lua")})` : "URL";
-        return `${index + 1}. **${scName}** — \`${scMode}\``;
-      });
+    if (cmdName === "whitelist") {
+      const userOpt = rawOptions.find((o) => o && o.name === "istifadeci");
+      const targetUser = sanitizeText(userOpt && userOpt.value, "");
+
+      if (!targetUser) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: { content: "❌ Zəhmət olmasa Whitelist-ə əlavə ediləcək istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
+        });
+        return;
+      }
+
+      APP_STATE.blacklist = (APP_STATE.blacklist || []).filter(
+        (b) => b && normalizeAccessValue(b.value) !== normalizeAccessValue(targetUser)
+      );
+
+      const generatedKeyValue = generateLicenseKeyString();
+      const autoKeyRecord = {
+        id: generateUniqueId("key"),
+        key: generatedKeyValue,
+        owner: targetUser,
+        scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
+        days: 30,
+        hwid: "",
+        active: true,
+        createdAt: new Date().toISOString()
+      };
+      APP_STATE.keys = [autoKeyRecord, ...(APP_STATE.keys || [])];
+
+      const existingWl = (APP_STATE.whitelist || []).find(
+        (w) => w && normalizeAccessValue(w.value) === normalizeAccessValue(targetUser)
+      );
+      if (!existingWl) {
+        APP_STATE.whitelist = [
+          {
+            id: generateUniqueId("acc"),
+            value: targetUser,
+            generatedKey: generatedKeyValue,
+            createdAt: new Date().toISOString()
+          },
+          ...(APP_STATE.whitelist || [])
+        ];
+      } else {
+        existingWl.generatedKey = generatedKeyValue;
+      }
+
+      saveAppStateToDisk();
+      appendAuditLog("WHITELIST_CMD", `/whitelist: ${targetUser} -> Key: ${generatedKeyValue}`, "Discord");
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          embeds: [
-            {
-              title: "📜 Mövcud Scriptlər",
-              description: listLines.length > 0 ? listLines.join("\n") : "Hələ heç bir script yaradılmayıb.",
-              color: hexColorToDiscordInt(APP_STATE.panelDesign && APP_STATE.panelDesign.color),
-              timestamp: new Date().toISOString()
-            }
-          ],
+          content: `✅ **Whitelist əlavə edildi:** \`${targetUser}\`\n🔑 **Avto Key:** \`${generatedKeyValue}\``,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (cmdName === "unwhitelist") {
+      const userOpt = rawOptions.find((o) => o && o.name === "istifadeci");
+      const targetUser = sanitizeText(userOpt && userOpt.value, "");
+
+      if (!targetUser) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: { content: "❌ Zəhmət olmasa Unwhitelist ediləcək istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
+        });
+        return;
+      }
+
+      const normTarget = normalizeAccessValue(targetUser);
+      APP_STATE.whitelist = (APP_STATE.whitelist || []).filter(
+        (w) => w && normalizeAccessValue(w.value) !== normTarget
+      );
+      APP_STATE.keys = (APP_STATE.keys || []).filter(
+        (k) => k && normalizeAccessValue(k.owner) !== normTarget
+      );
+      saveAppStateToDisk();
+      appendAuditLog("UNWHITELIST_CMD", `/unwhitelist: ${targetUser}`, "Discord");
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `🚫 **Unwhitelist edildi:** \`${targetUser}\` — girişi və key-i deaktiv edildi, artıq script verilməyəcək.`,
           flags: 64
         }
       });
@@ -1201,52 +1327,28 @@ const handleDiscordInteractionCreate = async (interaction) => {
     const callerIdentity = callerUserId || callerUsername;
 
     if (customId.includes("btn_redeem_key") || customId.includes("btn_get_key")) {
-      if (isEntryBlacklisted(callerIdentity)) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "🚫 Siz Blacklist-dəsiniz. Key verilmir.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      if (!isEntryWhitelisted(callerIdentity)) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "❌ Key almaq üçün əvvəlcə Whitelist-ə əlavə olunmalısınız.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      let existingKey = (APP_STATE.keys || []).find(
-        (k) => k && k.active !== false && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
-      );
-
-      if (!existingKey) {
-        existingKey = {
-          id: generateUniqueId("key"),
-          key: generateLicenseKeyString(),
-          owner: callerIdentity,
-          scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
-          days: 30,
-          hwid: "",
-          active: true,
-          createdAt: new Date().toISOString()
-        };
-        APP_STATE.keys = [existingKey, ...(APP_STATE.keys || [])];
-        saveAppStateToDisk();
-      }
-
       await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
+        type: 9,
         data: {
-          content: `🎟️ **Sizin Key:** \`${existingKey.key}\`\n🔒 **HWID:** ${existingKey.hwid ? `\`${existingKey.hwid}\`` : "Hələ heç bir cihaza bağlanmayıb (ilk açılışda bağlanacaq)"}`,
-          flags: 64
+          custom_id: "sado_modal_redeem_key",
+          title: "🎟️ Redeem Key — Key Aktivləşdirmə",
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 4,
+                  custom_id: "input_license_key",
+                  label: "Key daxil edin (məs: SADO-XXXX-XXXX)",
+                  style: 1,
+                  min_length: 4,
+                  max_length: 120,
+                  placeholder: "Key-inizi buraya yazın...",
+                  required: true
+                }
+              ]
+            }
+          ]
         }
       });
       return;
@@ -1288,7 +1390,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🔑 **Script Key:**\n\`${userKey.key}\`\n\n📜 **Loadstring:**\n\`\`\`lua\n${shortLoader}\n\`\`\`\n${hwidStatusLine}`,
+          content: `🔑 **Key:** \`${userKey.key}\`\n\n📜 **Loadstring:**\n\`\`\`lua\n${shortLoader}\n\`\`\`\n${hwidStatusLine}`,
           flags: 64
         }
       });
@@ -1340,6 +1442,81 @@ const handleDiscordInteractionCreate = async (interaction) => {
         flags: 64
       }
     });
+    return;
+  }
+
+  if (interactionType === 5) {
+    const modalCustomId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+    const discordUser = (interaction.member && interaction.member.user) || interaction.user || {};
+    const callerUserId = sanitizeText(discordUser.id, "");
+    const callerUsername = sanitizeText(discordUser.username, "DiscordUser");
+    const callerIdentity = callerUserId || callerUsername;
+
+    if (modalCustomId === "sado_modal_redeem_key") {
+      let submittedKey = "";
+      const rows = Array.isArray(interaction.data && interaction.data.components)
+        ? interaction.data.components
+        : [];
+      for (const row of rows) {
+        const comps = Array.isArray(row && row.components) ? row.components : [];
+        for (const c of comps) {
+          if (c && c.custom_id === "input_license_key") {
+            submittedKey = sanitizeText(c.value, "");
+          }
+        }
+      }
+
+      if (isEntryBlacklisted(callerIdentity)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "🚫 Siz Blacklist-dəsiniz. Key aktivləşdirilmir.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const foundKey = (APP_STATE.keys || []).find(
+        (k) => k && sanitizeText(k.key, "").toLowerCase() === submittedKey.toLowerCase()
+      );
+
+      if (!foundKey || foundKey.active === false) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "❌ Daxil etdiyiniz Key yanlışdır və ya aktiv deyil.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (!foundKey.owner) {
+        foundKey.owner = callerIdentity;
+      }
+      if (!isEntryWhitelisted(callerIdentity, foundKey)) {
+        APP_STATE.whitelist = [
+          {
+            id: generateUniqueId("acc"),
+            value: callerIdentity,
+            generatedKey: foundKey.key,
+            createdAt: new Date().toISOString()
+          },
+          ...(APP_STATE.whitelist || [])
+        ];
+      }
+      saveAppStateToDisk();
+      appendAuditLog("KEY_REDEEMED", `Key aktivləşdirildi: ${foundKey.key} -> ${callerIdentity}`, "Discord");
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `✅ **Key uğurla aktivləşdirildi!**\n🔑 **Key:** \`${foundKey.key}\`\n📜 **Script:** **${sanitizeText(foundKey.scriptName, "Ümumi")}**`,
+          flags: 64
+        }
+      });
+    }
   }
 };
 
@@ -3219,8 +3396,12 @@ const handleHttpRequest = async (req, res) => {
       }
 
       const scriptPayload = targetScript.sourceType === "file"
-        ? (targetScript.scriptContent || "")
-        : buildShortLoaderString(targetScript, matchedKey.key);
+        ? wrapScriptWithAntiLeakProtection(targetScript.scriptContent || "", matchedKey.key, targetScript.name)
+        : wrapScriptWithAntiLeakProtection(
+            `loadstring(game:HttpGet("${targetScript.scriptUrl || ""}"))()`,
+            matchedKey.key,
+            targetScript.name
+          );
 
       sendJsonResponse(res, 200, {
         allowed: true,
@@ -3240,12 +3421,29 @@ const handleHttpRequest = async (req, res) => {
         sendJsonResponse(res, 404, { error: "Script tapılmadı" });
         return;
       }
+
+      const providedKeyQuery = sanitizeText(reqUrl.searchParams.get("key") || req.headers["x-sado-key"], "");
+      const matchedKey = providedKeyQuery ? findKeyByValueOrUser(providedKeyQuery) : null;
+      const identityCheck = (matchedKey && matchedKey.owner) || providedKeyQuery;
+
+      if (
+        !matchedKey ||
+        matchedKey.active === false ||
+        isEntryBlacklisted(identityCheck, matchedKey) ||
+        !isEntryWhitelisted(identityCheck, matchedKey)
+      ) {
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end('-- [[ SADO PROTECT ]] Etibarlı Key / Whitelist olmadan script məzmununa icazə verilmir!');
+        return;
+      }
+
       const rawCode = found.sourceType === "file"
         ? (found.scriptContent || "")
         : `loadstring(game:HttpGet("${found.scriptUrl || ""}"))()`;
 
+      const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end(rawCode);
+      res.end(protectedCode);
       return;
     }
 
