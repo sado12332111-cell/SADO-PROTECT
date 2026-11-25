@@ -298,6 +298,19 @@ const fetchDiscordJsonViaHttps = (apiPath, token, useBotAuth = true) => {
   });
 };
 
+const extractBotIdFromToken = (rawToken) => {
+  try {
+    const clean = String(rawToken || "").trim();
+    const firstPart = clean.split(".")[0] || "";
+    if (!firstPart) return "";
+    const normalized = firstPart.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = Buffer.from(normalized, "base64").toString("utf8").trim();
+    return /^\d{15,22}$/.test(decoded) ? decoded : "";
+  } catch (_err) {
+    return "";
+  }
+};
+
 const discordClient = new Client({
   intents: [
     GatewayIntentBits.Guilds
@@ -309,21 +322,32 @@ const BOT_RUNTIME = {
   isReady: true,
   gatewayReady: false,
   botTag: "SADO PROTECT BOT",
-  botId: "",
+  botId: extractBotIdFromToken(APP_CONFIG.DISCORD_TOKEN),
   lastError: ""
+};
+
+const isGenericGuildLabel = (nameStr) => {
+  const val = String(nameStr || "").trim();
+  if (!val) return true;
+  if (val === "Bağlı Sunucu" || val === "Sunucu seçilməyib" || val === "Bağlanır...") return true;
+  if (/^Sunucu\s*\(/i.test(val)) return true;
+  if (/^\d{15,22}$/.test(val)) return true;
+  return false;
 };
 
 const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") => {
   const cleanId = String(guildIdInput || "").trim();
   const cleanPreferred = String(preferredNameInput || "").trim();
   if (!cleanId) {
-    return cleanPreferred || "Sunucu seçilməyib";
+    return cleanPreferred && !isGenericGuildLabel(cleanPreferred)
+      ? cleanPreferred
+      : "Sunucu seçilməyib";
   }
 
   try {
     if (discordClient && discordClient.guilds && discordClient.guilds.cache) {
       const cachedGuild = discordClient.guilds.cache.get(cleanId);
-      if (cachedGuild && cachedGuild.name) {
+      if (cachedGuild && cachedGuild.name && !isGenericGuildLabel(cachedGuild.name)) {
         APP_STATE.guildCache[cleanId] = cachedGuild.name;
         return cachedGuild.name;
       }
@@ -331,7 +355,7 @@ const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") =>
 
     if (discordClient && BOT_RUNTIME.gatewayReady) {
       const fetchedGuild = await discordClient.guilds.fetch(cleanId).catch(() => null);
-      if (fetchedGuild && fetchedGuild.name) {
+      if (fetchedGuild && fetchedGuild.name && !isGenericGuildLabel(fetchedGuild.name)) {
         APP_STATE.guildCache[cleanId] = fetchedGuild.name;
         return fetchedGuild.name;
       }
@@ -342,7 +366,7 @@ const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") =>
 
   if (APP_CONFIG.DISCORD_TOKEN) {
     const restResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}`, APP_CONFIG.DISCORD_TOKEN, true);
-    if (restResult.ok && restResult.data && restResult.data.name) {
+    if (restResult.ok && restResult.data && restResult.data.name && !isGenericGuildLabel(restResult.data.name)) {
       APP_STATE.guildCache[cleanId] = restResult.data.name;
       return restResult.data.name;
     }
@@ -350,34 +374,43 @@ const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") =>
     const userGuildsResult = await fetchDiscordJsonViaHttps("/users/@me/guilds", APP_CONFIG.DISCORD_TOKEN, true);
     if (userGuildsResult.ok && Array.isArray(userGuildsResult.data)) {
       userGuildsResult.data.forEach((g) => {
-        if (g && g.id && g.name) {
+        if (g && g.id && g.name && !isGenericGuildLabel(g.name)) {
           APP_STATE.guildCache[g.id] = g.name;
         }
       });
-      if (APP_STATE.guildCache[cleanId]) {
+      if (APP_STATE.guildCache[cleanId] && !isGenericGuildLabel(APP_STATE.guildCache[cleanId])) {
         return APP_STATE.guildCache[cleanId];
       }
     }
   }
 
   const previewResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/preview`, "", false);
-  if (previewResult.ok && previewResult.data && previewResult.data.name) {
+  if (previewResult.ok && previewResult.data && previewResult.data.name && !isGenericGuildLabel(previewResult.data.name)) {
     APP_STATE.guildCache[cleanId] = previewResult.data.name;
     return previewResult.data.name;
   }
 
   const widgetResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/widget.json`, "", false);
-  if (widgetResult.ok && widgetResult.data && widgetResult.data.name) {
+  if (widgetResult.ok && widgetResult.data && widgetResult.data.name && !isGenericGuildLabel(widgetResult.data.name)) {
     APP_STATE.guildCache[cleanId] = widgetResult.data.name;
     return widgetResult.data.name;
   }
 
-  if (cleanPreferred && !cleanPreferred.startsWith("Sunucu (")) {
+  const inviteResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/invites`, APP_CONFIG.DISCORD_TOKEN, Boolean(APP_CONFIG.DISCORD_TOKEN));
+  if (inviteResult.ok && Array.isArray(inviteResult.data) && inviteResult.data[0]?.guild?.name) {
+    const invGuildName = String(inviteResult.data[0].guild.name).trim();
+    if (!isGenericGuildLabel(invGuildName)) {
+      APP_STATE.guildCache[cleanId] = invGuildName;
+      return invGuildName;
+    }
+  }
+
+  if (cleanPreferred && !isGenericGuildLabel(cleanPreferred)) {
     APP_STATE.guildCache[cleanId] = cleanPreferred;
     return cleanPreferred;
   }
 
-  if (APP_STATE.guildCache && APP_STATE.guildCache[cleanId] && !APP_STATE.guildCache[cleanId].startsWith("Sunucu (")) {
+  if (APP_STATE.guildCache && APP_STATE.guildCache[cleanId] && !isGenericGuildLabel(APP_STATE.guildCache[cleanId])) {
     return APP_STATE.guildCache[cleanId];
   }
 
@@ -511,6 +544,12 @@ const registerSlashCommands = async () => {
   if (!APP_CONFIG.DISCORD_TOKEN) {
     return;
   }
+  if (!BOT_RUNTIME.botId) {
+    const meInfo = await fetchDiscordJsonViaHttps("/users/@me", APP_CONFIG.DISCORD_TOKEN, true);
+    if (meInfo.ok && meInfo.data && meInfo.data.id) {
+      BOT_RUNTIME.botId = String(meInfo.data.id).trim();
+    }
+  }
   const appId = APP_CONFIG.CLIENT_ID || BOT_RUNTIME.botId;
   if (!appId) {
     return;
@@ -538,6 +577,9 @@ const registerSlashCommands = async () => {
           .setRequired(false);
         if (scriptChoices.length > 0) {
           optionBuilder.addChoices(...scriptChoices);
+          optionBuilder.setAutocomplete(false);
+        } else {
+          optionBuilder.setAutocomplete(true);
         }
         return optionBuilder;
       }),
@@ -579,9 +621,20 @@ const registerSlashCommands = async () => {
   const rest = new REST({ version: "10" }).setToken(APP_CONFIG.DISCORD_TOKEN);
   try {
     await rest.put(Routes.applicationCommands(appId), { body: commands });
-    if (APP_STATE.bot.guildId) {
+    const targetGuildIds = new Set(
+      [
+        APP_STATE.bot.guildId,
+        APP_CONFIG.DEFAULT_GUILD_ID,
+        ...(discordClient && discordClient.guilds && discordClient.guilds.cache
+          ? Array.from(discordClient.guilds.cache.keys())
+          : [])
+      ]
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    );
+    for (const gId of targetGuildIds) {
       await rest
-        .put(Routes.applicationGuildCommands(appId, APP_STATE.bot.guildId), { body: commands })
+        .put(Routes.applicationGuildCommands(appId, gId), { body: commands })
         .catch(() => null);
     }
   } catch (err) {
@@ -939,7 +992,7 @@ const buildPublicSnapshot = () => {
       ? APP_STATE.guildCache[APP_STATE.bot.guildId] || ""
       : "";
   const activeGuildName = APP_STATE.bot.guildId
-    ? rawGuildName && !rawGuildName.startsWith("Sunucu (")
+    ? rawGuildName && !isGenericGuildLabel(rawGuildName)
       ? rawGuildName
       : "Bağlı Sunucu"
     : "Sunucu seçilməyib";
@@ -2811,4 +2864,5 @@ app.delete("/api/access/:type/:userId", (req, res) => {
 app.listen(APP_CONFIG.PORT, "0.0.0.0", () => {
   console.log(`[SADO_PROTECT_SERVER] Listening on port ${APP_CONFIG.PORT}`);
   startDiscordBot();
-});
+  registerSlashCommands().catch(() => null);
+});6
