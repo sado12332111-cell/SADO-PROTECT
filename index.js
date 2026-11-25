@@ -2123,25 +2123,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
       container.innerHTML = keys
         .map((k) => {
-          const durationText = Number(k.days) === 0 ? "Ömürlük" : `${k.days} gün`;
+          const durationText = Number(k.days) === 0 ? "Ömürlük" : k.days + " gün";
           const ownerText = k.claimedTag
-            ? `İstifadəçi: ${k.claimedTag} (${k.claimedBy})`
+            ? "İstifadəçi: " + k.claimedTag + " (" + k.claimedBy + ")"
             : "İstifadə edilməyib";
-          return `
-            <div class="item-card">
-              <div class="item-top">
-                <div>
-                  <div class="item-title">${escapeHtml(k.key)} <span class="badge">${durationText}</span></div>
-                  <div class="item-sub">${escapeHtml(ownerText)} • Qeyd: ${escapeHtml(k.note || "-")}</div>
-                </div>
-                <div class="btn-row">
-                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoCopyText('${escapeHtml(k.key)}')">Kopyala</button>
-                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoResetKeyHwid('${k.id}')">HWID Sıfırla</button>
-                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoDeleteKey('${k.id}')">Sil</button>
-                </div>
-              </div>
-            </div>
-          `;
+          const keyCardParts = [
+            '<div class="item-card">',
+            '<div class="item-top">',
+            "<div>",
+            '<div class="item-title">' + escapeHtml(k.key) + ' <span class="badge">' + escapeHtml(durationText) + "</span></div>",
+            '<div class="item-sub">' + escapeHtml(ownerText) + " • Qeyd: " + escapeHtml(k.note || "-") + "</div>",
+            "</div>",
+            '<div class="btn-row">',
+            '<button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoCopyText(\'' + escapeHtml(k.key) + "')\">Kopyala</button>",
+            '<button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoResetKeyHwid(\'' + escapeHtml(k.id) + "')\">HWID Sıfırla</button>",
+            '<button type="button" class="btn btn-danger btn-sm" onclick="window.sadoDeleteKey(\'' + escapeHtml(k.id) + "')\">Sil</button>",
+            "</div>",
+            "</div>",
+            "</div>"
+          ];
+          return keyCardParts.join("");
         })
         .join("");
     };
@@ -2154,19 +2155,20 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           wlBox.innerHTML = '<div class="item-sub">Whitelist boşdur.</div>';
         } else {
           wlBox.innerHTML = whitelist
-            .map(
-              (w) => `
-              <div class="item-card">
-                <div class="item-top">
-                  <div>
-                    <div class="item-title">${escapeHtml(w.username || w.userId)}</div>
-                    <div class="item-sub">ID: ${escapeHtml(w.userId)}</div>
-                  </div>
-                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess('whitelist', '${escapeHtml(w.userId)}')">Sil</button>
-                </div>
-              </div>
-            `
-            )
+            .map((w) => {
+              const wlParts = [
+                '<div class="item-card">',
+                '<div class="item-top">',
+                "<div>",
+                '<div class="item-title">' + escapeHtml(w.username || w.userId) + "</div>",
+                '<div class="item-sub">ID: ' + escapeHtml(w.userId) + "</div>",
+                "</div>",
+                '<button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess(\'whitelist\', \'' + escapeHtml(w.userId) + "')\">Sil</button>",
+                "</div>",
+                "</div>"
+              ];
+              return wlParts.join("");
+            })
             .join("");
         }
       }
@@ -2176,19 +2178,20 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           blBox.innerHTML = '<div class="item-sub">Blacklist boşdur.</div>';
         } else {
           blBox.innerHTML = blacklist
-            .map(
-              (b) => `
-              <div class="item-card">
-                <div class="item-top">
-                  <div>
-                    <div class="item-title">${escapeHtml(b.username || b.userId)}</div>
-                    <div class="item-sub">ID: ${escapeHtml(b.userId)} • Səbəb: ${escapeHtml(b.reason || "-")}</div>
-                  </div>
-                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess('blacklist', '${escapeHtml(b.userId)}')">Sil</button>
-                </div>
-              </div>
-            `
-            )
+            .map((b) => {
+              const blParts = [
+                '<div class="item-card">',
+                '<div class="item-top">',
+                "<div>",
+                '<div class="item-title">' + escapeHtml(b.username || b.userId) + "</div>",
+                '<div class="item-sub">ID: ' + escapeHtml(b.userId) + " • Səbəb: " + escapeHtml(b.reason || "-") + "</div>",
+                "</div>",
+                '<button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess(\'blacklist\', \'' + escapeHtml(b.userId) + "')\">Sil</button>",
+                "</div>",
+                "</div>"
+              ];
+              return blParts.join("");
+            })
             .join("");
         }
       }
