@@ -377,11 +377,7 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     "https://sado-protect.onrender.com"
   ).replace(/\/$/, "");
 
-  const escapedForLuaString = cleanScript
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r/g, "")
-    .replace(/\n/g, "\\n");
+  const b64Payload = Buffer.from(cleanScript, "utf8").toString("base64");
 
   return [
     `local d="" pcall(function() if gethwid then d=tostring(gethwid() or "") end end)`,
@@ -393,7 +389,11 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `if "${lockedHwid}"=="" and d~="" and "${safeKey}"~="" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid="..game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `local fn = loadstring("${escapedForLuaString}") if fn then task.spawn(fn) end`
+    `local b="${b64Payload}"`,
+    `local c="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"`,
+    `b=b:gsub("[^"..c.."=]","")`,
+    `local out=(b:gsub(".",function(x) if x=="=" then return "" end local r,f="",(c:find(x)-1) for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and "1" or "0") end return r end):gsub("%d%d%d?%d?%d?%d?%d?%d?",function(x) if #x~=8 then return "" end local n=0 for i=1,8 do n=n+(x:sub(i,i)=="1" and 2^(8-i) or 0) end return string.char(n) end))`,
+    `local fn=loadstring(out) if fn then task.spawn(fn) end`
   ].join("\n");
 };
 
@@ -3838,7 +3838,7 @@ const handleHttpRequest = async (req, res) => {
       const cleanUrl = sanitizeText(found.scriptUrl, "");
       const rawCode = found.sourceType === "file"
         ? String(found.scriptContent || "").trim()
-        : `pcall(function() game:HttpGet("${cleanUrl}") end)`;
+        : `local r=game:HttpGet("${cleanUrl}") local f=loadstring(r) if f then f() end`;
 
       const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, effectiveLockedHwid, found.id);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
