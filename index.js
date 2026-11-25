@@ -1059,7 +1059,7 @@ const getDashboardSnapshot = async () => {
   const displayGuild = guildId
     ? guildName && guildName !== "Sado Protect Hub"
       ? guildName
-      : "Sunucu seçilməyib"
+      : "Sunucu #" + guildId
     : "Sunucu seçilməyib";
 
   const rawDesignButtons =
@@ -1582,7 +1582,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </div>
           </div>
           <div class="btn-row">
-            <button type="button" class="btn btn-amber" id="connectGuildBotBtn">Botu Bağla və Paneli Yenilə</button>
+            <button type="button" class="btn btn-amber" id="connectGuildBotBtn" onclick="window.sadoConnectGuild()">Botu Bağla və Paneli Yenilə</button>
           </div>
         </div>
       </div>
@@ -1605,7 +1605,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </div>
           </div>
           <div class="btn-row">
-            <button type="button" class="btn btn-amber" id="createScriptBtn">Script Yarat</button>
+            <button type="button" class="btn btn-amber" id="createScriptBtn" onclick="window.sadoCreateScript()">Script Yarat</button>
           </div>
         </div>
 
@@ -1629,7 +1629,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </div>
           </div>
           <div class="btn-row">
-            <button type="button" class="btn btn-green" id="generateKeyBtn">Key Yarat</button>
+            <button type="button" class="btn btn-green" id="generateKeyBtn" onclick="window.sadoGenerateKey()">Key Yarat</button>
           </div>
         </div>
 
@@ -1662,10 +1662,71 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           </div>
 
           <div class="panel-heading">🎛️ Panel Butonları (Adını, Emojisini, Rəngini və Yerini Dəyişin)</div>
-          <div id="buttonsEditorContainer"></div>
+          <div id="buttonsEditorContainer">
+            <div class="button-config-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+                <strong>#1 • Redeem Key</strong>
+                <div class="btn-row">
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(0, -1)" disabled>▲ Yuxarı</button>
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(0, 1)">▼ Aşağı</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div><label>Buton Adı</label><input type="text" class="cfg-btn-label" value="Redeem Key" /></div>
+                <div><label>Emoji</label><input type="text" class="cfg-btn-emoji" value="🎟️" /></div>
+                <div><label>Rəng</label><select class="cfg-btn-style"><option value="Primary">Primary (Mavi)</option><option value="Success" selected>Success (Yaşıl)</option><option value="Danger">Danger (Qırmızı)</option><option value="Secondary">Secondary (Boz)</option></select></div>
+                <div style="display:flex;align-items:flex-end;padding-bottom:8px;"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;"><input type="checkbox" class="cfg-btn-enabled" style="width:auto;" checked /> Aktiv</label></div>
+              </div>
+            </div>
+            <div class="button-config-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+                <strong>#2 • Reset HWID</strong>
+                <div class="btn-row">
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(1, -1)">▲ Yuxarı</button>
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(1, 1)">▼ Aşağı</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div><label>Buton Adı</label><input type="text" class="cfg-btn-label" value="Reset HWID" /></div>
+                <div><label>Emoji</label><input type="text" class="cfg-btn-emoji" value="♻️" /></div>
+                <div><label>Rəng</label><select class="cfg-btn-style"><option value="Primary">Primary (Mavi)</option><option value="Success">Success (Yaşıl)</option><option value="Danger">Danger (Qırmızı)</option><option value="Secondary" selected>Secondary (Boz)</option></select></div>
+                <div style="display:flex;align-items:flex-end;padding-bottom:8px;"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;"><input type="checkbox" class="cfg-btn-enabled" style="width:auto;" checked /> Aktiv</label></div>
+              </div>
+            </div>
+            <div class="button-config-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+                <strong>#3 • Get Script</strong>
+                <div class="btn-row">
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(2, -1)">▲ Yuxarı</button>
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(2, 1)">▼ Aşağı</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div><label>Buton Adı</label><input type="text" class="cfg-btn-label" value="Get Script" /></div>
+                <div><label>Emoji</label><input type="text" class="cfg-btn-emoji" value="📜" /></div>
+                <div><label>Rəng</label><select class="cfg-btn-style"><option value="Primary" selected>Primary (Mavi)</option><option value="Success">Success (Yaşıl)</option><option value="Danger">Danger (Qırmızı)</option><option value="Secondary">Secondary (Boz)</option></select></div>
+                <div style="display:flex;align-items:flex-end;padding-bottom:8px;"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;"><input type="checkbox" class="cfg-btn-enabled" style="width:auto;" checked /> Aktiv</label></div>
+              </div>
+            </div>
+            <div class="button-config-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+                <strong>#4 • Status</strong>
+                <div class="btn-row">
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(3, -1)">▲ Yuxarı</button>
+                  <button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(3, 1)" disabled>▼ Aşağı</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div><label>Buton Adı</label><input type="text" class="cfg-btn-label" value="Status" /></div>
+                <div><label>Emoji</label><input type="text" class="cfg-btn-emoji" value="📡" /></div>
+                <div><label>Rəng</label><select class="cfg-btn-style"><option value="Primary">Primary (Mavi)</option><option value="Success">Success (Yaşıl)</option><option value="Danger">Danger (Qırmızı)</option><option value="Secondary" selected>Secondary (Boz)</option></select></div>
+                <div style="display:flex;align-items:flex-end;padding-bottom:8px;"><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;"><input type="checkbox" class="cfg-btn-enabled" style="width:auto;" checked /> Aktiv</label></div>
+              </div>
+            </div>
+          </div>
 
           <div class="btn-row" style="margin-top:14px;">
-            <button type="button" class="btn btn-amber" id="saveDesignBtn">💾 Ayarları Yadda Saxla</button>
+            <button type="button" class="btn btn-amber" id="saveDesignBtn" onclick="window.sadoSaveDesign()">💾 Ayarları Yadda Saxla</button>
           </div>
         </div>
       </div>
@@ -1687,7 +1748,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             </div>
           </div>
           <div class="btn-row">
-            <button type="button" class="btn btn-amber" id="addListEntryBtn">Əlavə Et</button>
+            <button type="button" class="btn btn-amber" id="addListEntryBtn" onclick="window.sadoAddListEntry()">Əlavə Et</button>
           </div>
           <div class="list-stack" id="listsContainer"></div>
         </div>
@@ -1761,14 +1822,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           escapeHtmlAttr(btn.label || "Buton") +
           "</strong>" +
           '<div class="btn-row">' +
-          '<button type="button" class="btn btn-ghost btn-move-up" data-move-up="' +
+          '<button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(' +
           idx +
-          '"' +
+          ', -1)"' +
           (idx === 0 ? " disabled" : "") +
           ">▲ Yuxarı</button>" +
-          '<button type="button" class="btn btn-ghost btn-move-down" data-move-down="' +
+          '<button type="button" class="btn btn-ghost" onclick="window.sadoMoveButton(' +
           idx +
-          '"' +
+          ', 1)"' +
           (idx === list.length - 1 ? " disabled" : "") +
           ">▼ Aşağı</button>" +
           "</div>" +
@@ -2145,71 +2206,59 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       showToast("Script əlavə olundu!");
     };
 
-    const createScriptBtn = document.getElementById("createScriptBtn");
-    if (createScriptBtn) {
-      createScriptBtn.onclick = () =>
-        handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput");
-    }
+    window.sadoCreateScript = () => {
+      handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput");
+    };
 
-    const generateKeyBtn = document.getElementById("generateKeyBtn");
-    if (generateKeyBtn) {
-      generateKeyBtn.addEventListener("click", async () => {
-        const scriptName = document.getElementById("keyScriptSelect")?.value || "Ümumi / Default";
-        const customKey = document.getElementById("customKeyInput")?.value.trim() || "";
-        const res = await callApi("/api/keys", "POST", { scriptName, customKey });
-        if (res.data) {
-          renderSnapshot(res.data);
-          const customInput = document.getElementById("customKeyInput");
-          if (customInput) customInput.value = "";
-        }
-        showToast(res.ok ? "Key yaradıldı!" : "Xəta: " + res.error);
-      });
-    }
+    window.sadoGenerateKey = async () => {
+      const scriptName = document.getElementById("keyScriptSelect")?.value || "Ümumi / Default";
+      const customKey = document.getElementById("customKeyInput")?.value.trim() || "";
+      const res = await callApi("/api/keys", "POST", { scriptName, customKey });
+      if (res.data) {
+        renderSnapshot(res.data);
+        const customInput = document.getElementById("customKeyInput");
+        if (customInput) customInput.value = "";
+      }
+      showToast(res.ok ? "Key yaradıldı!" : "Xəta: " + res.error);
+    };
 
-    const connectGuildBotBtn = document.getElementById("connectGuildBotBtn");
-    if (connectGuildBotBtn) {
-      connectGuildBotBtn.addEventListener("click", async () => {
-        const guildId = document.getElementById("guildIdInput")?.value.trim() || "";
-        const panelChannelId = document.getElementById("panelChannelIdInput")?.value.trim() || "";
-        const res = await callApi("/api/bot/connect", "POST", { guildId, panelChannelId });
-        if (res.data) renderSnapshot(res.data);
-        showToast(res.ok ? "Sunucu bağlandı və panel yeniləndi!" : "Xəta: " + res.error);
-      });
-    }
+    window.sadoConnectGuild = async () => {
+      const guildId = document.getElementById("guildIdInput")?.value.trim() || "";
+      const panelChannelId = document.getElementById("panelChannelIdInput")?.value.trim() || "";
+      showToast("Sunucu bağlanır...");
+      const res = await callApi("/api/bot/connect", "POST", { guildId, panelChannelId });
+      if (res.data) {
+        renderSnapshot(res.data);
+      } else if (guildId) {
+        const fallbackLabel = "Sunucu #" + guildId;
+        const statGuildEl = document.getElementById("statGuildName");
+        const guildBannerEl = document.getElementById("connectedGuildBanner");
+        if (statGuildEl) statGuildEl.textContent = fallbackLabel;
+        if (guildBannerEl) guildBannerEl.textContent = "Bağlanan Sunucu: " + fallbackLabel;
+      }
+      showToast(res.ok ? "Sunucu bağlandı və panel yeniləndi!" : "Xəta: " + res.error);
+    };
 
-    document.getElementById("buttonsEditorContainer").addEventListener("click", (ev) => {
-      const moveUpBtn = ev.target.closest("[data-move-up]");
-      const moveDownBtn = ev.target.closest("[data-move-down]");
-      const upAttr = moveUpBtn ? moveUpBtn.getAttribute("data-move-up") : undefined;
-      const downAttr = moveDownBtn ? moveDownBtn.getAttribute("data-move-down") : undefined;
-      const idx =
-        upAttr !== undefined
-          ? Number(upAttr)
-          : downAttr !== undefined
-          ? Number(downAttr)
-          : -1;
-      if (idx < 0) return;
-
+    window.sadoMoveButton = (idx, direction) => {
       const list = collectButtonsFromUi();
-      const swapIdx = upAttr !== undefined ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= list.length) return;
-
+      const swapIdx = idx + direction;
+      if (idx < 0 || swapIdx < 0 || swapIdx >= list.length) return;
       const temp = list[idx];
       list[idx] = list[swapIdx];
       list[swapIdx] = temp;
       const reordered = list.map((item, i) => ({ ...item, order: i + 1 }));
-      if (snapshotCache?.design) {
-        snapshotCache.design.buttons = reordered;
-      }
+      if (!snapshotCache) snapshotCache = { design: {} };
+      if (!snapshotCache.design) snapshotCache.design = {};
+      snapshotCache.design.buttons = reordered;
       renderButtonsEditor(reordered);
-    });
+    };
 
-    document.getElementById("saveDesignBtn").addEventListener("click", async () => {
+    window.sadoSaveDesign = async () => {
       const payload = {
-        title: document.getElementById("designTitleInput").value.trim(),
-        color: document.getElementById("designColorInput").value.trim(),
-        description: document.getElementById("designDescInput").value,
-        footer: document.getElementById("designFooterInput").value.trim(),
+        title: document.getElementById("designTitleInput")?.value.trim() || "",
+        color: document.getElementById("designColorInput")?.value.trim() || "#F59E0B",
+        description: document.getElementById("designDescInput")?.value || "",
+        footer: document.getElementById("designFooterInput")?.value.trim() || "",
         buttons: collectButtonsFromUi()
       };
       const res = await callApi("/api/design", "POST", payload);
@@ -2217,11 +2266,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       showToast(
         res.ok ? "Dizayn və buton ayarları yadda saxlanıldı!" : "Xəta: " + res.error
       );
-    });
+    };
 
-    document.getElementById("addListEntryBtn").addEventListener("click", async () => {
-      const value = document.getElementById("listTargetInput").value.trim();
-      const listType = document.getElementById("listTypeSelect").value;
+    window.sadoAddListEntry = async () => {
+      const value = document.getElementById("listTargetInput")?.value.trim() || "";
+      const listType = document.getElementById("listTypeSelect")?.value || "whitelist";
       if (!value) {
         showToast("Dəyər daxil edin!");
         return;
@@ -2229,28 +2278,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const res = await callApi("/api/lists", "POST", { listType, value });
       if (res.data) {
         renderSnapshot(res.data);
-        document.getElementById("listTargetInput").value = "";
+        const targetEl = document.getElementById("listTargetInput");
+        if (targetEl) targetEl.value = "";
       }
       showToast(res.ok ? "Siyahıya əlavə edildi!" : "Xəta: " + res.error);
-    });
+    };
 
     const initDashboard = async () => {
-      const mobileMenuBtn = document.getElementById("mobileMenuBtn");
-      const navButtons = [...document.querySelectorAll(".nav-btn[data-tab]")];
-
-      if (mobileMenuBtn && !mobileMenuBtn.dataset.bound) {
-        mobileMenuBtn.dataset.bound = "true";
-        mobileMenuBtn.addEventListener("click", window.sadoToggleMenu);
-      }
-
-      navButtons.forEach((btn) => {
-        if (!btn.dataset.bound) {
-          btn.dataset.bound = "true";
-          btn.addEventListener("click", () => {
-            window.sadoSelectTab(btn.dataset.tab);
-          });
-        }
-      });
       renderButtonsEditor([]);
       const res = await callApi("/api/dashboard");
       if (res.data) renderSnapshot(res.data);
