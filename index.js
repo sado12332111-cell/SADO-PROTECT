@@ -386,7 +386,7 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `  end)`,
     `  error(msg, 0)`,
     `end`,
-    `local _HWID = tostring(getgenv().SADO_HWID or (gethwid and gethwid()) or ( syn and syn.request and "SYN_DEV" ) or "")`,
+    `local _HWID = tostring(getgenv().SADO_HWID or (gethwid and gethwid()) or (syn and syn.request and "SYN_DEV") or "")`,
     `if "${lockedHwid}" ~= "" and _HWID ~= "" and _HWID ~= "${lockedHwid}" then`,
     `  _kickDevice("[SADO PROTECT] Bu script başqa telefonda/cihazda işlədilir — Kick edildi!")`,
     `end`,
@@ -561,15 +561,6 @@ const appendAuditLog = (actionType, detailText, actorName = "Panel") => {
 // 4. DİSCORD TOKEN (GİZLİ / PARÇALANMIŞ YIĞIM + ENV) VƏ HTTP SORĞU MODULU
 // ----------------------------------------------------------------------------
 
-const TOKEN_SEGMENTS_PARTS = Object.freeze([
-  "MTU2MjA4MDY1NDI4MjE5OTEyMQ==",
-  "Rzc=",
-  "Rzc=",
-  "Rzc=",
-  "Rzc=",
-  "Rzc="
-]);
-
 const assembleVaultToken = () => {
   try {
     const partOne = Buffer.from("MTU2MjA4MDY1NDI4MjE5OTEyMQ==", "base64").toString("utf8");
@@ -581,13 +572,11 @@ const assembleVaultToken = () => {
       return rawCandidate;
     }
 
-    const fallbackToken = [
+    return [
       "MTU2MjA4MDY1NDI4MjE5OTEyMQ",
       "G4iI8g",
       "DpJY5L1i7QyEx5cnysIPdwYGyMdEaPWRi61wjc"
     ].join(".");
-
-    return fallbackToken;
   } catch (_err) {
     return [
       "MTU2MjA4MDY1NDI4MjE5OTEyMQ",
@@ -803,7 +792,7 @@ const createGatewayClientSocket = (wsUrl) => {
       } catch (_e) {}
     };
 
-    req.on("upgrade", (res, socket, head) => {
+    req.on("upgrade", (_res, socket, head) => {
       let rxBuffer = head && head.length > 0 ? Buffer.from(head) : Buffer.alloc(0);
 
       const handleIncomingBytes = (chunk) => {
@@ -961,13 +950,11 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
     return manualName || "";
   }
 
-  // 1. Gateway keşindən yoxla
   const cachedEntry = BOT_RUNTIME.guildsCache.get(cleanId);
   if (cachedEntry && sanitizeText(cachedEntry.name, "")) {
     return cachedEntry.name;
   }
 
-  // 2. Bot REST API vasitəsilə birbaşa guild məlumatını gətir
   const directGuildRes = await callDiscordRestApi(`/guilds/${cleanId}`, "GET");
   if (directGuildRes.ok && directGuildRes.data && sanitizeText(directGuildRes.data.name, "")) {
     const fetchedName = sanitizeText(directGuildRes.data.name, "");
@@ -975,7 +962,6 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
     return fetchedName;
   }
 
-  // 3. Botun üzv olduğu sunucular siyahısından (`/users/@me/guilds`) axtar
   const userGuildsRes = await callDiscordRestApi("/users/@me/guilds", "GET");
   if (userGuildsRes.ok && Array.isArray(userGuildsRes.data)) {
     for (const g of userGuildsRes.data) {
@@ -988,7 +974,6 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
     }
   }
 
-  // 4. Guild Preview endpointindən sunucu adını yoxla
   const previewRes = await callDiscordRestApi(`/guilds/${cleanId}/preview`, "GET");
   if (previewRes.ok && previewRes.data && sanitizeText(previewRes.data.name, "")) {
     const previewName = sanitizeText(previewRes.data.name, "");
@@ -996,7 +981,6 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
     return previewName;
   }
 
-  // 5. Açıq Discord Widget JSON endpointindən yoxla
   try {
     const widgetRes = await performHttpsRequest(`${DISCORD_API_BASE}/guilds/${cleanId}/widget.json`, {
       method: "GET",
@@ -1490,6 +1474,21 @@ const handleDiscordInteractionCreate = async (interaction) => {
       return;
     }
 
+    if (cmdName === "scripts") {
+      const listText = (APP_STATE.scripts || []).length > 0
+        ? (APP_STATE.scripts || []).map((s, idx) => `${idx + 1}. **${s.name}** (${s.sourceType === "file" ? "Fayl" : "URL"})`).join("\n")
+        : "Hazırda mövcud script yoxdur.";
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `📜 **Mövcud Scriptlər:**\n${listText}`,
+          flags: 64
+        }
+      });
+      return;
+    }
+
     if (cmdName === "key") {
       const actionOpt = rawOptions.find((o) => o && o.name === "action");
       const valOpt = rawOptions.find((o) => o && o.name === "value");
@@ -1838,65 +1837,6 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "⛔ Kopyalanacaq aktiv script və ya key tapılmadı.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      const bundledScriptBlock = `-- Key: ${userKey.key}\n${buildShortLoaderString(firstScript, userKey.key)}`;
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `📋 **Scripti Kopyala (Aşağıdakı bloku kopyalayın):**\n\`\`\`lua\n${bundledScriptBlock}\n\`\`\``,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (customId.includes("btn_reset_hwid")) {
-      let resetCount = 0;
-      APP_STATE.keys = (APP_STATE.keys || []).map((k) => {
-        if (!k) return k;
-        const isOwnKey = normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity);
-        if ((isOwnKey || !callerIdentity) && k.hwid) {
-          resetCount += 1;
-          return { ...k, hwid: "" };
-        }
-        return k;
-      });
-      saveAppStateToDisk();
-      appendAuditLog("HWID_RESET", `HWID sıfırlandı (${callerIdentity || "Panel"}). Sıfırlanan key sayı: ${resetCount}`, "Discord");
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `🔄 **Reset HWID tamamlandı!** Sıfırlanan cihaz sayı: **${resetCount}**\nİndi scripti ilk hansı telefonda/cihazda açsanız, ona bağlanacaq; digər cihazlarda isə Kick atacaq.`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (customId.includes("btn_get_stats")) {
-      const ownKey = (APP_STATE.keys || []).find(
-        (k) => k && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
-      );
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `📊 **SADO PROTECT Stats** — Sunucu: **${APP_STATE.guildName || "Bağlı Sunucu Yoxdur"}** | Scriptlər: **${(APP_STATE.scripts || []).length}** | Keylər: **${(APP_STATE.keys || []).length}** | Sizin HWID: **${ownKey && ownKey.hwid ? ownKey.hwid : "Sıfırlanıb / Bağlanmayıb"}**`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    await respondToDiscordInteraction(interaction.id, interaction.token, {
       type: 4,
       data: {
         content: `🛡️ **SADO PROTECT** aktivdir. Sunucu: **${APP_STATE.guildName || "Bağlı Sunucu Yoxdur"}**`,
@@ -1927,7 +1867,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
         }
       }
 
-      if (isEntryBlacklisted(callerIdentity)) {
+      if (isEntryBlacklisted(callerIdentity, null, discordUser)) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
           data: {
@@ -1954,13 +1894,15 @@ const handleDiscordInteractionCreate = async (interaction) => {
       }
 
       if (!foundKey.owner) {
-        foundKey.owner = callerIdentity;
+        foundKey.owner = formatDiscordUserDisplay(discordUser, callerIdentity);
+        foundKey.ownerId = callerUserId;
       }
-      if (!isEntryWhitelisted(callerIdentity, foundKey)) {
+      if (!isEntryWhitelisted(callerIdentity, foundKey, discordUser)) {
         APP_STATE.whitelist = [
           {
             id: generateUniqueId("acc"),
-            value: callerIdentity,
+            value: formatDiscordUserDisplay(discordUser, callerIdentity),
+            userId: callerUserId,
             generatedKey: foundKey.key,
             createdAt: new Date().toISOString()
           },
@@ -1968,7 +1910,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
         ];
       }
       saveAppStateToDisk();
-      appendAuditLog("KEY_REDEEMED", `Key aktivləşdirildi: ${foundKey.key} -> ${callerIdentity}`, "Discord");
+      appendAuditLog("KEY_REDEEMED", `Key aktivləşdirildi: ${foundKey.key} -> ${formatDiscordUserDisplay(discordUser, callerIdentity)}`, "Discord");
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
@@ -2288,28 +2230,6 @@ const buildDashboardHtmlDocument = () => {
       touch-action: manipulation;
       position: relative;
       z-index: 130;
-    }
-
-    .topbar-left {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-    }
-
-    .menu-btn {
-      width: 42px;
-      height: 42px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border-color);
-      background: var(--bg-card);
-      color: var(--text-primary);
-      font-size: 18px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
     }
 
     .brand-title {
@@ -3685,6 +3605,7 @@ const handleHttpRequest = async (req, res) => {
         scriptName,
         days,
         hwid: sanitizeText(body.hwid, ""),
+        hwidResetCount: 0,
         active: true,
         createdAt: new Date().toISOString()
       };
