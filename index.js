@@ -277,7 +277,14 @@ const buildShortLoaderString = (scriptItem, keyString = "") => {
   ).replace(/\/$/, "");
   const scriptId = sanitizeText(scriptItem && scriptItem.id, "script");
   const targetUrl = `${baseOrigin}/raw/${encodeURIComponent(scriptId)}?key=${encodeURIComponent(cleanKey)}`;
-  return `getgenv().SADO_KEY="${cleanKey}";loadstring(game:HttpGet("${targetUrl}"))()`;
+  return [
+    `getgenv().SADO_KEY="${cleanKey}"`,
+    `local _d=tostring((gethwid and gethwid()) or getgenv().SADO_HWID or (syn and syn.request and "SYN") or (game and game.RbxAnalyticsService and pcall(function() return game.RbxAnalyticsService:GetClientId() end) and game.RbxAnalyticsService:GetClientId()) or "")`,
+    `local _u="${targetUrl}"..(_d~="" and ("&hwid="..tostring(_d)) or "")`,
+    `local _src=game:HttpGet(_u)`,
+    `local _fn=loadstring(_src)`,
+    `if _fn then return _fn() end`
+  ].join(";");
 };
 
 const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
@@ -294,6 +301,7 @@ const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
       req.headers["syn-fingerprint"] ||
       req.headers["krnl-hwid"] ||
       req.headers["flux-fingerprint"] ||
+      req.headers["fingerprint"] ||
       "",
     ""
   );
@@ -377,21 +385,24 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
 
   return [
     `-- [[ SADO PROTECT ANTI-LEAK & HWID SHIELD — ${sanitizeText(scriptName, "PROTECTED")} ]]`,
-    `local _K = tostring(getgenv().SADO_KEY or "${expectedKey}")`,
+    `local _K = tostring((getgenv and getgenv().SADO_KEY) or "${expectedKey}")`,
     `if _K == "" then error("[SADO PROTECT] Key tələb olunur — Script bloklandı!", 0) end`,
     `local function _kickDevice(msg)`,
     `  pcall(function()`,
-    `    local lp = game:GetService("Players").LocalPlayer`,
-    `    if lp then lp:Kick(msg) end`,
+    `    local lp = game and game:GetService("Players") and game:GetService("Players").LocalPlayer`,
+    `    if lp and lp.Kick then lp:Kick(msg) end`,
+    `  end)`,
+    `  pcall(function()`,
+    `    local sg = game and game:GetService("StarterGui")`,
+    `    if sg and sg.SetCore then`,
+    `      sg:SetCore("SendNotification", { Title = "SADO PROTECT", Text = msg, Duration = 6 })`,
+    `    end`,
     `  end)`,
     `  error(msg, 0)`,
     `end`,
-    `local _HWID = tostring(getgenv().SADO_HWID or (gethwid and gethwid()) or (syn and syn.request and "SYN_DEV") or "")`,
-    `if "${lockedHwid}" ~= "" and _HWID ~= "" and _HWID ~= "${lockedHwid}" then`,
+    `local _HWID = tostring((gethwid and gethwid()) or (getgenv and getgenv().SADO_HWID) or "")`,
+    `if "${lockedHwid}" ~= "" and _HWID ~= "" and tostring(_HWID):lower() ~= tostring("${lockedHwid}"):lower() then`,
     `  _kickDevice("[SADO PROTECT] Bu script başqa telefonda/cihazda işlədilir — Kick edildi!")`,
-    `end`,
-    `if hookfunction or clonefunction or getgc then`,
-    `  pcall(function() getgenv().SADO_KEY = nil end)`,
     `end`,
     `local _B = "${encodedPayload}"`,
     `local _CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"`,
@@ -3741,20 +3752,33 @@ const handleHttpRequest = async (req, res) => {
         return;
       }
 
-      if (!matchedKey || matchedKey.active === false || !isEntryWhitelisted(identityCheck, matchedKey)) {
+      if (!matchedKey || matchedKey.active === false) {
         sendJsonResponse(res, 403, {
           allowed: false,
           action: "kick",
-          reason: "Whitelist və ya aktiv Key yoxdur — script verilmir"
+          reason: "Aktiv Key tapılmadı — Kick edildi"
         });
         return;
       }
 
-      if (providedHwid) {
+      const whitelisted = isEntryWhitelisted(identityCheck, matchedKey);
+      if (!whitelisted && (APP_STATE.whitelist || []).length > 0) {
+        sendJsonResponse(res, 403, {
+          allowed: false,
+          action: "kick",
+          reason: "Whitelist-də deyilsiniz — Kick edildi"
+        });
+        return;
+      }
+
+      const effectiveHwid = extractDeviceHwidFromRequest(req, reqUrl, providedHwid);
+      if (effectiveHwid) {
         if (!sanitizeText(matchedKey.hwid, "")) {
-          matchedKey.hwid = providedHwid;
+          matchedKey.hwid = effectiveHwid;
           saveAppStateToDisk();
-        } else if (sanitizeText(matchedKey.hwid, "").toLowerCase() !== providedHwid.toLowerCase()) {
+          appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${effectiveHwid}`, "HWID-Lock");
+        } else if (sanitizeText(matchedKey.hwid, "").toLowerCase() !== effectiveHwid.toLowerCase()) {
+          appendAuditLog("HWID_KICK", `Başqa cihazdan giriş cəhdi bloklandı (${matchedKey.key})`, "HWID-Lock");
           sendJsonResponse(res, 403, {
             allowed: false,
             action: "kick",
@@ -3778,14 +3802,11 @@ const handleHttpRequest = async (req, res) => {
         return;
       }
 
-      const scriptPayload = targetScript.sourceType === "file"
-        ? wrapScriptWithAntiLeakProtection(targetScript.scriptContent || "", matchedKey.key, targetScript.name, matchedKey.hwid || "")
-        : wrapScriptWithAntiLeakProtection(
-            `loadstring(game:HttpGet("${targetScript.scriptUrl || ""}"))()`,
-            matchedKey.key,
-            targetScript.name,
-            matchedKey.hwid || ""
-          );
+      const rawScriptCode = targetScript.sourceType === "file"
+        ? (targetScript.scriptContent || "")
+        : `loadstring(game:HttpGet("${targetScript.scriptUrl || ""}"))()`;
+
+      const scriptPayload = wrapScriptWithAntiLeakProtection(rawScriptCode, matchedKey.key, targetScript.name, matchedKey.hwid || "");
 
       sendJsonResponse(res, 200, {
         allowed: true,
@@ -3810,14 +3831,16 @@ const handleHttpRequest = async (req, res) => {
       const matchedKey = providedKeyQuery ? findKeyByValueOrUser(providedKeyQuery) : null;
       const identityCheck = (matchedKey && matchedKey.owner) || providedKeyQuery;
 
-      if (
-        !matchedKey ||
-        matchedKey.active === false ||
-        isEntryBlacklisted(identityCheck, matchedKey) ||
-        !isEntryWhitelisted(identityCheck, matchedKey)
-      ) {
+      if (!matchedKey || matchedKey.active === false || isEntryBlacklisted(identityCheck, matchedKey)) {
         res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload("Etibarlı Key / Whitelist olmadan scriptə icazə verilmir — Kick edildi"));
+        res.end(buildDeviceKickLuaPayload("Etibarlı Key olmadan scriptə icazə verilmir — Kick edildi"));
+        return;
+      }
+
+      const whitelisted = isEntryWhitelisted(identityCheck, matchedKey);
+      if (!whitelisted && (APP_STATE.whitelist || []).length > 0) {
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(buildDeviceKickLuaPayload("Whitelist-də deyilsiniz — Kick edildi"));
         return;
       }
 
