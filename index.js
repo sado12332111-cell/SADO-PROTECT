@@ -399,10 +399,9 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `if lh == "" and d ~= "" and "${safeKey}" ~= "" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `local run = function()`,
+    `task.spawn(function()`,
     safeLongBracket,
-    `end`,
-    `task.spawn(function() pcall(run) end)`
+    `end)`
   ].join("\n");
 };
 
@@ -3847,7 +3846,7 @@ const handleHttpRequest = async (req, res) => {
       const cleanUrl = sanitizeText(found.scriptUrl, "");
       const rawCode = found.sourceType === "file"
         ? String(found.scriptContent || "").trim()
-        : `local r=game:HttpGet("${cleanUrl}") local f=loadstring(r) if f then f() end`;
+        : `pcall(function() game:HttpGet("${cleanUrl}") end)`;
 
       const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, effectiveLockedHwid, found.id);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
