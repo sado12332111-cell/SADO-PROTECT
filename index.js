@@ -136,6 +136,51 @@ const generateLicenseKeyString = () => {
   return `SADO-${segmentA}-${segmentB}-${segmentC}-${segmentD}`;
 };
 
+const normalizeAccessValue = (value) => sanitizeText(value, "").toLowerCase();
+
+const findKeyByValueOrUser = (rawIdentifier) => {
+  const cleanIdent = sanitizeText(rawIdentifier, "");
+  const lowerIdent = cleanIdent.toLowerCase();
+  return (APP_STATE.keys || []).find((k) => {
+    if (!k) return false;
+    const keyMatch = sanitizeText(k.key, "").toLowerCase() === lowerIdent;
+    const ownerMatch = sanitizeText(k.owner, "").toLowerCase() === lowerIdent;
+    const hwidMatch = sanitizeText(k.hwid, "").toLowerCase() === lowerIdent;
+    return keyMatch || ownerMatch || hwidMatch;
+  }) || null;
+};
+
+const isEntryWhitelisted = (identifier, keyObj = null) => {
+  const targets = new Set();
+  if (identifier) targets.add(normalizeAccessValue(identifier));
+  if (keyObj) {
+    if (keyObj.owner) targets.add(normalizeAccessValue(keyObj.owner));
+    if (keyObj.hwid) targets.add(normalizeAccessValue(keyObj.hwid));
+    if (keyObj.key) targets.add(normalizeAccessValue(keyObj.key));
+  }
+  const list = APP_STATE.whitelist || [];
+  return list.some((item) => item && targets.has(normalizeAccessValue(item.value)));
+};
+
+const isEntryBlacklisted = (identifier, keyObj = null) => {
+  const targets = new Set();
+  if (identifier) targets.add(normalizeAccessValue(identifier));
+  if (keyObj) {
+    if (keyObj.owner) targets.add(normalizeAccessValue(keyObj.owner));
+    if (keyObj.hwid) targets.add(normalizeAccessValue(keyObj.hwid));
+    if (keyObj.key) targets.add(normalizeAccessValue(keyObj.key));
+  }
+  const list = APP_STATE.blacklist || [];
+  return list.some((item) => item && targets.has(normalizeAccessValue(item.value)));
+};
+
+const buildShortLoaderString = (scriptItem, keyString = "") => {
+  const cleanKey = sanitizeText(keyString, "NO-KEY");
+  const rawUrl = sanitizeText(scriptItem && scriptItem.scriptUrl, "");
+  const targetUrl = rawUrl || `https://sado-protect.onrender.com/raw/${sanitizeText(scriptItem && scriptItem.id, "script")}`;
+  return `getgenv().SADO_KEY="${cleanKey}";loadstring(game:HttpGet("${targetUrl}"))()`;
+};
+
 const parseJsonSafe = (rawText, fallback = null) => {
   try {
     return JSON.parse(rawText);
@@ -1129,27 +1174,57 @@ const handleDiscordInteractionCreate = async (interaction) => {
 
   if (interactionType === 3) {
     const customId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+    const discordUser = (interaction.member && interaction.member.user) || interaction.user || {};
+    const callerUserId = sanitizeText(discordUser.id, "");
+    const callerUsername = sanitizeText(discordUser.username, "DiscordUser");
+    const callerIdentity = callerUserId || callerUsername;
 
     if (customId.includes("btn_redeem_key") || customId.includes("btn_get_key")) {
-      const generatedKey = generateLicenseKeyString();
-      APP_STATE.keys = [
-        {
+      if (isEntryBlacklisted(callerIdentity)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "🚫 Siz Blacklist-dəsiniz. Key verilmir.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (!isEntryWhitelisted(callerIdentity)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "❌ Key almaq üçün əvvəlcə Whitelist-ə əlavə olunmalısınız.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      let existingKey = (APP_STATE.keys || []).find(
+        (k) => k && k.active !== false && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
+      );
+
+      if (!existingKey) {
+        existingKey = {
           id: generateUniqueId("key"),
-          key: generatedKey,
+          key: generateLicenseKeyString(),
+          owner: callerIdentity,
           scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
-          days: 7,
+          days: 30,
           hwid: "",
           active: true,
           createdAt: new Date().toISOString()
-        },
-        ...(APP_STATE.keys || [])
-      ];
-      saveAppStateToDisk();
+        };
+        APP_STATE.keys = [existingKey, ...(APP_STATE.keys || [])];
+        saveAppStateToDisk();
+      }
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🎟️ Redeem Key hazırdır: \`${generatedKey}\` (7 gün)`,
+          content: `🎟️ **Sizin Key:** \`${existingKey.key}\`\n🔒 **HWID:** ${existingKey.hwid ? `\`${existingKey.hwid}\`` : "Hələ heç bir cihaza bağlanmayıb (ilk açılışda bağlanacaq)"}`,
           flags: 64
         }
       });
@@ -1169,14 +1244,30 @@ const handleDiscordInteractionCreate = async (interaction) => {
         return;
       }
 
-      const loaderLine = firstScript.sourceType === "file"
-        ? `-- Script: ${firstScript.name}\n-- Fayl: ${sanitizeText(firstScript.fileName, "script.lua")}\n${sanitizeText(firstScript.scriptContent, "-- Boş fayl")}`
-        : `loadstring(game:HttpGet("${sanitizeText(firstScript.scriptUrl, "")}"))()`;
+      const userKey = (APP_STATE.keys || []).find(
+        (k) => k && k.active !== false && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
+      );
+
+      if (isEntryBlacklisted(callerIdentity, userKey) || !isEntryWhitelisted(callerIdentity, userKey) || !userKey) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "⛔ **Giriş Qadağandır:** Script əldə etmək üçün Whitelist-də olmalı və aktiv Key-iniz olmalıdır.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const shortLoader = buildShortLoaderString(firstScript, userKey.key);
+      const hwidStatusLine = userKey.hwid
+        ? `📱 **Bağlı Cihaz (HWID):** \`${userKey.hwid}\``
+        : "📱 **Cihaz Kilidi:** İlk hansı telefonda/cihazda işlətsəniz, o cihaza tək olaraq bağlanacaq (başqa cihazda Kick atacaq).";
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `📜 **${firstScript.name}** scripti:\n\`\`\`lua\n${loaderLine.slice(0, 1800)}\n\`\`\``,
+          content: `🔑 **Script Key:**\n\`${userKey.key}\`\n\n📜 **Loadstring:**\n\`\`\`lua\n${shortLoader}\n\`\`\`\n${hwidStatusLine}`,
           flags: 64
         }
       });
@@ -1186,18 +1277,21 @@ const handleDiscordInteractionCreate = async (interaction) => {
     if (customId.includes("btn_reset_hwid")) {
       let resetCount = 0;
       APP_STATE.keys = (APP_STATE.keys || []).map((k) => {
-        if (k && k.hwid) {
+        if (!k) return k;
+        const isOwnKey = normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity);
+        if ((isOwnKey || !callerIdentity) && k.hwid) {
           resetCount += 1;
           return { ...k, hwid: "" };
         }
         return k;
       });
       saveAppStateToDisk();
+      appendAuditLog("HWID_RESET", `HWID sıfırlandı (${callerIdentity || "Panel"}). Sıfırlanan key sayı: ${resetCount}`, "Discord");
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🔄 Reset HWID tamamlandı. Sıfırlanan HWID sayı: **${resetCount}**`,
+          content: `🔄 **Reset HWID tamamlandı!** Sıfırlanan cihaz sayı: **${resetCount}**\nİndi scripti ilk hansı telefonda/cihazda açsanız, ona bağlanacaq; digər cihazlarda isə Kick atacaq.`,
           flags: 64
         }
       });
@@ -1205,10 +1299,13 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     if (customId.includes("btn_get_stats")) {
+      const ownKey = (APP_STATE.keys || []).find(
+        (k) => k && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
+      );
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `📊 **SADO PROTECT Stats** — Sunucu: **${APP_STATE.guildName || "Bağlı Sunucu Yoxdur"}** | Scriptlər: **${(APP_STATE.scripts || []).length}** | Keylər: **${(APP_STATE.keys || []).length}**`,
+          content: `📊 **SADO PROTECT Stats** — Sunucu: **${APP_STATE.guildName || "Bağlı Sunucu Yoxdur"}** | Scriptlər: **${(APP_STATE.scripts || []).length}** | Keylər: **${(APP_STATE.keys || []).length}** | Sizin HWID: **${ownKey && ownKey.hwid ? ownKey.hwid : "Sıfırlanıb / Bağlanmayıb"}**`,
           flags: 64
         }
       });
@@ -2276,12 +2373,92 @@ const buildDashboardHtmlDocument = () => {
         top.appendChild(delBtn);
 
         const durationText = Number(k.days) === 0 ? "Ömürlük" : String(k.days) + " gün";
+        const hwidText = k.hwid ? ("HWID: " + k.hwid) : "HWID: Bağlanmayıb (İlk cihaza bağlanacaq)";
+        const statusText = k.active === false ? "Deaktiv" : "Aktiv";
         const meta = document.createElement("div");
         meta.className = "item-meta";
-        meta.textContent = "Script: " + String(k.scriptName || "Ümumi") + " | Müddət: " + durationText;
+        meta.textContent =
+          "Status: " + statusText +
+          " | Sahibi: " + String(k.owner || "—") +
+          " | Script: " + String(k.scriptName || "Ümumi") +
+          " | Müddət: " + durationText +
+          " | " + hwidText;
 
         card.appendChild(top);
         card.appendChild(meta);
+        container.appendChild(card);
+      });
+    };
+
+    const renderAccessSection = (whitelistArr, blacklistArr) => {
+      const container = document.getElementById("accessListsContainer");
+      if (!container) return;
+      container.innerHTML = "";
+
+      const combined = [
+        ...(whitelistArr || []).map((item) => ({ ...item, listType: "whitelist" })),
+        ...(blacklistArr || []).map((item) => ({ ...item, listType: "blacklist" }))
+      ];
+
+      if (combined.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "item-card";
+        empty.textContent = "Whitelist və ya Blacklist qeydi yoxdur.";
+        container.appendChild(empty);
+        return;
+      }
+
+      combined.forEach((entry) => {
+        const card = document.createElement("div");
+        card.className = "item-card";
+
+        const top = document.createElement("div");
+        top.className = "item-header";
+
+        const valEl = document.createElement("div");
+        valEl.className = "item-name";
+        valEl.textContent = entry.value;
+
+        const rightBox = document.createElement("div");
+        rightBox.className = "btn-row";
+
+        const badge = document.createElement("span");
+        badge.className = "pill";
+        badge.textContent = entry.listType === "whitelist" ? "WHITELIST" : "BLACKLIST";
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn btn-danger btn-sm";
+        removeBtn.textContent = entry.listType === "whitelist" ? "Unwhitelist" : "Sil";
+        removeBtn.addEventListener("click", async () => {
+          try {
+            await apiRequest(
+              "/api/access/" + encodeURIComponent(entry.listType) + "/" + encodeURIComponent(entry.id),
+              "DELETE"
+            );
+            showToast(entry.listType === "whitelist" ? "Unwhitelist edildi — giriş bağlandı" : "Qeyd silindi");
+            await refreshDashboardSnapshot();
+          } catch (err) {
+            showToast(err.message);
+          }
+        });
+
+        rightBox.appendChild(badge);
+        rightBox.appendChild(removeBtn);
+
+        top.appendChild(valEl);
+        top.appendChild(rightBox);
+
+        if (entry.generatedKey) {
+          const keyInfo = document.createElement("div");
+          keyInfo.className = "item-meta";
+          keyInfo.textContent = "Avto Key: " + entry.generatedKey;
+          card.appendChild(top);
+          card.appendChild(keyInfo);
+        } else {
+          card.appendChild(top);
+        }
+
         container.appendChild(card);
       });
     };
@@ -2890,17 +3067,48 @@ const handleHttpRequest = async (req, res) => {
         return;
       }
 
+      let generatedKeyValue = "";
+      if (listType === "whitelist") {
+        generatedKeyValue = generateLicenseKeyString();
+        const autoKeyRecord = {
+          id: generateUniqueId("key"),
+          key: generatedKeyValue,
+          owner: val,
+          scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
+          days: 30,
+          hwid: "",
+          active: true,
+          createdAt: new Date().toISOString()
+        };
+        APP_STATE.keys = [autoKeyRecord, ...(APP_STATE.keys || [])];
+      } else {
+        APP_STATE.whitelist = (APP_STATE.whitelist || []).filter(
+          (item) => item && normalizeAccessValue(item.value) !== normalizeAccessValue(val)
+        );
+        APP_STATE.keys = (APP_STATE.keys || []).map((k) => {
+          if (k && normalizeAccessValue(k.owner) === normalizeAccessValue(val)) {
+            return { ...k, active: false };
+          }
+          return k;
+        });
+      }
+
       const entry = {
         id: generateUniqueId("acc"),
         value: val,
+        generatedKey: generatedKeyValue,
         createdAt: new Date().toISOString()
       };
 
       APP_STATE[listType] = [entry, ...(APP_STATE[listType] || [])];
       saveAppStateToDisk();
-      appendAuditLog("ACCESS_ADDED", `${listType.toUpperCase()} əlavə edildi: ${val}`, "Dashboard");
+      appendAuditLog(
+        "ACCESS_ADDED",
+        `${listType.toUpperCase()} əlavə edildi: ${val}${generatedKeyValue ? ` | Key: ${generatedKeyValue}` : ""}`,
+        "Dashboard"
+      );
 
-      sendJsonResponse(res, 201, { ok: true, entry });
+      sendJsonResponse(res, 201, { ok: true, entry, generatedKey: generatedKeyValue });
       return;
     }
 
@@ -2908,9 +3116,100 @@ const handleHttpRequest = async (req, res) => {
       const parts = pathname.replace("/api/access/", "").split("/");
       const listType = parts[0] === "blacklist" ? "blacklist" : "whitelist";
       const entryId = sanitizeText(parts[1] || "", "");
+      const targetEntry = (APP_STATE[listType] || []).find((item) => item && item.id === entryId);
+
       APP_STATE[listType] = (APP_STATE[listType] || []).filter((item) => item && item.id !== entryId);
+
+      if (listType === "whitelist" && targetEntry && targetEntry.value) {
+        const targetNorm = normalizeAccessValue(targetEntry.value);
+        const stillWhitelisted = (APP_STATE.whitelist || []).some(
+          (w) => w && normalizeAccessValue(w.value) === targetNorm
+        );
+        if (!stillWhitelisted) {
+          APP_STATE.keys = (APP_STATE.keys || []).filter(
+            (k) => k && normalizeAccessValue(k.owner) !== targetNorm && sanitizeText(k.key, "") !== sanitizeText(targetEntry.generatedKey, "")
+          );
+        }
+      }
+
       saveAppStateToDisk();
+      appendAuditLog(
+        "ACCESS_REMOVED",
+        `${listType.toUpperCase()} silindi: ${targetEntry ? targetEntry.value : entryId}`,
+        "Dashboard"
+      );
       sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/script/verify") {
+      const body = await parseRequestJsonBody(req);
+      const providedKey = sanitizeText(body.key, "");
+      const providedHwid = sanitizeText(body.hwid, "");
+      const providedUser = sanitizeText(body.user, "");
+      const scriptIdOrName = sanitizeText(body.scriptId || body.scriptName, "");
+
+      const matchedKey = findKeyByValueOrUser(providedKey || providedUser || providedHwid);
+      const identityCheck = providedUser || (matchedKey && matchedKey.owner) || providedHwid;
+
+      if (isEntryBlacklisted(identityCheck, matchedKey)) {
+        sendJsonResponse(res, 403, {
+          allowed: false,
+          action: "kick",
+          reason: "Blacklist-dəsiniz — Kick edildi"
+        });
+        return;
+      }
+
+      if (!matchedKey || matchedKey.active === false || !isEntryWhitelisted(identityCheck, matchedKey)) {
+        sendJsonResponse(res, 403, {
+          allowed: false,
+          action: "kick",
+          reason: "Whitelist və ya aktiv Key yoxdur — script verilmir"
+        });
+        return;
+      }
+
+      if (providedHwid) {
+        if (!sanitizeText(matchedKey.hwid, "")) {
+          matchedKey.hwid = providedHwid;
+          saveAppStateToDisk();
+        } else if (sanitizeText(matchedKey.hwid, "").toLowerCase() !== providedHwid.toLowerCase()) {
+          sendJsonResponse(res, 403, {
+            allowed: false,
+            action: "kick",
+            reason: "Bu key başqa cihaza/telefona bağlıdır — Kick edildi"
+          });
+          return;
+        }
+      }
+
+      const targetScript =
+        (APP_STATE.scripts || []).find(
+          (s) =>
+            s &&
+            (s.id === scriptIdOrName ||
+              sanitizeText(s.name, "").toLowerCase() === scriptIdOrName.toLowerCase() ||
+              sanitizeText(s.name, "").toLowerCase() === sanitizeText(matchedKey.scriptName, "").toLowerCase())
+        ) || (APP_STATE.scripts || [])[0] || null;
+
+      if (!targetScript) {
+        sendJsonResponse(res, 404, { allowed: false, action: "kick", reason: "Script tapılmadı" });
+        return;
+      }
+
+      const scriptPayload = targetScript.sourceType === "file"
+        ? (targetScript.scriptContent || "")
+        : buildShortLoaderString(targetScript, matchedKey.key);
+
+      sendJsonResponse(res, 200, {
+        allowed: true,
+        action: "allow",
+        key: matchedKey.key,
+        hwid: matchedKey.hwid || "",
+        scriptName: targetScript.name,
+        script: scriptPayload
+      });
       return;
     }
 
