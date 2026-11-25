@@ -3783,7 +3783,8 @@ const handleHttpRequest = async (req, res) => {
       const scId = sanitizeText(pathname.replace("/raw/", ""), "");
       const found = (APP_STATE.scripts || []).find((s) => s && s.id === scId);
       if (!found) {
-        sendJsonResponse(res, 404, { error: "Script tapılmadı" });
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(buildDeviceKickLuaPayload("Script tapılmadı — Kick edildi"));
         return;
       }
 
@@ -3792,14 +3793,14 @@ const handleHttpRequest = async (req, res) => {
       const identityCheck = (matchedKey && matchedKey.owner) || providedKeyQuery;
 
       if (!matchedKey || matchedKey.active === false || isEntryBlacklisted(identityCheck, matchedKey)) {
-        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
         res.end(buildDeviceKickLuaPayload("Etibarlı Key olmadan scriptə icazə verilmir — Kick edildi"));
         return;
       }
 
       const whitelisted = isEntryWhitelisted(identityCheck, matchedKey);
       if (!whitelisted && (APP_STATE.whitelist || []).length > 0) {
-        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
         res.end(buildDeviceKickLuaPayload("Whitelist-də deyilsiniz — Kick edildi"));
         return;
       }
@@ -3813,14 +3814,15 @@ const handleHttpRequest = async (req, res) => {
         appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${incomingDeviceHwid}`, "HWID-Lock");
       } else if (boundHwid.toLowerCase() !== incomingDeviceHwid.toLowerCase()) {
         appendAuditLog("HWID_KICK", `Başqa cihazdan giriş cəhdi bloklandı (${matchedKey.key})`, "HWID-Lock");
-        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
         res.end(buildDeviceKickLuaPayload("Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi"));
         return;
       }
 
+      const cleanUrl = sanitizeText(found.scriptUrl, "");
       const rawCode = found.sourceType === "file"
-        ? (found.scriptContent || "")
-        : `loadstring(game:HttpGet("${found.scriptUrl || ""}"))()`;
+        ? String(found.scriptContent || "").trim()
+        : `local fn, err = loadstring(game:HttpGet("${cleanUrl}"))\nif fn then fn() else warn("[SADO PROTECT] Script yuklenme xetasi:", err) end`;
 
       const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, matchedKey.hwid || incomingDeviceHwid);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
