@@ -326,22 +326,39 @@ const appendAuditLog = (actionType, detailText, actorName = "Panel") => {
 // 4. DİSCORD TOKEN (GİZLİ / PARÇALANMIŞ YIĞIM + ENV) VƏ HTTP SORĞU MODULU
 // ----------------------------------------------------------------------------
 
-const TOKEN_SEGMENTS_B64 = Object.freeze([
-  "TVRVeU1qQTBNRFF5TkRJNE1qSTFNVFF5TVRJd1h6",
-  "RzRpSThnLkRwSlk1TDFpN1F5RXg1Y255c0lQZHdZ",
-  "R3lNZEVhUFdSaTYxd2pj"
+const TOKEN_SEGMENTS_PARTS = Object.freeze([
+  "MTU2MjA4MDY1NDI4MjE5OTEyMQ==",
+  "Rzc=",
+  "Rzc=",
+  "Rzc=",
+  "Rzc=",
+  "Rzc="
 ]);
 
 const assembleVaultToken = () => {
   try {
-    const joinedB64 = TOKEN_SEGMENTS_B64.join("");
-    const decoded = Buffer.from(joinedB64, "base64").toString("utf8").trim();
-    if (/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{10,}$/.test(decoded)) {
-      return decoded;
+    const partOne = Buffer.from("TVRVeU1qQTBNRFF5TkRJNE1qSTFNVFF5TVRJd1h6", "base64").toString("utf8");
+    const partTwo = Buffer.from("RzRpSThnLkRwSlk1TDFpN1F5RXg1Y255c0lQZHdZ", "base64").toString("utf8");
+    const partThree = Buffer.from("R3lNZEVhUFdSaTYxd2pj", "base64").toString("utf8");
+    const rawCandidate = `${partOne}${partTwo}${partThree}`.trim();
+
+    if (/^[A-Za-z0-9_-]{18,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}$/.test(rawCandidate)) {
+      return rawCandidate;
     }
-    return decoded;
+
+    const fallbackToken = [
+      "MTU2MjA4MDY1NDI4MjE5OTEyMQ",
+      "G4iI8g",
+      "DpJY5L1i7QyEx5cnysIPdwYGyMdEaPWRi61wjc"
+    ].join(".");
+
+    return fallbackToken;
   } catch (_err) {
-    return "";
+    return [
+      "MTU2MjA4MDY1NDI4MjE5OTEyMQ",
+      "G4iI8g",
+      "DpJY5L1i7QyEx5cnysIPdwYGyMdEaPWRi61wjc"
+    ].join(".");
   }
 };
 
@@ -766,6 +783,10 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
     !/^Sunucu\s*#?\d+$/i.test(sanitizeText(APP_STATE.guildName, ""))
   ) {
     return sanitizeText(APP_STATE.guildName, "");
+  }
+
+  if (BOT_RUNTIME.connected || BOT_RUNTIME.botUserId) {
+    return `Sunucu (${cleanId.slice(-4)})`;
   }
 
   return "";
@@ -1900,7 +1921,9 @@ const buildDashboardHtmlDocument = () => {
         top: 71px;
         left: 0;
         bottom: 0;
-        z-index: 50;
+        z-index: 95;
+        width: 260px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
         transform: translateX(-100%);
         transition: transform 0.2s ease;
       }
@@ -2596,12 +2619,32 @@ const buildDashboardHtmlDocument = () => {
       const mobileMenuBtn = document.getElementById("mobileMenuBtn");
       const sidebarNav = document.getElementById("sidebarNav");
 
+      const toggleMobileDrawer = (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        if (!sidebarNav) return;
+        sidebarNav.classList.toggle("open");
+      };
+
       if (mobileMenuBtn && sidebarNav) {
-        mobileMenuBtn.addEventListener("click", () => sidebarNav.classList.toggle("open"));
+        mobileMenuBtn.addEventListener("click", toggleMobileDrawer);
+        mobileMenuBtn.addEventListener("touchend", toggleMobileDrawer, { passive: false });
+
+        document.addEventListener("click", (evt) => {
+          if (!sidebarNav.classList.contains("open")) return;
+          const clickedInsideSidebar = sidebarNav.contains(evt.target);
+          const clickedMenuBtn = mobileMenuBtn.contains(evt.target);
+          if (!clickedInsideSidebar && !clickedMenuBtn) {
+            sidebarNav.classList.remove("open");
+          }
+        });
       }
 
       document.querySelectorAll(".nav-item").forEach((navBtn) => {
-        navBtn.addEventListener("click", () => {
+        navBtn.addEventListener("click", (evt) => {
+          evt.preventDefault();
           const targetTab = navBtn.getAttribute("data-tab");
           document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
           document.querySelectorAll(".tab-panel").forEach((el) => el.classList.remove("active"));
@@ -2627,17 +2670,30 @@ const buildDashboardHtmlDocument = () => {
       const connectBtn = document.getElementById("connectBotBtn");
       if (connectBtn) {
         connectBtn.addEventListener("click", async () => {
-          const guildIdVal = (document.getElementById("guildIdInput") || {}).value || "";
-          const channelIdVal = (document.getElementById("panelChannelIdInput") || {}).value || "";
+          const guildIdVal = ((document.getElementById("guildIdInput") || {}).value || "").trim();
+          const channelIdVal = ((document.getElementById("panelChannelIdInput") || {}).value || "").trim();
           try {
             const res = await apiRequest("/api/bot/connect", "POST", {
               guildId: guildIdVal,
               panelChannelId: channelIdVal
             });
-            showToast("Bağlandı: " + ((res.guild && res.guild.guildName) || "Sunucu"));
+            showToast("Bağlandı: " + ((res.guild && (res.guild.guildName || res.guild.displayName)) || "Sunucu"));
             await refreshDashboardSnapshot();
           } catch (err) {
             showToast(err.message);
+          }
+        });
+      }
+
+      const guildIdLiveInput = document.getElementById("guildIdInput");
+      if (guildIdLiveInput) {
+        guildIdLiveInput.addEventListener("change", async () => {
+          const typedId = (guildIdLiveInput.value || "").trim();
+          if (/^\d{15,22}$/.test(typedId)) {
+            try {
+              await apiRequest("/api/bot/connect", "POST", { guildId: typedId });
+              await refreshDashboardSnapshot();
+            } catch (_err) {}
           }
         });
       }
