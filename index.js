@@ -2569,41 +2569,58 @@ app.put("/api/scripts/:id", async (req, res) => {
 });
 
 app.post("/api/scripts/:id/activate", async (req, res) => {
-  const scriptId = String(req.params.id || "").trim();
-  const target = APP_STATE.scripts.find((s) => s.id === scriptId);
-  if (!target) {
-    res.status(404).json({
-      ok: false,
-      error: "Script tapılmadı",
+  try {
+    const scriptId = String(req.params.id || "").trim();
+    const target = APP_STATE.scripts.find((s) => s.id === scriptId);
+    if (!target) {
+      res.status(404).json({
+        ok: false,
+        error: "Script tapılmadı",
+        data: buildPublicSnapshot()
+      });
+      return;
+    }
+
+    APP_STATE.bot.activeScriptId = target.id;
+    savePersistentState();
+
+    if (APP_STATE.bot.panelChannelId) {
+      await deployOrRefreshDiscordPanel(APP_STATE.bot.panelChannelId, target.id);
+    }
+
+    res.status(200).json({
+      ok: true,
       data: buildPublicSnapshot()
     });
-    return;
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message || "Script panelə bağlanmadı",
+      data: buildPublicSnapshot()
+    });
   }
-app.delete("/api/scripts/:id", async (req, res) => {
-  const scriptId = String(req.params.id || "").trim();
-  APP_STATE.scripts = APP_STATE.scripts.filter((s) => s.id !== scriptId);
-  if (APP_STATE.bot.activeScriptId === scriptId) {
-    APP_STATE.bot.activeScriptId = APP_STATE.scripts[0] ? APP_STATE.scripts[0].id : "";
-  }
-  savePersistentState();
-  await registerSlashCommands();
-  res.status(200).json({
-    ok: true,
-    data: buildPublicSnapshot()
-  });
 });
 
-app.delete("/api/scripts/:id", (req, res) => {
-  const scriptId = String(req.params.id || "").trim();
-  APP_STATE.scripts = APP_STATE.scripts.filter((s) => s.id !== scriptId);
-  if (APP_STATE.bot.activeScriptId === scriptId) {
-    APP_STATE.bot.activeScriptId = APP_STATE.scripts[0] ? APP_STATE.scripts[0].id : "";
+app.delete("/api/scripts/:id", async (req, res) => {
+  try {
+    const scriptId = String(req.params.id || "").trim();
+    APP_STATE.scripts = APP_STATE.scripts.filter((s) => s.id !== scriptId);
+    if (APP_STATE.bot.activeScriptId === scriptId) {
+      APP_STATE.bot.activeScriptId = APP_STATE.scripts[0] ? APP_STATE.scripts[0].id : "";
+    }
+    savePersistentState();
+    await registerSlashCommands();
+    res.status(200).json({
+      ok: true,
+      data: buildPublicSnapshot()
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message || "Script silinmədi",
+      data: buildPublicSnapshot()
+    });
   }
-  savePersistentState();
-  res.status(200).json({
-    ok: true,
-    data: buildPublicSnapshot()
-  });
 });
 
 app.get("/raw/:id", (req, res) => {
