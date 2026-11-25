@@ -1,5 +1,4 @@
 const express = require("express");
-const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -2321,7 +2320,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 const app = express();
 
-app.use(cors());
+const applyCorsHeaders = (req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+};
+
+app.use(applyCorsHeaders);
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
