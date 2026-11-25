@@ -271,9 +271,55 @@ const formatRemainingKeyTime = (keyObj) => {
 
 const buildShortLoaderString = (scriptItem, keyString = "") => {
   const cleanKey = sanitizeText(keyString, "NO-KEY");
-  const rawUrl = sanitizeText(scriptItem && scriptItem.scriptUrl, "");
-  const targetUrl = rawUrl || `https://sado-protect.onrender.com/raw/${sanitizeText(scriptItem && scriptItem.id, "script")}?key=${encodeURIComponent(cleanKey)}`;
+  const baseOrigin = sanitizeText(
+    process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "https://sado-protect.onrender.com",
+    "https://sado-protect.onrender.com"
+  ).replace(/\/$/, "");
+  const scriptId = sanitizeText(scriptItem && scriptItem.id, "script");
+  const targetUrl = `${baseOrigin}/raw/${encodeURIComponent(scriptId)}?key=${encodeURIComponent(cleanKey)}`;
   return `getgenv().SADO_KEY="${cleanKey}";loadstring(game:HttpGet("${targetUrl}"))()`;
+};
+
+const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
+  const direct = sanitizeText(explicitHwid, "");
+  if (direct) return direct;
+
+  const queryHwid = sanitizeText(reqUrl && reqUrl.searchParams ? reqUrl.searchParams.get("hwid") : "", "");
+  if (queryHwid) return queryHwid;
+
+  const headerHwid = sanitizeText(
+    req.headers["x-hwid"] ||
+      req.headers["x-fingerprint"] ||
+      req.headers["roblox-id"] ||
+      req.headers["syn-fingerprint"] ||
+      req.headers["krnl-hwid"] ||
+      req.headers["flux-fingerprint"] ||
+      "",
+    ""
+  );
+  if (headerHwid) return headerHwid;
+
+  const ua = sanitizeText(req.headers["user-agent"], "unknown-client");
+  const ip = sanitizeText(req.headers["x-forwarded-for"] || (req.socket && req.socket.remoteAddress) || "unknown-ip", "");
+  const firstIp = ip.split(",")[0].trim();
+  return crypto
+    .createHash("sha256")
+    .update(`${ua}|${firstIp}`)
+    .digest("hex")
+    .slice(0, 24)
+    .toUpperCase();
+};
+
+const buildDeviceKickLuaPayload = (reasonText = "Bu key başqa cihaza/telefona bağlıdır — Kick edildi") => {
+  const safeReason = sanitizeText(reasonText, "Bu key başqa cihaza/telefona bağlıdır — Kick edildi").replace(/"/g, '\\"');
+  return [
+    `-- [[ SADO PROTECT HWID LOCK ]]`,
+    `pcall(function()`,
+    `  local lp = game:GetService("Players").LocalPlayer`,
+    `  if lp then lp:Kick("${safeReason}") end`,
+    `end)`,
+    `error("${safeReason}", 0)`
+  ].join("\n");
 };
 
 const formatDiscordUserDisplay = (userObj = {}, fallbackValue = "") => {
@@ -312,27 +358,27 @@ const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") =>
       .filter(Boolean);
   }
   return res.data
-    .map((m) => {
-      const u = (m && m.user) || {};
-      if (!u.id) return null;
-      const displayLabel = formatDiscordUserDisplay(u);
-      return {
-        name: displayLabel.slice(0, 100),
-        value: String(u.id)
-      };
-    })
-    .filter(Boolean);
-};
-
-const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT") => {
+const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT", boundHwid = "") => {
   const cleanScript = String(rawCodeText || "");
   const encodedPayload = Buffer.from(cleanScript, "utf8").toString("base64");
   const expectedKey = sanitizeText(keyString, "");
+  const lockedHwid = sanitizeText(boundHwid, "");
 
   return [
-    `-- [[ SADO PROTECT ANTI-LEAK SHIELD — ${sanitizeText(scriptName, "PROTECTED")} ]]`,
+    `-- [[ SADO PROTECT ANTI-LEAK & HWID SHIELD — ${sanitizeText(scriptName, "PROTECTED")} ]]`,
     `local _K = tostring(getgenv().SADO_KEY or "${expectedKey}")`,
     `if _K == "" then error("[SADO PROTECT] Key tələb olunur — Script bloklandı!", 0) end`,
+    `local function _kickDevice(msg)`,
+    `  pcall(function()`,
+    `    local lp = game:GetService("Players").LocalPlayer`,
+    `    if lp then lp:Kick(msg) end`,
+    `  end)`,
+    `  error(msg, 0)`,
+    `end`,
+    `local _HWID = tostring(getgenv().SADO_HWID or (gethwid and gethwid()) or ( syn and syn.request and "SYN_DEV" ) or "")`,
+    `if "${lockedHwid}" ~= "" and _HWID ~= "" and _HWID ~= "${lockedHwid}" then`,
+    `  _kickDevice("[SADO PROTECT] Bu script başqa telefonda/cihazda işlədilir — Kick edildi!")`,
+    `end`,
     `if hookfunction or clonefunction or getgc then`,
     `  pcall(function() getgenv().SADO_KEY = nil end)`,
     `end`,
@@ -3896,11 +3942,12 @@ const handleHttpRequest = async (req, res) => {
       }
 
       const scriptPayload = targetScript.sourceType === "file"
-        ? wrapScriptWithAntiLeakProtection(targetScript.scriptContent || "", matchedKey.key, targetScript.name)
+        ? wrapScriptWithAntiLeakProtection(targetScript.scriptContent || "", matchedKey.key, targetScript.name, matchedKey.hwid || "")
         : wrapScriptWithAntiLeakProtection(
             `loadstring(game:HttpGet("${targetScript.scriptUrl || ""}"))()`,
             matchedKey.key,
-            targetScript.name
+            targetScript.name,
+            matchedKey.hwid || ""
           );
 
       sendJsonResponse(res, 200, {
@@ -3933,7 +3980,21 @@ const handleHttpRequest = async (req, res) => {
         !isEntryWhitelisted(identityCheck, matchedKey)
       ) {
         res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end('-- [[ SADO PROTECT ]] Etibarlı Key / Whitelist olmadan script məzmununa icazə verilmir!');
+        res.end(buildDeviceKickLuaPayload("Etibarlı Key / Whitelist olmadan scriptə icazə verilmir — Kick edildi"));
+        return;
+      }
+
+      const incomingDeviceHwid = extractDeviceHwidFromRequest(req, reqUrl, "");
+      const boundHwid = sanitizeText(matchedKey.hwid, "");
+
+      if (!boundHwid) {
+        matchedKey.hwid = incomingDeviceHwid;
+        saveAppStateToDisk();
+        appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${incomingDeviceHwid}`, "HWID-Lock");
+      } else if (boundHwid.toLowerCase() !== incomingDeviceHwid.toLowerCase()) {
+        appendAuditLog("HWID_KICK", `Başqa cihazdan giriş cəhdi bloklandı (${matchedKey.key})`, "HWID-Lock");
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(buildDeviceKickLuaPayload("Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi"));
         return;
       }
 
@@ -3941,7 +4002,7 @@ const handleHttpRequest = async (req, res) => {
         ? (found.scriptContent || "")
         : `loadstring(game:HttpGet("${found.scriptUrl || ""}"))()`;
 
-      const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name);
+      const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, matchedKey.hwid || incomingDeviceHwid);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
       res.end(protectedCode);
       return;
