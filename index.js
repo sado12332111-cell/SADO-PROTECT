@@ -149,16 +149,6 @@ const generateLicenseKeyString = () => {
   return `SADO-${segmentA}-${segmentB}-${segmentC}-${segmentD}`;
 };
 
-const escapeHtml = (input) => {
-  const text = input === null || input === undefined ? "" : String(input);
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-};
-
 const parseJsonSafe = (rawText, fallback = null) => {
   try {
     return JSON.parse(rawText);
@@ -1103,6 +1093,21 @@ const handleDiscordInteractionCreate = async (interaction) => {
           name: scName,
           value: scName
         };
+      });
+
+    await respondToDiscordInteraction(interaction.id, interaction.token, {
+      type: 8,
+      data: {
+        choices: filteredChoices
+      }
+    });
+    return;
+  }
+
+  // Type 3: Message Component (Button clicks)
+  if (interactionType === 3) {
+    const customId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+
     if (customId.includes("btn_redeem_key") || customId.includes("btn_get_key")) {
       const generatedKey = generateLicenseKeyString();
       APP_STATE.keys = [
