@@ -38,40 +38,40 @@ const STATE_FILE_PATH = path.join(DATA_DIR_PATH, "sado_protect_state.json");
 
 const DEFAULT_PANEL_DESIGN = Object.freeze({
   title: "SADO PROTECT — Script & Key Paneli",
-  description: "Aşağıdakı düymələrdən istifadə edərək key ala, script yükləyə və ya statusu yoxlaya bilərsiniz.",
+  description: "Aşağıdakı düymələrdən istifadə edərək key aktivləşdirə, script ala, HWID sıfırlaya və ya statistikaya baxa bilərsiniz.",
   color: "#f59e0b",
   footerText: "SADO PROTECT Enterprise Security",
   thumbnailUrl: "",
   imageUrl: "",
   buttons: [
     {
-      id: "btn_get_key",
-      label: "Key Al",
-      emoji: "🔑",
+      id: "btn_redeem_key",
+      label: "Redeem Key",
+      emoji: "🎟️",
       style: "primary",
       enabled: true,
       order: 1
     },
     {
       id: "btn_get_script",
-      label: "Script Al",
+      label: "Get Script",
       emoji: "📜",
       style: "success",
       enabled: true,
       order: 2
     },
     {
-      id: "btn_check_status",
-      label: "Status Yoxla",
-      emoji: "🛡️",
+      id: "btn_reset_hwid",
+      label: "Reset HWID",
+      emoji: "🔄",
       style: "secondary",
       enabled: true,
       order: 3
     },
     {
-      id: "btn_support",
-      label: "Dəstək",
-      emoji: "💬",
+      id: "btn_get_stats",
+      label: "Get Stats",
+      emoji: "📊",
       style: "secondary",
       enabled: true,
       order: 4
@@ -1103,39 +1103,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
           name: scName,
           value: scName
         };
-      });
-
-    await respondToDiscordInteraction(interaction.id, interaction.token, {
-      type: 8,
-      data: {
-        choices: filteredChoices
-      }
-    });
-    return;
-  }
-
-  // Type 3: Message Component (Panel Düymələri)
-  if (interactionType === 3) {
-    const customId = sanitizeText(interaction.data && interaction.data.custom_id, "");
-    const userObj = (interaction.member && interaction.member.user) || interaction.user || {};
-    const discordUserId = sanitizeText(userObj.id, "");
-
-    const isBlacklisted = (APP_STATE.blacklist || []).some(
-      (item) => sanitizeText(item && item.value, "").toLowerCase() === discordUserId.toLowerCase()
-    );
-
-    if (isBlacklisted && discordUserId) {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: "⛔ Siz Blacklist siyahısındasınız. Panel əməliyyatları məhdudlaşdırılıb.",
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (customId.includes("btn_get_key")) {
+    if (customId.includes("btn_redeem_key") || customId.includes("btn_get_key")) {
       const generatedKey = generateLicenseKeyString();
       APP_STATE.keys = [
         {
@@ -1154,7 +1122,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🔑 Sizin keyiniz hazırdır: \`${generatedKey}\` (7 gün)`,
+          content: `🎟️ Redeem Key hazırdır: \`${generatedKey}\` (7 gün)`,
           flags: 64
         }
       });
@@ -1182,6 +1150,38 @@ const handleDiscordInteractionCreate = async (interaction) => {
         type: 4,
         data: {
           content: `📜 **${firstScript.name}** scripti:\n\`\`\`lua\n${loaderLine.slice(0, 1800)}\n\`\`\``,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (customId.includes("btn_reset_hwid")) {
+      let resetCount = 0;
+      APP_STATE.keys = (APP_STATE.keys || []).map((k) => {
+        if (k && k.hwid) {
+          resetCount += 1;
+          return { ...k, hwid: "" };
+        }
+        return k;
+      });
+      saveAppStateToDisk();
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `🔄 Reset HWID tamamlandı. Sıfırlanan HWID sayı: **${resetCount}**`,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (customId.includes("btn_get_stats")) {
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `📊 **SADO PROTECT Stats** — Sunucu: **${APP_STATE.guildName || "Bağlı Sunucu"}** | Scriptlər: **${(APP_STATE.scripts || []).length}** | Keylər: **${(APP_STATE.keys || []).length}**`,
           flags: 64
         }
       });
@@ -1416,7 +1416,9 @@ const buildPublicSnapshotPayload = async () => {
   return {
     bot: {
       active: botIsActive,
-      statusText: botIsActive ? "Bot: Aktivdir" : "Bot: Gözləmədə",
+      statusText: botIsActive
+        ? "Bot: Aktivdir"
+        : "Bot: Aktiv deyil — Gözləmədədir",
       tokenConfigured: tokenPresent,
       username: BOT_RUNTIME.botUsername || "SADO PROTECT",
       botUserId: BOT_RUNTIME.botUserId || "",
@@ -1426,7 +1428,7 @@ const buildPublicSnapshotPayload = async () => {
     guild: {
       guildId: cleanGuildId,
       guildName: resolvedGuildName,
-      displayName: resolvedGuildName || (cleanGuildId ? `Sunucu #${cleanGuildId}` : "Bağlı Sunucu Yoxdur"),
+      displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
       panelChannelId: sanitizeSnowflakeId(APP_STATE.panelChannelId)
     },
     stats: {
@@ -1884,13 +1886,13 @@ const buildDashboardHtmlDocument = () => {
     </div>
     <div id="botStatusBadge" class="status-badge">
       <span class="status-dot"></span>
-      <span id="botStatusText">Bot: Gözləmədə</span>
+      <span id="botStatusText">Bot: Aktiv deyil — Gözləmədədir</span>
     </div>
   </header>
 
   <div class="app-shell">
     <aside id="sidebarNav" class="sidebar">
-      <button class="nav-item active" data-tab="overview" type="button">📊 İcmal</button>
+      <button class="nav-item active" data-tab="overview" type="button">🎛️ İdarəetmə</button>
       <button class="nav-item" data-tab="scripts" type="button">📜 Scriptlər</button>
       <button class="nav-item" data-tab="keys" type="button">🔑 Keylər</button>
       <button class="nav-item" data-tab="designer" type="button">🎨 Panel Dizaynı</button>
@@ -1917,10 +1919,10 @@ const buildDashboardHtmlDocument = () => {
         </div>
       </section>
 
-      <!-- İCMAL VƏ DİSCORD BOT BAĞLANTISI -->
+      <!-- İDARƏETMƏ VƏ DİSCORD BOT BAĞLANTISI (YALNIZ BURADA) -->
       <section id="tab-overview" class="tab-panel active">
         <div class="card">
-          <div class="card-title">🤖 Discord Bot Bağlantısı</div>
+          <div class="card-title">🎛️ İdarəetmə — Discord Bot Bağlantısı</div>
           <div id="guildBannerText" class="banner-box">Bağlanan Sunucu: Bağlı Sunucu Yoxdur</div>
 
           <div class="form-group">
@@ -1945,7 +1947,7 @@ const buildDashboardHtmlDocument = () => {
 
           <div class="btn-row">
             <button id="connectBotBtn" class="btn btn-primary" type="button">
-              Botu Bağla və Paneli Yenilə
+              Botu Aktiv Et və Sunucunu Bağla
             </button>
             <button id="sendPanelChannelBtn" class="btn btn-secondary" type="button">
               Paneli Kanala Göndər
@@ -2493,7 +2495,7 @@ const buildDashboardHtmlDocument = () => {
         botBadge.classList.toggle("is-active", isBotActive);
       }
       if (botStatusText) {
-        botStatusText.textContent = (snap && snap.bot && snap.bot.statusText) || "Bot: Gözləmədə";
+        botStatusText.textContent = (snap && snap.bot && snap.bot.statusText) || "Bot: Aktiv deyil — Gözləmədədir";
       }
 
       const guildDisplayName = (snap && snap.guild && (snap.guild.guildName || snap.guild.displayName)) || "Bağlı Sunucu Yoxdur";
