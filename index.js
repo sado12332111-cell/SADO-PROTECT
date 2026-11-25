@@ -308,6 +308,11 @@ const discordClient = new Client({
 const BOT_RUNTIME = {
   isReady: true,
   gatewayReady: false,
+  botTag: "SADO PROTECT BOT",
+  botId: "",
+  lastError: ""
+};
+
 const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") => {
   const cleanId = String(guildIdInput || "").trim();
   const cleanPreferred = String(preferredNameInput || "").trim();
