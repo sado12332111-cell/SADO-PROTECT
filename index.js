@@ -294,22 +294,19 @@ const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
       req.headers["syn-fingerprint"] ||
       req.headers["krnl-hwid"] ||
       req.headers["flux-fingerprint"] ||
+      req.headers["delta-fingerprint"] ||
+      req.headers["codex-fingerprint"] ||
+      req.headers["arceus-fingerprint"] ||
       req.headers["fingerprint"] ||
       "",
     ""
   );
   if (headerHwid) return headerHwid;
 
-  const ua = sanitizeText(req.headers["user-agent"], "unknown-client");
-  const ip = sanitizeText(req.headers["x-forwarded-for"] || (req.socket && req.socket.remoteAddress) || "unknown-ip", "");
-  const firstIp = ip.split(",")[0].trim();
-  return crypto
-    .createHash("sha256")
-    .update(`${ua}|${firstIp}`)
-    .digest("hex")
-    .slice(0, 24)
-    .toUpperCase();
+  return "";
 };
+
+const isLegacyVolatileHashHwid = (hwidValue) => /^[0-9A-F]{24}$/.test(sanitizeText(hwidValue, ""));
 
 const buildDeviceKickLuaPayload = (reasonText = "Bu key başqa cihaza/telefona bağlıdır — Kick edildi") => {
   const safeReason = sanitizeText(reasonText, "Bu key başqa cihaza/telefona bağlıdır — Kick edildi").replace(/"/g, '\\"');
@@ -370,19 +367,42 @@ const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") =>
     .filter(Boolean);
 };
 
-const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT", boundHwid = "") => {
+const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT", boundHwid = "", scriptId = "") => {
   const cleanScript = String(rawCodeText || "").trim();
   const lockedHwid = sanitizeText(boundHwid, "").replace(/"/g, '\\"');
   const safeName = sanitizeText(scriptName, "PROTECTED");
+  const safeKey = sanitizeText(keyString, "").replace(/"/g, '\\"');
+  const safeScriptId = sanitizeText(scriptId, "").replace(/"/g, '\\"');
+  const baseOrigin = sanitizeText(
+    process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "https://sado-protect.onrender.com",
+    "https://sado-protect.onrender.com"
+  ).replace(/\/$/, "");
 
   return [
     `-- [[ SADO PROTECT — ${safeName} ]]`,
-    `if "${lockedHwid}" ~= "" and gethwid then`,
-    `  local ok, h = pcall(gethwid)`,
-    `  if ok and h and tostring(h) ~= "" and tostring(h):lower() ~= "${lockedHwid}":lower() then`,
-    `    pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu script başqa cihaza bağlıdır — Kick edildi") end)`,
-    `    return`,
-    `  end`,
+    `local _sado_dev = ""`,
+    `pcall(function() if gethwid then _sado_dev = tostring(gethwid() or "") end end)`,
+    `if _sado_dev == "" then`,
+    `  pcall(function() _sado_dev = tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end)`,
+    `end`,
+    `if _sado_dev == "" then`,
+    `  pcall(function() local lp = game:GetService("Players").LocalPlayer; if lp then _sado_dev = "plr_" .. tostring(lp.UserId) end end)`,
+    `end`,
+    `if "${lockedHwid}" ~= "" and _sado_dev ~= "" and _sado_dev:lower() ~= "${lockedHwid}":lower() then`,
+    `  pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi") end)`,
+    `  return`,
+    `end`,
+    `if "${lockedHwid}" == "" and _sado_dev ~= "" and "${safeKey}" ~= "" then`,
+    `  pcall(function()`,
+    `    local hs = game:GetService("HttpService")`,
+    `    local body = hs:JSONEncode({ key = "${safeKey}", hwid = _sado_dev, scriptId = "${safeScriptId}" })`,
+    `    local reqFn = (syn and syn.request) or (http and http.request) or http_request or request`,
+    `    if reqFn then`,
+    `      reqFn({ Url = "${baseOrigin}/api/script/verify", Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })`,
+    `    else`,
+    `      game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. hs:UrlEncode(_sado_dev))`,
+    `    end`,
+    `  end)`,
     `end`,
     cleanScript
   ].join("\n");
@@ -3733,16 +3753,17 @@ const handleHttpRequest = async (req, res) => {
 
       const effectiveHwid = extractDeviceHwidFromRequest(req, reqUrl, providedHwid);
       if (effectiveHwid) {
-        if (!sanitizeText(matchedKey.hwid, "")) {
+        const currentBound = sanitizeText(matchedKey.hwid, "");
+        if (!currentBound || isLegacyVolatileHashHwid(currentBound)) {
           matchedKey.hwid = effectiveHwid;
           saveAppStateToDisk();
           appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${effectiveHwid}`, "HWID-Lock");
-        } else if (sanitizeText(matchedKey.hwid, "").toLowerCase() !== effectiveHwid.toLowerCase()) {
+        } else if (currentBound.toLowerCase() !== effectiveHwid.toLowerCase()) {
           appendAuditLog("HWID_KICK", `Başqa cihazdan giriş cəhdi bloklandı (${matchedKey.key})`, "HWID-Lock");
           sendJsonResponse(res, 403, {
             allowed: false,
             action: "kick",
-            reason: "Bu key başqa cihaza/telefona bağlıdır — Kick edildi"
+            reason: "Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi"
           });
           return;
         }
@@ -3766,7 +3787,7 @@ const handleHttpRequest = async (req, res) => {
         ? (targetScript.scriptContent || "")
         : `loadstring(game:HttpGet("${targetScript.scriptUrl || ""}"))()`;
 
-      const scriptPayload = wrapScriptWithAntiLeakProtection(rawScriptCode, matchedKey.key, targetScript.name, matchedKey.hwid || "");
+      const scriptPayload = wrapScriptWithAntiLeakProtection(rawScriptCode, matchedKey.key, targetScript.name, matchedKey.hwid || "", targetScript.id);
 
       sendJsonResponse(res, 200, {
         allowed: true,
@@ -3808,23 +3829,29 @@ const handleHttpRequest = async (req, res) => {
       const incomingDeviceHwid = extractDeviceHwidFromRequest(req, reqUrl, "");
       const boundHwid = sanitizeText(matchedKey.hwid, "");
 
-      if (!boundHwid) {
-        matchedKey.hwid = incomingDeviceHwid;
+      if (incomingDeviceHwid) {
+        if (!boundHwid || isLegacyVolatileHashHwid(boundHwid)) {
+          matchedKey.hwid = incomingDeviceHwid;
+          saveAppStateToDisk();
+          appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${incomingDeviceHwid}`, "HWID-Lock");
+        } else if (boundHwid.toLowerCase() !== incomingDeviceHwid.toLowerCase()) {
+          appendAuditLog("HWID_KICK", `Başqa cihazdan giriş cəhdi bloklandı (${matchedKey.key})`, "HWID-Lock");
+          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end(buildDeviceKickLuaPayload("Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi"));
+          return;
+        }
+      } else if (isLegacyVolatileHashHwid(boundHwid)) {
+        matchedKey.hwid = "";
         saveAppStateToDisk();
-        appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${incomingDeviceHwid}`, "HWID-Lock");
-      } else if (boundHwid.toLowerCase() !== incomingDeviceHwid.toLowerCase()) {
-        appendAuditLog("HWID_KICK", `Başqa cihazdan giriş cəhdi bloklandı (${matchedKey.key})`, "HWID-Lock");
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload("Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi"));
-        return;
       }
 
+      const effectiveLockedHwid = isLegacyVolatileHashHwid(matchedKey.hwid) ? "" : sanitizeText(matchedKey.hwid, "");
       const cleanUrl = sanitizeText(found.scriptUrl, "");
       const rawCode = found.sourceType === "file"
         ? String(found.scriptContent || "").trim()
         : `local fn, err = loadstring(game:HttpGet("${cleanUrl}"))\nif fn then fn() else warn("[SADO PROTECT] Script yuklenme xetasi:", err) end`;
 
-      const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, matchedKey.hwid || incomingDeviceHwid);
+      const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, effectiveLockedHwid, found.id);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
       res.end(protectedCode);
       return;
