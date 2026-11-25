@@ -198,7 +198,24 @@ const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") =>
     ? `/guilds/${gId}/members/search?query=${encodeURIComponent(cleanQuery)}&limit=25`
     : `/guilds/${gId}/members?limit=25`;
   const res = await callDiscordRestApi(endpoint, "GET");
-  if (!res.ok || !Array.isArray(res.data)) return [];
+  if (!res.ok || !Array.isArray(res.data)) {
+    const fallbackMembersRes = await callDiscordRestApi(`/guilds/${gId}/members?limit=25`, "GET");
+    if (!fallbackMembersRes.ok || !Array.isArray(fallbackMembersRes.data)) return [];
+    return fallbackMembersRes.data
+      .map((m) => {
+        const u = (m && m.user) || {};
+        if (!u.id) return null;
+        const displayLabel = formatDiscordUserDisplay(u);
+        if (cleanQuery && !displayLabel.toLowerCase().includes(cleanQuery.toLowerCase()) && !String(u.id).includes(cleanQuery)) {
+          return null;
+        }
+        return {
+          name: displayLabel.slice(0, 100),
+          value: String(u.id)
+        };
+      })
+      .filter(Boolean);
+  }
   return res.data
     .map((m) => {
       const u = (m && m.user) || {};
@@ -887,6 +904,28 @@ const buildSlashCommandsPayload = () => {
         autocomplete: true
       };
 
+  const whitelistScriptOption = hasScripts
+    ? {
+        name: "script",
+        description: "Avto key bağlanacaq mövcud scripti seçin",
+        type: 3,
+        required: false,
+        choices: APP_STATE.scripts.slice(0, 25).map((sc) => {
+          const scName = sanitizeText(sc && sc.name, "Script").slice(0, 100);
+          return {
+            name: scName,
+            value: scName
+          };
+        })
+      }
+    : {
+        name: "script",
+        description: "Avto key bağlanacaq mövcud scripti seçin",
+        type: 3,
+        required: false,
+        autocomplete: true
+      };
+
   return [
     {
       name: "panel",
@@ -895,24 +934,25 @@ const buildSlashCommandsPayload = () => {
     },
     {
       name: "whitelist",
-      description: "İstifadəçini Whitelist-ə əlavə edir və avtomatik Key yaradır",
+      description: "Sunucudan user və mövcud script seçərək Whitelist-ə əlavə edir və avto Key yaradır",
       options: [
         {
-          name: "istifadeci",
-          description: "Discord User ID, Nick və ya HWID",
-          type: 3,
+          name: "user",
+          description: "Sunucudakı istifadəçini seçin",
+          type: 6,
           required: true
-        }
+        },
+        whitelistScriptOption
       ]
     },
     {
       name: "unwhitelist",
-      description: "İstifadəçini Whitelist-dən çıxarır və girişini bağlayır",
+      description: "Sunucudakı istifadəçini Whitelist-dən çıxarır və girişini bağlayır",
       options: [
         {
-          name: "istifadeci",
-          description: "Discord User ID, Nick və ya HWID",
-          type: 3,
+          name: "user",
+          description: "Sunucudakı istifadəçini seçin",
+          type: 6,
           required: true
         }
       ]
@@ -924,7 +964,7 @@ const buildSlashCommandsPayload = () => {
     },
     {
       name: "key",
-      description: "Yeni lisenziya key yaradır və ya key statusunu yoxlayır",
+      description: "Yeni lisenziya key yaradır (saytdakı Keylərə düşür) və ya key statusunu yoxlayır",
       options: [
         {
           name: "action",
@@ -1152,19 +1192,32 @@ const handleDiscordInteractionCreate = async (interaction) => {
 
     if (cmdName === "whitelist") {
       const userOpt = rawOptions.find((o) => o && o.name === "user");
+      const scriptOpt = rawOptions.find((o) => o && o.name === "script");
       const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
+      const resolvedUserObj =
+        (userOpt &&
+          userOpt.value &&
+          interaction.data &&
+          interaction.data.resolved &&
+          interaction.data.resolved.users &&
+          interaction.data.resolved.users[String(userOpt.value)]) ||
+        null;
       const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
       const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
+      const chosenScriptName = sanitizeText(
+        scriptOpt && scriptOpt.value,
+        (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi"
+      );
 
       if (!targetUser) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
-          data: { content: "❌ Zəhmət olmasa sunucudan `user` seçin və ya istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
+          data: { content: "❌ Zəhmət olmasa sunucudan `user` seçin.", flags: 64 }
         });
         return;
       }
 
-      let resolvedProfileLabel = targetUser;
+      let resolvedProfileLabel = resolvedUserObj ? formatDiscordUserDisplay(resolvedUserObj, targetUser) : targetUser;
       if (targetUserId) {
         const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
         if (uRes.ok && uRes.data) {
@@ -1180,9 +1233,9 @@ const handleDiscordInteractionCreate = async (interaction) => {
       const autoKeyRecord = {
         id: generateUniqueId("key"),
         key: generatedKeyValue,
-        owner: targetUser,
-        ownerProfile: resolvedProfileLabel,
-        scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
+        owner: resolvedProfileLabel,
+        ownerId: targetUser,
+        scriptName: chosenScriptName,
         days: 30,
         hwid: "",
         active: true,
@@ -1197,8 +1250,9 @@ const handleDiscordInteractionCreate = async (interaction) => {
         APP_STATE.whitelist = [
           {
             id: generateUniqueId("acc"),
-            value: targetUser,
-            profileLabel: resolvedProfileLabel,
+            value: resolvedProfileLabel,
+            userId: targetUser,
+            scriptName: chosenScriptName,
             generatedKey: generatedKeyValue,
             createdAt: new Date().toISOString()
           },
@@ -1206,16 +1260,135 @@ const handleDiscordInteractionCreate = async (interaction) => {
         ];
       } else {
         existingWl.generatedKey = generatedKeyValue;
-        existingWl.profileLabel = resolvedProfileLabel;
+        existingWl.value = resolvedProfileLabel;
+        existingWl.userId = targetUser;
+        existingWl.scriptName = chosenScriptName;
       }
 
       saveAppStateToDisk();
-      appendAuditLog("WHITELIST_CMD", `/whitelist: ${resolvedProfileLabel} -> Key: ${generatedKeyValue}`, "Discord");
+      appendAuditLog("WHITELIST_CMD", `/whitelist: ${resolvedProfileLabel} | Script: ${chosenScriptName} -> Key: ${generatedKeyValue}`, "Discord");
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `✅ **Whitelist əlavə edildi:** **${resolvedProfileLabel}**\n🔑 **Avto Key:** \`${generatedKeyValue}\``,
+          content: `✅ **Whitelist əlavə edildi:** **${resolvedProfileLabel}**\n📜 **Script:** **${chosenScriptName}**\n🔑 **Avto Key:** \`${generatedKeyValue}\``,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (cmdName === "unwhitelist") {
+      const userOpt = rawOptions.find((o) => o && o.name === "user");
+      const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
+      const resolvedUserObj =
+        (userOpt &&
+          userOpt.value &&
+          interaction.data &&
+          interaction.data.resolved &&
+          interaction.data.resolved.users &&
+          interaction.data.resolved.users[String(userOpt.value)]) ||
+        null;
+      const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
+      const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
+
+      if (!targetUser) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: { content: "❌ Zəhmət olmasa Unwhitelist ediləcək `user` seçin.", flags: 64 }
+        });
+        return;
+      }
+
+      let resolvedProfileLabel = resolvedUserObj ? formatDiscordUserDisplay(resolvedUserObj, targetUser) : targetUser;
+      if (targetUserId) {
+        const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
+        if (uRes.ok && uRes.data) {
+          resolvedProfileLabel = formatDiscordUserDisplay(uRes.data, targetUserId);
+        }
+      }
+
+      const normTarget = normalizeAccessValue(targetUser);
+      const normLabel = normalizeAccessValue(resolvedProfileLabel);
+      APP_STATE.whitelist = (APP_STATE.whitelist || []).filter(
+        (w) =>
+          w &&
+          normalizeAccessValue(w.value) !== normTarget &&
+          normalizeAccessValue(w.value) !== normLabel &&
+          normalizeAccessValue(w.userId) !== normTarget
+      );
+      APP_STATE.keys = (APP_STATE.keys || []).filter(
+        (k) =>
+          k &&
+          normalizeAccessValue(k.owner) !== normTarget &&
+          normalizeAccessValue(k.owner) !== normLabel &&
+          normalizeAccessValue(k.ownerId) !== normTarget
+      );
+      saveAppStateToDisk();
+      appendAuditLog("UNWHITELIST_CMD", `/unwhitelist: ${resolvedProfileLabel}`, "Discord");
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `🚫 **Unwhitelist edildi:** **${resolvedProfileLabel}** — girişi və key-i deaktiv edildi, artıq script verilməyəcək.`,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (cmdName === "key") {
+      const actionOpt = rawOptions.find((o) => o && o.name === "action");
+      const valOpt = rawOptions.find((o) => o && o.name === "value");
+      const actionVal = sanitizeText(actionOpt && actionOpt.value, "generate");
+      const argVal = sanitizeText(valOpt && valOpt.value, "");
+      const callerUser = (interaction.member && interaction.member.user) || interaction.user || {};
+      const callerLabel = callerUser.id ? formatDiscordUserDisplay(callerUser, callerUser.id) : "Discord";
+
+      if (actionVal === "check") {
+        const foundKey = (APP_STATE.keys || []).find(
+          (k) => sanitizeText(k.key, "").toUpperCase() === argVal.toUpperCase()
+        );
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: foundKey
+              ? `🔑 Key tapıldı: \`${foundKey.key}\` | Script: **${sanitizeText(foundKey.scriptName, "Hamısı")}** | Status: **${foundKey.active !== false ? "Aktiv" : "Deaktiv"}**`
+              : "❌ Daxil edilən key tapılmadı.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const matchedByName = argVal
+        ? (APP_STATE.scripts || []).find(
+            (s) => sanitizeText(s && s.name, "").toLowerCase() === argVal.toLowerCase()
+          )
+        : null;
+      const targetScript = matchedByName
+        ? matchedByName.name
+        : argVal || ((APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi");
+      const newKeyCode = generateLicenseKeyString();
+      const keyRecord = {
+        id: generateUniqueId("key"),
+        key: newKeyCode,
+        owner: callerLabel,
+        ownerId: sanitizeText(callerUser.id, ""),
+        scriptName: targetScript,
+        days: 30,
+        hwid: "",
+        active: true,
+        createdAt: new Date().toISOString()
+      };
+      APP_STATE.keys = [keyRecord, ...(APP_STATE.keys || [])];
+      saveAppStateToDisk();
+      appendAuditLog("KEY_CREATED", `Slash komanda ilə key yaradıldı: ${newKeyCode} (Script: ${targetScript})`, "Discord");
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `✅ Yeni key yaradıldı və saytdakı **Keylər** bölməsinə əlavə olundu: \`${newKeyCode}\` (Script: **${targetScript}**, Müddət: **30 gün**)`,
           flags: 64
         }
       });
