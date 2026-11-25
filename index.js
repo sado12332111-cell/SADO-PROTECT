@@ -377,21 +377,23 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     "https://sado-protect.onrender.com"
   ).replace(/\/$/, "");
 
-  const safeBody = cleanScript.replace(/\]\]/g, "]] .. \"]]\" .. [[");
+  const escapedForLuaString = cleanScript
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, "")
+    .replace(/\n/g, "\\n");
 
   return [
     `local d="" pcall(function() if gethwid then d=tostring(gethwid() or "") end end)`,
     `if d=="" then pcall(function() d=tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end) end`,
     `if d=="" then pcall(function() local p=game:GetService("Players").LocalPlayer if p then d="u_"..tostring(p.UserId) end end) end`,
     `if "${lockedHwid}"~="" and d~="" and d:lower()~="${lockedHwid}":lower() then`,
-    `  pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu key yalniz 1 nefer/cihaz ucundur — Kick edildi") end) return`,
+    `  pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu key yalniz 1 cihaz/telefon ucundur — Kick edildi") end) return`,
     `end`,
     `if "${lockedHwid}"=="" and d~="" and "${safeKey}"~="" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid="..game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `pcall(function()`,
-    `  ${safeBody}`,
-    `end)`
+    `local fn = loadstring("${escapedForLuaString}") if fn then task.spawn(fn) end`
   ].join("\n");
 };
 
