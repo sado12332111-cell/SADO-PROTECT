@@ -21,16 +21,33 @@ const {
 } = require("discord.js");
 
 const resolveEnvToken = () => {
-  const candidates = [
+  const directCandidates = [
     process.env.DISCORD_TOKEN,
     process.env.BOT_TOKEN,
     process.env.TOKEN,
-    process.env.DISCORD_BOT_TOKEN
+    process.env.DISCORD_BOT_TOKEN,
+    process.env.SADO_BOT_TOKEN
   ];
-  for (let i = 0; i < candidates.length; i += 1) {
-    const val = String(candidates[i] || "").trim();
-    if (val.length > 10) {
-      return val;
+  for (let i = 0; i < directCandidates.length; i += 1) {
+    const cleaned = String(directCandidates[i] || "")
+      .replace(/^Bot\s+/i, "")
+      .replace(/^["']|["']$/g, "")
+      .trim();
+    if (cleaned.length > 20 && cleaned.includes(".")) {
+      return cleaned;
+    }
+  }
+  const envKeys = Object.keys(process.env || {});
+  for (let i = 0; i < envKeys.length; i += 1) {
+    const k = envKeys[i];
+    if (/token/i.test(k) && !/webhook/i.test(k)) {
+      const candidateVal = String(process.env[k] || "")
+        .replace(/^Bot\s+/i, "")
+        .replace(/^["']|["']$/g, "")
+        .trim();
+      if (/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{10,}$/.test(candidateVal)) {
+        return candidateVal;
+      }
     }
   }
   return "";
@@ -42,9 +59,10 @@ const APP_CONFIG = Object.freeze({
   CLIENT_ID: String(
     process.env.DISCORD_CLIENT_ID ||
       process.env.CLIENT_ID ||
+      process.env.APPLICATION_ID ||
       ""
   ).trim(),
-  DEFAULT_GUILD_ID: String(process.env.GUILD_ID || "").trim(),
+  DEFAULT_GUILD_ID: String(process.env.GUILD_ID || process.env.DISCORD_GUILD_ID || "").trim(),
   DEFAULT_CHANNEL_ID: String(process.env.PANEL_CHANNEL_ID || "").trim(),
   DATA_DIR: path.join(__dirname, "sado_protect_data"),
   STATE_FILE: path.join(__dirname, "sado_protect_data", "sado_state.json"),
@@ -113,13 +131,13 @@ const ensureDirectoryExists = (dirPath) => {
 const createInitialState = () => {
   return {
     meta: {
-      version: "4.3.0-const",
+      version: "4.4.0-const",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     },
     bot: {
       guildId: APP_CONFIG.DEFAULT_GUILD_ID,
-      guildName: APP_CONFIG.DEFAULT_GUILD_ID ? "Bağlanır..." : "Sunucu seçilməyib",
+      guildName: APP_CONFIG.DEFAULT_GUILD_ID ? "Bağlı Sunucu" : "Sunucu seçilməyib",
       panelChannelId: APP_CONFIG.DEFAULT_CHANNEL_ID,
       panelMessageId: "",
       activeScriptId: "",
@@ -256,7 +274,7 @@ const sanitizeHexColor = (inputColor) => {
 const fetchDiscordJsonViaHttps = (apiPath, token, useBotAuth = true) => {
   return new Promise((resolve) => {
     const headers = {
-      "User-Agent": "SadoProtectEnterprise/4.3",
+      "User-Agent": "SadoProtectEnterprise/4.4",
       "Content-Type": "application/json"
     };
     if (useBotAuth && token) {
@@ -321,7 +339,7 @@ const discordClient = new Client({
 const BOT_RUNTIME = {
   isReady: true,
   gatewayReady: false,
-  botTag: "SADO PROTECT BOT",
+  botTag: "SADO PROTECT#5929",
   botId: extractBotIdFromToken(APP_CONFIG.DISCORD_TOKEN),
   lastError: ""
 };
@@ -405,7 +423,6 @@ const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") =>
     }
   }
 
-  // Sunucu ID-yə görə tapıla bilən kanal və ya mesaj məlumatlarından sunucu adını çıxarır
   if (APP_CONFIG.DISCORD_TOKEN) {
     const channelsResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/channels`, APP_CONFIG.DISCORD_TOKEN, true);
     if (channelsResult.ok && Array.isArray(channelsResult.data)) {
@@ -965,7 +982,7 @@ const handleDiscordInteraction = async (interaction) => {
 discordClient.once("ready", async () => {
   BOT_RUNTIME.isReady = true;
   BOT_RUNTIME.gatewayReady = true;
-  BOT_RUNTIME.botTag = discordClient.user ? discordClient.user.tag : "SADO BOT";
+  BOT_RUNTIME.botTag = discordClient.user ? discordClient.user.tag : "SADO PROTECT#5929";
   BOT_RUNTIME.botId = discordClient.user ? discordClient.user.id : "";
   BOT_RUNTIME.lastError = "";
   console.log(`[DISCORD_READY] Logged in as ${BOT_RUNTIME.botTag}`);
@@ -988,6 +1005,18 @@ discordClient.once("ready", async () => {
   await registerSlashCommands();
 });
 
+discordClient.on("shardDisconnect", () => {
+  BOT_RUNTIME.gatewayReady = false;
+});
+
+discordClient.on("shardReconnecting", () => {
+  BOT_RUNTIME.gatewayReady = false;
+});
+
+discordClient.on("shardResume", () => {
+  BOT_RUNTIME.gatewayReady = true;
+});
+
 discordClient.on("guildCreate", async (guild) => {
   if (guild && guild.id && guild.name) {
     APP_STATE.guildCache[guild.id] = guild.name;
@@ -1004,22 +1033,27 @@ const startDiscordBot = async () => {
   if (!APP_CONFIG.DISCORD_TOKEN) {
     BOT_RUNTIME.isReady = true;
     BOT_RUNTIME.gatewayReady = false;
-    BOT_RUNTIME.lastError = "";
-    console.warn("[DISCORD_WARN] DISCORD_TOKEN missing; running web panel in active mode.");
+    BOT_RUNTIME.lastError = "DISCORD_TOKEN tapılmadı";
+    console.warn("[DISCORD_WARN] DISCORD_TOKEN missing; bot is offline on Discord.");
     return;
   }
   try {
     const meCheck = await fetchDiscordJsonViaHttps("/users/@me", APP_CONFIG.DISCORD_TOKEN, true);
     if (meCheck.ok && meCheck.data) {
       BOT_RUNTIME.isReady = true;
-      BOT_RUNTIME.botId = meCheck.data.id || "";
-      BOT_RUNTIME.botTag = meCheck.data.username || "SADO PROTECT";
+      BOT_RUNTIME.botId = meCheck.data.id || BOT_RUNTIME.botId;
+      BOT_RUNTIME.botTag = meCheck.data.discriminator && meCheck.data.discriminator !== "0"
+        ? `${meCheck.data.username}#${meCheck.data.discriminator}`
+        : meCheck.data.username || BOT_RUNTIME.botTag;
     }
     await discordClient.login(APP_CONFIG.DISCORD_TOKEN);
   } catch (err) {
     BOT_RUNTIME.gatewayReady = false;
     BOT_RUNTIME.lastError = err.message;
     console.error("[DISCORD_LOGIN_ERROR]", err.message);
+    setTimeout(() => {
+      startDiscordBot().catch(() => null);
+    }, 10000);
   }
 };
 
@@ -1040,7 +1074,7 @@ const buildPublicSnapshot = () => {
     botStatus: {
       isReady: true,
       discordConnected: BOT_RUNTIME.gatewayReady,
-      botTag: BOT_RUNTIME.botTag || "SADO PROTECT BOT",
+      botTag: BOT_RUNTIME.botTag || "SADO PROTECT#5929",
       guildId: APP_STATE.bot.guildId || "",
       guildName: activeGuildName,
       panelChannelId: APP_STATE.bot.panelChannelId || "",
@@ -1975,23 +2009,23 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         .map((btn, idx) => {
           const isFirst = idx === 0;
           const isLast = idx === CLIENT_STATE.draftButtons.length - 1;
-          return \`
+          return `
             <div class="btn-designer-row">
               <div class="btn-designer-header">
-                <span class="badge">#\${idx + 1} • \${escapeHtml(btn.label || "Button")}</span>
+                <span class="badge">#${idx + 1} • ${escapeHtml(btn.label || "Button")}</span>
                 <div class="btn-row">
                   <button
                     type="button"
                     class="btn btn-ghost btn-sm"
-                    \${isFirst ? "disabled" : ""}
-                    onclick="window.sadoMoveButton(\${idx}, -1)"
+                    ${isFirst ? "disabled" : ""}
+                    onclick="window.sadoMoveButton(${idx}, -1)"
                     title="Yuxarı"
                   >▲</button>
                   <button
                     type="button"
                     class="btn btn-ghost btn-sm"
-                    \${isLast ? "disabled" : ""}
-                    onclick="window.sadoMoveButton(\${idx}, 1)"
+                    ${isLast ? "disabled" : ""}
+                    onclick="window.sadoMoveButton(${idx}, 1)"
                     title="Aşağı"
                   >▼</button>
                 </div>
@@ -1999,27 +2033,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
               <div class="btn-designer-fields">
                 <input
                   type="text"
-                  value="\${escapeHtml(btn.emoji || "")}"
+                  value="${escapeHtml(btn.emoji || "")}"
                   placeholder="Emoji"
-                  onchange="window.sadoUpdateDraftButton(\${idx}, 'emoji', this.value)"
-                  oninput="window.sadoUpdateDraftButton(\${idx}, 'emoji', this.value)"
+                  onchange="window.sadoUpdateDraftButton(${idx}, 'emoji', this.value)"
+                  oninput="window.sadoUpdateDraftButton(${idx}, 'emoji', this.value)"
                 />
                 <input
                   type="text"
-                  value="\${escapeHtml(btn.label || "")}"
+                  value="${escapeHtml(btn.label || "")}"
                   placeholder="Buton adı"
-                  onchange="window.sadoUpdateDraftButton(\${idx}, 'label', this.value)"
-                  oninput="window.sadoUpdateDraftButton(\${idx}, 'label', this.value)"
+                  onchange="window.sadoUpdateDraftButton(${idx}, 'label', this.value)"
+                  oninput="window.sadoUpdateDraftButton(${idx}, 'label', this.value)"
                 />
-                <select onchange="window.sadoUpdateDraftButton(\${idx}, 'style', this.value)">
-                  <option value="Success" \${btn.style === "Success" ? "selected" : ""}>Yaşıl (Success)</option>
-                  <option value="Primary" \${btn.style === "Primary" ? "selected" : ""}>Mavi (Primary)</option>
-                  <option value="Secondary" \${btn.style === "Secondary" ? "selected" : ""}>Boz (Secondary)</option>
-                  <option value="Danger" \${btn.style === "Danger" ? "selected" : ""}>Qırmızı (Danger)</option>
+                <select onchange="window.sadoUpdateDraftButton(${idx}, 'style', this.value)">
+                  <option value="Success" ${btn.style === "Success" ? "selected" : ""}>Yaşıl (Success)</option>
+                  <option value="Primary" ${btn.style === "Primary" ? "selected" : ""}>Mavi (Primary)</option>
+                  <option value="Secondary" ${btn.style === "Secondary" ? "selected" : ""}>Boz (Secondary)</option>
+                  <option value="Danger" ${btn.style === "Danger" ? "selected" : ""}>Qırmızı (Danger)</option>
                 </select>
               </div>
             </div>
-          \`;
+          `;
         })
         .join("");
     };
@@ -2064,40 +2098,40 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           const isActive = sc.id === activeScriptId;
           const loaderDisplay = sc.loaderUrl
             ? sc.loaderUrl
-            : \`\${window.location.origin}/raw/\${sc.id}\`;
+            : `${window.location.origin}/raw/${sc.id}`;
           const encName = encodeURIComponent(sc.name || "");
           const encUrl = encodeURIComponent(sc.loaderUrl || "");
-          return \`
+          return `
             <div class="item-card">
               <div class="item-top">
                 <div>
                   <div class="item-title">
-                    \${escapeHtml(sc.name)}
-                    \${isActive ? '<span class="badge badge-green">Aktiv Panel Scripti</span>' : ""}
-                    \${sc.sourceType === "file" ? \`<span class="badge">Dosya: \${escapeHtml(sc.fileName || "script.lua")}</span>\` : ""}
+                    ${escapeHtml(sc.name)}
+                    ${isActive ? '<span class="badge badge-green">Aktiv Panel Scripti</span>' : ""}
+                    ${sc.sourceType === "file" ? `<span class="badge">Dosya: ${escapeHtml(sc.fileName || "script.lua")}</span>` : ""}
                   </div>
-                  <div class="item-sub">Loader: \${escapeHtml(loaderDisplay)}</div>
+                  <div class="item-sub">Loader: ${escapeHtml(loaderDisplay)}</div>
                 </div>
                 <div class="btn-row">
                   <button
                     type="button"
                     class="btn btn-primary btn-sm"
-                    onclick="window.sadoSetActiveScript('\${sc.id}')"
+                    onclick="window.sadoSetActiveScript('${sc.id}')"
                   >Panelə Bağla</button>
                   <button
                     type="button"
                     class="btn btn-ghost btn-sm"
-                    onclick="window.updateScriptPrompt('\${sc.id}', '\${encName}', '\${encUrl}')"
+                    onclick="window.updateScriptPrompt('${sc.id}', '${encName}', '${encUrl}')"
                   >Düzəliş Et</button>
                   <button
                     type="button"
                     class="btn btn-danger btn-sm"
-                    onclick="window.sadoDeleteScript('\${sc.id}')"
+                    onclick="window.sadoDeleteScript('${sc.id}')"
                   >Sil</button>
                 </div>
               </div>
             </div>
-          \`;
+          `;
         })
         .join("");
     };
@@ -2112,25 +2146,25 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
       container.innerHTML = keys
         .map((k) => {
-          const durationText = Number(k.days) === 0 ? "Ömürlük" : \`\${k.days} gün\`;
+          const durationText = Number(k.days) === 0 ? "Ömürlük" : `${k.days} gün`;
           const ownerText = k.claimedTag
-            ? \`İstifadəçi: \${k.claimedTag} (\${k.claimedBy})\`
+            ? `İstifadəçi: ${k.claimedTag} (${k.claimedBy})`
             : "İstifadə edilməyib";
-          return \`
+          return `
             <div class="item-card">
               <div class="item-top">
                 <div>
-                  <div class="item-title">\${escapeHtml(k.key)} <span class="badge">\${durationText}</span></div>
-                  <div class="item-sub">\${escapeHtml(ownerText)} • Qeyd: \${escapeHtml(k.note || "-")}</div>
+                  <div class="item-title">${escapeHtml(k.key)} <span class="badge">${durationText}</span></div>
+                  <div class="item-sub">${escapeHtml(ownerText)} • Qeyd: ${escapeHtml(k.note || "-")}</div>
                 </div>
                 <div class="btn-row">
-                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoCopyText('\${escapeHtml(k.key)}')">Kopyala</button>
-                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoResetKeyHwid('\${k.id}')">HWID Sıfırla</button>
-                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoDeleteKey('\${k.id}')">Sil</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoCopyText('${escapeHtml(k.key)}')">Kopyala</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="window.sadoResetKeyHwid('${k.id}')">HWID Sıfırla</button>
+                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoDeleteKey('${k.id}')">Sil</button>
                 </div>
               </div>
             </div>
-          \`;
+          `;
         })
         .join("");
     };
@@ -2144,17 +2178,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         } else {
           wlBox.innerHTML = whitelist
             .map(
-              (w) => \`
+              (w) => `
               <div class="item-card">
                 <div class="item-top">
                   <div>
-                    <div class="item-title">\${escapeHtml(w.username || w.userId)}</div>
-                    <div class="item-sub">ID: \${escapeHtml(w.userId)}</div>
+                    <div class="item-title">${escapeHtml(w.username || w.userId)}</div>
+                    <div class="item-sub">ID: ${escapeHtml(w.userId)}</div>
                   </div>
-                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess('whitelist', '\${escapeHtml(w.userId)}')">Sil</button>
+                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess('whitelist', '${escapeHtml(w.userId)}')">Sil</button>
                 </div>
               </div>
-            \`
+            `
             )
             .join("");
         }
@@ -2166,17 +2200,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         } else {
           blBox.innerHTML = blacklist
             .map(
-              (b) => \`
+              (b) => `
               <div class="item-card">
                 <div class="item-top">
                   <div>
-                    <div class="item-title">\${escapeHtml(b.username || b.userId)}</div>
-                    <div class="item-sub">ID: \${escapeHtml(b.userId)} • Səbəb: \${escapeHtml(b.reason || "-")}</div>
+                    <div class="item-title">${escapeHtml(b.username || b.userId)}</div>
+                    <div class="item-sub">ID: ${escapeHtml(b.userId)} • Səbəb: ${escapeHtml(b.reason || "-")}</div>
                   </div>
-                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess('blacklist', '\${escapeHtml(b.userId)}')">Sil</button>
+                  <button type="button" class="btn btn-danger btn-sm" onclick="window.sadoRemoveAccess('blacklist', '${escapeHtml(b.userId)}')">Sil</button>
                 </div>
               </div>
-            \`
+            `
             )
             .join("");
         }
@@ -2207,10 +2241,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (statKeys) statKeys.textContent = String(snap.stats?.keysCount ?? 0);
       if (statGuild) statGuild.textContent = guildDisplay;
       if (statAccess) {
-        statAccess.textContent = \`\${snap.stats?.whitelistCount ?? 0} / \${snap.stats?.blacklistCount ?? 0}\`;
+        statAccess.textContent = `${snap.stats?.whitelistCount ?? 0} / ${snap.stats?.blacklistCount ?? 0}`;
       }
       if (banner) {
-        banner.textContent = \`Bağlanan Sunucu: \${guildDisplay}\`;
+        banner.textContent = `Bağlanan Sunucu: ${guildDisplay}`;
       }
 
       const guildInput = document.getElementById("guildIdInput");
@@ -2280,7 +2314,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }
       if (res.ok) {
         const resolvedName = res.data?.botStatus?.guildName || "Sunucu";
-        showToast(\`Bağlandı: \${resolvedName}\`);
+        showToast(`Bağlandı: ${resolvedName}`);
       } else {
         showToast("Xəta: " + (res.error || "Sunucu bağlanmadı"));
       }
@@ -2578,6 +2612,7 @@ app.post("/api/bot/connect", async (req, res) => {
     });
   }
 });
+
 app.post("/api/scripts", async (req, res) => {
   try {
     const name = String(req.body?.name || "").trim();
