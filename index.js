@@ -516,13 +516,23 @@ const registerSlashCommands = async () => {
       .setName("panel")
       .setDescription("SADO PROTECT skript və key idarəetmə panelini açır")
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addStringOption((opt) =>
-        opt
+      .addStringOption((opt) => {
+        const optionBuilder = opt
           .setName("script")
-          .setDescription("Panel açılacaq skript adı")
+          .setDescription("Panel açılacaq script adı")
           .setRequired(false)
-          .setAutocomplete(true)
-      ),
+          .setAutocomplete(true);
+        const scriptChoices = Array.isArray(APP_STATE.scripts)
+          ? APP_STATE.scripts.slice(0, 25).map((s) => ({
+              name: String(s.name || "Script").slice(0, 100),
+              value: String(s.id || "")
+            }))
+          : [];
+        if (scriptChoices.length > 0) {
+          optionBuilder.addChoices(...scriptChoices);
+        }
+        return optionBuilder;
+      }),
     new SlashCommandBuilder()
       .setName("genkey")
       .setDescription("Yeni lisenziya açarı yaradır")
@@ -585,13 +595,16 @@ const formatScriptLoaderOutput = (scriptObj, originBaseUrl) => {
 const handleDiscordInteraction = async (interaction) => {
   try {
     if (interaction.isAutocomplete()) {
-      const focused = String(interaction.options.getFocused() || "").toLowerCase();
-      const choices = APP_STATE.scripts
-        .filter((s) => s.name.toLowerCase().includes(focused))
+      const focused = String(interaction.options.getFocused() || "").trim().toLowerCase();
+      const filteredScripts = APP_STATE.scripts.filter((s) => {
+        const n = String(s.name || "").toLowerCase();
+        return !focused || n.includes(focused);
+      });
+      const choices = (filteredScripts.length > 0 ? filteredScripts : APP_STATE.scripts)
         .slice(0, 25)
         .map((s) => ({
-          name: `${s.name} (${s.sourceType === "file" ? s.fileName || "Dosya" : "URL"})`,
-          value: s.id
+          name: `${String(s.name || "Script").slice(0, 80)} (${s.sourceType === "file" ? s.fileName || "Dosya" : "URL"})`.slice(0, 100),
+          value: String(s.id || "")
         }));
       await interaction.respond(choices);
       return;
@@ -601,7 +614,14 @@ const handleDiscordInteraction = async (interaction) => {
       const cmdName = interaction.commandName;
 
       if (cmdName === "panel") {
-        const chosenScript = interaction.options.getString("script") || APP_STATE.bot.activeScriptId;
+        const rawScriptOption = String(interaction.options.getString("script") || "").trim();
+        const matchedScript =
+          APP_STATE.scripts.find(
+            (s) =>
+              s.id === rawScriptOption ||
+              String(s.name || "").toLowerCase() === rawScriptOption.toLowerCase()
+          ) || null;
+        const chosenScript = matchedScript ? matchedScript.id : rawScriptOption || APP_STATE.bot.activeScriptId;
         if (chosenScript) {
           APP_STATE.bot.activeScriptId = chosenScript;
         }
@@ -2452,8 +2472,7 @@ app.post("/api/bot/connect", async (req, res) => {
     });
   }
 });
-
-app.post("/api/scripts", (req, res) => {
+app.post("/api/scripts", async (req, res) => {
   try {
     const name = String(req.body?.name || "").trim();
     const loaderUrl = String(req.body?.loaderUrl || "").trim();
@@ -2486,6 +2505,7 @@ app.post("/api/scripts", (req, res) => {
       APP_STATE.bot.activeScriptId = newScript.id;
     }
     savePersistentState();
+    await registerSlashCommands();
 
     res.status(200).json({
       ok: true,
@@ -2559,14 +2579,14 @@ app.post("/api/scripts/:id/activate", async (req, res) => {
     });
     return;
   }
-
-  APP_STATE.bot.activeScriptId = target.id;
-  savePersistentState();
-
-  if (APP_STATE.bot.panelChannelId) {
-    await deployOrRefreshDiscordPanel(APP_STATE.bot.panelChannelId, target.id);
+app.delete("/api/scripts/:id", async (req, res) => {
+  const scriptId = String(req.params.id || "").trim();
+  APP_STATE.scripts = APP_STATE.scripts.filter((s) => s.id !== scriptId);
+  if (APP_STATE.bot.activeScriptId === scriptId) {
+    APP_STATE.bot.activeScriptId = APP_STATE.scripts[0] ? APP_STATE.scripts[0].id : "";
   }
-
+  savePersistentState();
+  await registerSlashCommands();
   res.status(200).json({
     ok: true,
     data: buildPublicSnapshot()
