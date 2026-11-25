@@ -2009,53 +2009,30 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         .map((btn, idx) => {
           const isFirst = idx === 0;
           const isLast = idx === CLIENT_STATE.draftButtons.length - 1;
-          return `
-            <div class="btn-designer-row">
-              <div class="btn-designer-header">
-                <span class="badge">#${idx + 1} • ${escapeHtml(btn.label || "Button")}</span>
-                <div class="btn-row">
-                  <button
-                    type="button"
-                    class="btn btn-ghost btn-sm"
-                    ${isFirst ? "disabled" : ""}
-                    onclick="window.sadoMoveButton(${idx}, -1)"
-                    title="Yuxarı"
-                  >▲</button>
-                  <button
-                    type="button"
-                    class="btn btn-ghost btn-sm"
-                    ${isLast ? "disabled" : ""}
-                    onclick="window.sadoMoveButton(${idx}, 1)"
-                    title="Aşağı"
-                  >▼</button>
-                </div>
-              </div>
-              <div class="btn-designer-fields">
-                <input
-                  type="text"
-                  value="${escapeHtml(btn.emoji || "")}"
-                  placeholder="Emoji"
-                  onchange="window.sadoUpdateDraftButton(${idx}, 'emoji', this.value)"
-                  oninput="window.sadoUpdateDraftButton(${idx}, 'emoji', this.value)"
-                />
-                <input
-                  type="text"
-                  value="${escapeHtml(btn.label || "")}"
-                  placeholder="Buton adı"
-                  onchange="window.sadoUpdateDraftButton(${idx}, 'label', this.value)"
-                  oninput="window.sadoUpdateDraftButton(${idx}, 'label', this.value)"
-                />
-                <select onchange="window.sadoUpdateDraftButton(${idx}, 'style', this.value)">
-                  <option value="Success" ${btn.style === "Success" ? "selected" : ""}>Yaşıl (Success)</option>
-                  <option value="Primary" ${btn.style === "Primary" ? "selected" : ""}>Mavi (Primary)</option>
-                  <option value="Secondary" ${btn.style === "Secondary" ? "selected" : ""}>Boz (Secondary)</option>
-                  <option value="Danger" ${btn.style === "Danger" ? "selected" : ""}>Qırmızı (Danger)</option>
-                </select>
-              </div>
-            </div>
-          `;
+          const rowParts = [
+            '<div class="btn-designer-row">',
+            '<div class="btn-designer-header">',
+            '<span class="badge">#' + (idx + 1) + ' • ' + escapeHtml(btn.label || 'Button') + '</span>',
+            '<div class="btn-row">',
+            '<button type="button" class="btn btn-ghost btn-sm" ' + (isFirst ? 'disabled' : '') + ' onclick="window.sadoMoveButton(' + idx + ', -1)" title="Yuxarı">▲</button>',
+            '<button type="button" class="btn btn-ghost btn-sm" ' + (isLast ? 'disabled' : '') + ' onclick="window.sadoMoveButton(' + idx + ', 1)" title="Aşağı">▼</button>',
+            '</div>',
+            '</div>',
+            '<div class="btn-designer-fields">',
+            '<input type="text" value="' + escapeHtml(btn.emoji || '') + '" placeholder="Emoji" onchange="window.sadoUpdateDraftButton(' + idx + ', \'emoji\', this.value)" oninput="window.sadoUpdateDraftButton(' + idx + ', \'emoji\', this.value)" />',
+            '<input type="text" value="' + escapeHtml(btn.label || '') + '" placeholder="Buton adı" onchange="window.sadoUpdateDraftButton(' + idx + ', \'label\', this.value)" oninput="window.sadoUpdateDraftButton(' + idx + ', \'label\', this.value)" />',
+            '<select onchange="window.sadoUpdateDraftButton(' + idx + ', \'style\', this.value)">',
+            '<option value="Success" ' + (btn.style === 'Success' ? 'selected' : '') + '>Yaşıl (Success)</option>',
+            '<option value="Primary" ' + (btn.style === 'Primary' ? 'selected' : '') + '>Mavi (Primary)</option>',
+            '<option value="Secondary" ' + (btn.style === 'Secondary' ? 'selected' : '') + '>Boz (Secondary)</option>',
+            '<option value="Danger" ' + (btn.style === 'Danger' ? 'selected' : '') + '>Qırmızı (Danger)</option>',
+            '</select>',
+            '</div>',
+            '</div>'
+          ];
+          return rowParts.join('');
         })
-        .join("");
+        .join('');
     };
 
     window.sadoUpdateDraftButton = (index, field, value) => {
