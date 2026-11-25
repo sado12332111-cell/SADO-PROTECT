@@ -2078,37 +2078,37 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             : window.location.origin + "/raw/" + sc.id;
           const encName = encodeURIComponent(sc.name || "");
           const encUrl = encodeURIComponent(sc.loaderUrl || "");
-          return `
-            <div class="item-card">
-              <div class="item-top">
-                <div>
-                  <div class="item-title">
-                    ${escapeHtml(sc.name)}
-                    ${isActive ? '<span class="badge badge-green">Aktiv Panel Scripti</span>' : ""}
-                    ${sc.sourceType === "file" ? `<span class="badge">Dosya: ${escapeHtml(sc.fileName || "script.lua")}</span>` : ""}
-                  </div>
-                  <div class="item-sub">Loader: ${escapeHtml(loaderDisplay)}</div>
-                </div>
-                <div class="btn-row">
-                  <button
-                    type="button"
-                    class="btn btn-primary btn-sm"
-                    onclick="window.sadoSetActiveScript('${sc.id}')"
-                  >Panelə Bağla</button>
-                  <button
-                    type="button"
-                    class="btn btn-ghost btn-sm"
-                    onclick="window.updateScriptPrompt('${sc.id}', '${encName}', '${encUrl}')"
-                  >Düzəliş Et</button>
-                  <button
-                    type="button"
-                    class="btn btn-danger btn-sm"
-                    onclick="window.sadoDeleteScript('${sc.id}')"
-                  >Sil</button>
-                </div>
-              </div>
-            </div>
-          `;
+          const cardParts = [
+            '<div class="item-card">',
+            '<div class="item-top">',
+            '<div>',
+            '<div class="item-title">' + escapeHtml(sc.name),
+            isActive ? ' <span class="badge badge-green">Aktiv Panel Scripti</span>' : "",
+            sc.sourceType === "file"
+              ? ' <span class="badge">Dosya: ' + escapeHtml(sc.fileName || "script.lua") + "</span>"
+              : "",
+            "</div>",
+            '<div class="item-sub">Loader: ' + escapeHtml(loaderDisplay) + "</div>",
+            "</div>",
+            '<div class="btn-row">',
+            '<button type="button" class="btn btn-primary btn-sm" onclick="window.sadoSetActiveScript(\'' +
+              sc.id +
+              '\')">Panelə Bağla</button>',
+            '<button type="button" class="btn btn-ghost btn-sm" onclick="window.updateScriptPrompt(\'' +
+              sc.id +
+              "', '" +
+              encName +
+              "', '" +
+              encUrl +
+              '\')">Düzəliş Et</button>',
+            '<button type="button" class="btn btn-danger btn-sm" onclick="window.sadoDeleteScript(\'' +
+              sc.id +
+              '\')">Sil</button>',
+            "</div>",
+            "</div>",
+            "</div>"
+          ];
+          return cardParts.join("");
         })
         .join("");
     };
