@@ -370,7 +370,6 @@ const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") =>
 const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT", boundHwid = "", scriptId = "") => {
   const cleanScript = String(rawCodeText || "").trim();
   const lockedHwid = sanitizeText(boundHwid, "").replace(/"/g, '\\"');
-  const safeName = sanitizeText(scriptName, "PROTECTED").replace(/"/g, '\\"');
   const safeKey = sanitizeText(keyString, "").replace(/"/g, '\\"');
   const safeScriptId = sanitizeText(scriptId, "").replace(/"/g, '\\"');
   const baseOrigin = sanitizeText(
@@ -378,61 +377,21 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     "https://sado-protect.onrender.com"
   ).replace(/\/$/, "");
 
-  const encodedScriptB64 = Buffer.from(cleanScript, "utf8").toString("base64");
+  const safeBody = cleanScript.replace(/\]\]/g, "]] .. \"]]\" .. [[");
 
   return [
-    `-- [[ SADO PROTECT — ${safeName} ]]`,
-    `local function _sado_get_device_id()`,
-    `  local devId = ""`,
-    `  pcall(function() if gethwid then devId = tostring(gethwid() or "") end end)`,
-    `  if devId == "" then`,
-    `    pcall(function() devId = tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end)`,
-    `  end`,
-    `  if devId == "" then`,
-    `    pcall(function() local lp = game:GetService("Players").LocalPlayer; if lp then devId = "plr_" .. tostring(lp.UserId) end end)`,
-    `  end`,
-    `  return devId`,
+    `local d="" pcall(function() if gethwid then d=tostring(gethwid() or "") end end)`,
+    `if d=="" then pcall(function() d=tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end) end`,
+    `if d=="" then pcall(function() local p=game:GetService("Players").LocalPlayer if p then d="u_"..tostring(p.UserId) end end) end`,
+    `if "${lockedHwid}"~="" and d~="" and d:lower()~="${lockedHwid}":lower() then`,
+    `  pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu key yalniz 1 nefer/cihaz ucundur — Kick edildi") end) return`,
     `end`,
-    `local _sado_dev = _sado_get_device_id()`,
-    `if "${lockedHwid}" ~= "" and _sado_dev ~= "" and _sado_dev:lower() ~= "${lockedHwid}":lower() then`,
-    `  pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu key artıq başqa telefonda/cihazda aktivdir — Kick edildi") end)`,
-    `  return`,
+    `if "${lockedHwid}"=="" and d~="" and "${safeKey}"~="" then`,
+    `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid="..game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `if "${lockedHwid}" == "" and _sado_dev ~= "" and "${safeKey}" ~= "" then`,
-    `  pcall(function()`,
-    `    local hs = game:GetService("HttpService")`,
-    `    local body = hs:JSONEncode({ key = "${safeKey}", hwid = _sado_dev, scriptId = "${safeScriptId}" })`,
-    `    local reqFn = (syn and syn.request) or (http and http.request) or http_request or request`,
-    `    if reqFn then`,
-    `      reqFn({ Url = "${baseOrigin}/api/script/verify", Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })`,
-    `    else`,
-    `      game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. hs:UrlEncode(_sado_dev))`,
-    `    end`,
-    `  end)`,
-    `end`,
-    `local _sado_b64 = "${encodedScriptB64}"`,
-    `local function _sado_decode_b64(data)`,
-    `  local b = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"`,
-    `  data = string.gsub(data, "[^" .. b .. "=]", "")`,
-    `  return (data:gsub(".", function(x)`,
-    `    if (x == "=") then return "" end`,
-    `    local r, f = "", (b:find(x, 1, true) - 1)`,
-    `    for i = 6, 1, -1 do r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and "1" or "0") end`,
-    `    return r`,
-    `  end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)`,
-    `    if (#x ~= 8) then return "" end`,
-    `    local c = 0`,
-    `    for i = 1, 8 do c = c + (x:sub(i, i) == "1" and 2 ^ (8 - i) or 0) end`,
-    `    return string.char(c)`,
-    `  end))`,
-    `end`,
-    `local _sado_src = _sado_decode_b64(_sado_b64)`,
-    `local _sado_fn, _sado_err = loadstring(_sado_src)`,
-    `if _sado_fn then`,
-    `  task.spawn(function() pcall(_sado_fn) end)`,
-    `else`,
-    `  warn("[SADO PROTECT] Script xetasi:", tostring(_sado_err))`,
-    `end`
+    `pcall(function()`,
+    `  ${safeBody}`,
+    `end)`
   ].join("\n");
 };
 
@@ -3877,7 +3836,7 @@ const handleHttpRequest = async (req, res) => {
       const cleanUrl = sanitizeText(found.scriptUrl, "");
       const rawCode = found.sourceType === "file"
         ? String(found.scriptContent || "").trim()
-        : `local fn, err = loadstring(game:HttpGet("${cleanUrl}"))\nif fn then fn() else warn("[SADO PROTECT] Script yuklenme xetasi:", err) end`;
+        : `pcall(function() game:HttpGet("${cleanUrl}") end)`;
 
       const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, effectiveLockedHwid, found.id);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
