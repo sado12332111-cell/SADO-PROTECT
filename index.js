@@ -435,31 +435,6 @@ const refreshGuildNameInState = async (targetGuildId) => {
   return dbState.botConfig.guildName || "";
 };
 
-const refreshGuildNameInState = async (targetGuildId) => {
-  const cleanId = String(targetGuildId ?? dbState.botConfig.guildId ?? "").trim();
-  if (!cleanId) {
-    dbState.botConfig.guildName = "";
-    persistDatabaseToDisk();
-    return "";
-  }
-
-  const resolvedName = await resolveGuildDisplayName(cleanId);
-  if (resolvedName && resolvedName !== "Sado Protect Hub") {
-    dbState.botConfig.guildId = cleanId;
-    dbState.botConfig.guildName = resolvedName;
-    botRuntimeStatus.connectedGuildName = resolvedName;
-    botRuntimeStatus.connectedGuildId = cleanId;
-    updateBotRuntimeStatus("online", `Aktiv • ${resolvedName}`, "");
-    persistDatabaseToDisk();
-    return resolvedName;
-  }
-
-  dbState.botConfig.guildId = cleanId;
-  dbState.botConfig.guildName = "";
-  persistDatabaseToDisk();
-  return "";
-};
-
 const parseHexColorToInt = (hexValue) => {
   const cleaned = String(hexValue || DEFAULT_THEME_COLOR)
     .replace("#", "")
@@ -2175,8 +2150,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       createScriptBtn.onclick = () =>
         handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput");
     }
-      showToast(res.ok ? "Key yaradıldı!" : "Xəta: " + res.error);
-    });
+
+    const generateKeyBtn = document.getElementById("generateKeyBtn");
+    if (generateKeyBtn) {
+      generateKeyBtn.addEventListener("click", async () => {
+        const scriptName = document.getElementById("keyScriptSelect")?.value || "Ümumi / Default";
+        const customKey = document.getElementById("customKeyInput")?.value.trim() || "";
+        const res = await callApi("/api/keys", "POST", { scriptName, customKey });
+        if (res.data) {
+          renderSnapshot(res.data);
+          const customInput = document.getElementById("customKeyInput");
+          if (customInput) customInput.value = "";
+        }
+        showToast(res.ok ? "Key yaradıldı!" : "Xəta: " + res.error);
+      });
+    }
 
     const connectGuildBotBtn = document.getElementById("connectGuildBotBtn");
     if (connectGuildBotBtn) {
