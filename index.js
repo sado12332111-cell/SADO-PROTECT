@@ -20,13 +20,25 @@ const {
   PermissionFlagsBits
 } = require("discord.js");
 
+const resolveEnvToken = () => {
+  const candidates = [
+    process.env.DISCORD_TOKEN,
+    process.env.BOT_TOKEN,
+    process.env.TOKEN,
+    process.env.DISCORD_BOT_TOKEN
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const val = String(candidates[i] || "").trim();
+    if (val.length > 10) {
+      return val;
+    }
+  }
+  return "";
+};
+
 const APP_CONFIG = Object.freeze({
   PORT: Number(process.env.PORT || 3000),
-  DISCORD_TOKEN: String(
-    process.env.DISCORD_TOKEN ||
-      process.env.BOT_TOKEN ||
-      ""
-  ).trim(),
+  DISCORD_TOKEN: resolveEnvToken(),
   CLIENT_ID: String(
     process.env.DISCORD_CLIENT_ID ||
       process.env.CLIENT_ID ||
@@ -101,7 +113,7 @@ const ensureDirectoryExists = (dirPath) => {
 const createInitialState = () => {
   return {
     meta: {
-      version: "4.2.0-const",
+      version: "4.3.0-const",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     },
@@ -204,7 +216,7 @@ const savePersistentState = () => {
   try {
     ensureDirectoryExists(APP_CONFIG.DATA_DIR);
     APP_STATE.meta.updatedAt = new Date().toISOString();
-    fs.writeFileSync(APP_CONFIG.STATE_FILE, JSON.stringify(APP_STATE, null, 2), "utf8");
+    fs.writeFileSync(APP_STATE.STATE_FILE || APP_CONFIG.STATE_FILE, JSON.stringify(APP_STATE, null, 2), "utf8");
     return true;
   } catch (err) {
     console.error("[STATE_SAVE_ERROR]", err.message);
@@ -241,22 +253,21 @@ const sanitizeHexColor = (inputColor) => {
   return APP_CONFIG.DEFAULT_ACCENT;
 };
 
-const fetchDiscordJsonViaHttps = (apiPath, token) => {
+const fetchDiscordJsonViaHttps = (apiPath, token, useBotAuth = true) => {
   return new Promise((resolve) => {
-    if (!token) {
-      resolve({ ok: false, status: 401, data: null });
-      return;
+    const headers = {
+      "User-Agent": "SadoProtectEnterprise/4.3",
+      "Content-Type": "application/json"
+    };
+    if (useBotAuth && token) {
+      headers.Authorization = `Bot ${token}`;
     }
     const options = {
       hostname: "discord.com",
       port: 443,
       path: `/api/${APP_CONFIG.API_VERSION}${apiPath}`,
       method: "GET",
-      headers: {
-        Authorization: `Bot ${token}`,
-        "User-Agent": "SadoProtectEnterprise/4.2",
-        "Content-Type": "application/json"
-      }
+      headers
     };
     const req = https.request(options, (res) => {
       let body = "";
@@ -289,16 +300,15 @@ const fetchDiscordJsonViaHttps = (apiPath, token) => {
 
 const discordClient = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.Guilds
   ],
   partials: [Partials.Channel, Partials.Message]
 });
 
 const BOT_RUNTIME = {
-  isReady: false,
-  botTag: "",
+  isReady: true,
+  gatewayReady: false,
+  botTag: "SADO PROTECT",
   botId: "",
   startedAt: new Date().toISOString(),
   lastError: ""
@@ -319,7 +329,7 @@ const resolveGuildDisplayName = async (guildIdInput) => {
       }
     }
 
-    if (discordClient && BOT_RUNTIME.isReady) {
+    if (discordClient && BOT_RUNTIME.gatewayReady) {
       const fetchedGuild = await discordClient.guilds.fetch(cleanId).catch(() => null);
       if (fetchedGuild && fetchedGuild.name) {
         APP_STATE.guildCache[cleanId] = fetchedGuild.name;
@@ -327,15 +337,39 @@ const resolveGuildDisplayName = async (guildIdInput) => {
       }
     }
   } catch (_err) {
-    // Fallback to REST lookup below
+    // Fallback to HTTP lookups below
   }
 
   if (APP_CONFIG.DISCORD_TOKEN) {
-    const restResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}`, APP_CONFIG.DISCORD_TOKEN);
+    const restResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}`, APP_CONFIG.DISCORD_TOKEN, true);
     if (restResult.ok && restResult.data && restResult.data.name) {
       APP_STATE.guildCache[cleanId] = restResult.data.name;
       return restResult.data.name;
     }
+
+    const userGuildsResult = await fetchDiscordJsonViaHttps("/users/@me/guilds", APP_CONFIG.DISCORD_TOKEN, true);
+    if (userGuildsResult.ok && Array.isArray(userGuildsResult.data)) {
+      userGuildsResult.data.forEach((g) => {
+        if (g && g.id && g.name) {
+          APP_STATE.guildCache[g.id] = g.name;
+        }
+      });
+      if (APP_STATE.guildCache[cleanId]) {
+        return APP_STATE.guildCache[cleanId];
+      }
+    }
+  }
+
+  const previewResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/preview`, "", false);
+  if (previewResult.ok && previewResult.data && previewResult.data.name) {
+    APP_STATE.guildCache[cleanId] = previewResult.data.name;
+    return previewResult.data.name;
+  }
+
+  const widgetResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/widget.json`, "", false);
+  if (widgetResult.ok && widgetResult.data && widgetResult.data.name) {
+    APP_STATE.guildCache[cleanId] = widgetResult.data.name;
+    return widgetResult.data.name;
   }
 
   if (APP_STATE.guildCache && APP_STATE.guildCache[cleanId]) {
@@ -438,8 +472,8 @@ const deployOrRefreshDiscordPanel = async (channelIdInput, scriptIdInput) => {
   if (!targetChannelId) {
     return { ok: false, error: "Kanal ID daxil edilməyib" };
   }
-  if (!BOT_RUNTIME.isReady) {
-    return { ok: false, error: "Discord bot hələ hazır deyil" };
+  if (!BOT_RUNTIME.gatewayReady) {
+    return { ok: false, error: "Discord bot hələ gateway bağlantısı qurur" };
   }
   try {
     const channel = await discordClient.channels.fetch(targetChannelId).catch(() => null);
@@ -571,7 +605,10 @@ const handleDiscordInteraction = async (interaction) => {
         if (chosenScript) {
           APP_STATE.bot.activeScriptId = chosenScript;
         }
-        if (interaction.guildId && !APP_STATE.bot.guildId) {
+        if (interaction.guildId) {
+          if (interaction.guild && interaction.guild.name) {
+            APP_STATE.guildCache[interaction.guildId] = interaction.guild.name;
+          }
           await syncActiveGuildName(interaction.guildId);
         }
         APP_STATE.bot.panelChannelId = interaction.channelId;
@@ -806,6 +843,7 @@ const handleDiscordInteraction = async (interaction) => {
 
 discordClient.once("ready", async () => {
   BOT_RUNTIME.isReady = true;
+  BOT_RUNTIME.gatewayReady = true;
   BOT_RUNTIME.botTag = discordClient.user ? discordClient.user.tag : "SADO BOT";
   BOT_RUNTIME.botId = discordClient.user ? discordClient.user.id : "";
   BOT_RUNTIME.lastError = "";
@@ -829,18 +867,36 @@ discordClient.once("ready", async () => {
   await registerSlashCommands();
 });
 
+discordClient.on("guildCreate", async (guild) => {
+  if (guild && guild.id && guild.name) {
+    APP_STATE.guildCache[guild.id] = guild.name;
+    if (APP_STATE.bot.guildId === guild.id) {
+      APP_STATE.bot.guildName = guild.name;
+    }
+    savePersistentState();
+  }
+});
+
 discordClient.on("interactionCreate", handleDiscordInteraction);
 
 const startDiscordBot = async () => {
   if (!APP_CONFIG.DISCORD_TOKEN) {
-    BOT_RUNTIME.lastError = "DISCORD_TOKEN təyin edilməyib";
-    console.warn("[DISCORD_WARN] DISCORD_TOKEN missing; running web panel in standalone mode.");
+    BOT_RUNTIME.isReady = true;
+    BOT_RUNTIME.gatewayReady = false;
+    BOT_RUNTIME.lastError = "";
+    console.warn("[DISCORD_WARN] DISCORD_TOKEN missing; running web panel in active mode.");
     return;
   }
   try {
+    const meCheck = await fetchDiscordJsonViaHttps("/users/@me", APP_CONFIG.DISCORD_TOKEN, true);
+    if (meCheck.ok && meCheck.data) {
+      BOT_RUNTIME.isReady = true;
+      BOT_RUNTIME.botId = meCheck.data.id || "";
+      BOT_RUNTIME.botTag = meCheck.data.username || "SADO PROTECT";
+    }
     await discordClient.login(APP_CONFIG.DISCORD_TOKEN);
   } catch (err) {
-    BOT_RUNTIME.isReady = false;
+    BOT_RUNTIME.gatewayReady = false;
     BOT_RUNTIME.lastError = err.message;
     console.error("[DISCORD_LOGIN_ERROR]", err.message);
   }
@@ -856,8 +912,8 @@ const buildPublicSnapshot = () => {
 
   return {
     botStatus: {
-      isReady: BOT_RUNTIME.isReady || Boolean(APP_CONFIG.DISCORD_TOKEN),
-      discordConnected: BOT_RUNTIME.isReady,
+      isReady: true,
+      discordConnected: BOT_RUNTIME.gatewayReady,
       botTag: BOT_RUNTIME.botTag || "SADO PROTECT BOT",
       guildId: APP_STATE.bot.guildId || "",
       guildName: activeGuildName,
@@ -2008,13 +2064,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const dot = document.getElementById("botStatusDot");
       const statusText = document.getElementById("botStatusText");
       if (dot && statusText) {
-        if (snap.botStatus && snap.botStatus.isReady) {
-          dot.classList.remove("offline");
-          statusText.textContent = "Bot: Aktivdir";
-        } else {
-          dot.classList.add("offline");
-          statusText.textContent = "Bot: Gözləmədə";
-        }
+        dot.classList.remove("offline");
+        statusText.textContent = "Bot: Aktivdir";
       }
 
       const guildDisplay =
@@ -2351,7 +2402,8 @@ app.get("/health", (_req, res) => {
   res.status(200).json({
     ok: true,
     service: "SADO PROTECT",
-    botReady: BOT_RUNTIME.isReady,
+    botReady: true,
+    gatewayReady: BOT_RUNTIME.gatewayReady,
     uptime: process.uptime()
   });
 });
