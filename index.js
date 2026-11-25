@@ -354,32 +354,48 @@ const resolveGuildDisplayName = async (targetGuildId) => {
       }
     }
   } catch (_guildFetchErr) {
-    // Kəş və ya client fetch alınmadıqda REST API vasitəsilə yoxlanılır
+    // Client fetch alınmadıqda birbaşa Discord HTTP API yoxlanılır
   }
 
   const activeToken = resolveProtectedBotToken();
   if (activeToken) {
     try {
-      const restClient = new REST({ version: "10" }).setToken(activeToken);
-      const guildData = await restClient.get(Routes.guild(cleanId));
-      if (guildData && guildData.name) {
-        return String(guildData.name).trim();
+      const resp = await fetch(`https://discord.com/api/v10/guilds/${encodeURIComponent(cleanId)}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bot ${activeToken}`,
+          "Content-Type": "application/json"
+        }
+      });
+      if (resp.ok) {
+        const guildData = await resp.json();
+        if (guildData && guildData.name) {
+          return String(guildData.name).trim();
+        }
       }
-    } catch (_restGuildErr) {
-      // REST sorğusu xəta verdikdə ehtiyat yoxlamaya keçilir
+    } catch (_httpGuildErr) {
+      // Birbaşa guild sorğusu alınmadıqda user guilds siyahısı yoxlanılır
     }
 
     try {
-      const restClient = new REST({ version: "10" }).setToken(activeToken);
-      const userGuilds = await restClient.get(Routes.userGuilds());
-      if (Array.isArray(userGuilds)) {
-        const matched = userGuilds.find((g) => String(g?.id || "").trim() === cleanId);
-        if (matched && matched.name) {
-          return String(matched.name).trim();
+      const respList = await fetch("https://discord.com/api/v10/users/@me/guilds", {
+        method: "GET",
+        headers: {
+          Authorization: `Bot ${activeToken}`,
+          "Content-Type": "application/json"
+        }
+      });
+      if (respList.ok) {
+        const guildsList = await respList.json();
+        if (Array.isArray(guildsList)) {
+          const matched = guildsList.find((g) => String(g?.id || "").trim() === cleanId);
+          if (matched && matched.name) {
+            return String(matched.name).trim();
+          }
         }
       }
-    } catch (_userGuildsErr) {
-      // İstifadəçi sunucuları siyahısı alınmadıqda boş qalır
+    } catch (_httpUserGuildsErr) {
+      // Siyahı sorğusu alınmadıqda ehtiyat yoxlamaya keçilir
     }
   }
 
@@ -393,6 +409,30 @@ const resolveGuildDisplayName = async (targetGuildId) => {
   }
 
   return "";
+};
+
+const refreshGuildNameInState = async (targetGuildId) => {
+  const cleanId = String(targetGuildId ?? dbState.botConfig.guildId ?? "").trim();
+  if (!cleanId) {
+    dbState.botConfig.guildName = "";
+    persistDatabaseToDisk();
+    return "";
+  }
+
+  const resolvedName = await resolveGuildDisplayName(cleanId);
+  if (resolvedName && resolvedName !== "Sado Protect Hub") {
+    dbState.botConfig.guildId = cleanId;
+    dbState.botConfig.guildName = resolvedName;
+    botRuntimeStatus.connectedGuildName = resolvedName;
+    botRuntimeStatus.connectedGuildId = cleanId;
+    updateBotRuntimeStatus("online", "Bot Aktivdir", "");
+    persistDatabaseToDisk();
+    return resolvedName;
+  }
+
+  dbState.botConfig.guildId = cleanId;
+  persistDatabaseToDisk();
+  return dbState.botConfig.guildName || "";
 };
 
 const refreshGuildNameInState = async (targetGuildId) => {
@@ -1047,6 +1087,16 @@ const getDashboardSnapshot = async () => {
       : "Sunucu seçilməyib"
     : "Sunucu seçilməyib";
 
+  const rawDesignButtons =
+    Array.isArray(dbState.design.buttons) && dbState.design.buttons.length > 0
+      ? dbState.design.buttons
+      : createDefaultButtons();
+
+  const normalizedDesignButtons = rawDesignButtons
+    .filter((b) => String(b.id || "") !== "btn_get_key")
+    .map((b, idx) => sanitizeButtonConfig(b, idx))
+    .sort((a, b) => a.order - b.order);
+
   return {
     stats: {
       activeScripts: dbState.scripts.length,
@@ -1072,10 +1122,7 @@ const getDashboardSnapshot = async () => {
     },
     design: {
       ...dbState.design,
-      buttons: (dbState.design.buttons || [])
-        .filter((b) => String(b.id || "") !== "btn_get_key")
-        .map((b, idx) => sanitizeButtonConfig(b, idx))
-        .sort((a, b) => a.order - b.order)
+      buttons: normalizedDesignButtons.length > 0 ? normalizedDesignButtons : createDefaultButtons()
     },
     scripts: dbState.scripts,
     keys: dbState.keys,
@@ -1717,8 +1764,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     const renderButtonsEditor = (buttons) => {
       const container = document.getElementById("buttonsEditorContainer");
+      if (!container) return;
       container.innerHTML = "";
-      const list = (buttons || []).filter((b) => b.id !== "btn_get_key");
+      const fallbackButtons = [
+        { id: "btn_redeem", label: "Redeem Key", emoji: "🎟️", style: "Success", enabled: true, order: 1 },
+        { id: "btn_reset_hwid", label: "Reset HWID", emoji: "♻️", style: "Secondary", enabled: true, order: 2 },
+        { id: "btn_get_script", label: "Get Script", emoji: "📜", style: "Primary", enabled: true, order: 3 },
+        { id: "btn_status", label: "Status", emoji: "📡", style: "Secondary", enabled: true, order: 4 }
+      ];
+      const sourceButtons = Array.isArray(buttons) && buttons.length > 0 ? buttons : fallbackButtons;
+      const list = sourceButtons.filter((b) => b && b.id !== "btn_get_key");
 
       list.forEach((btn, idx) => {
         const card = document.createElement("div");
@@ -1973,7 +2028,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       if (footerInput && document.activeElement !== footerInput)
         footerInput.value = data.design?.footer || "";
 
-      renderButtonsEditor(data.design?.buttons || []);
+      const buttonsContainer = document.getElementById("buttonsEditorContainer");
+      const isEditingButtons =
+        buttonsContainer &&
+        document.activeElement &&
+        buttonsContainer.contains(document.activeElement);
+      if (!isEditingButtons) {
+        renderButtonsEditor(data.design?.buttons || []);
+      }
       renderScriptsAndKeys(data);
     };
 
@@ -2108,18 +2170,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       showToast("Script əlavə olundu!");
     };
 
-    document.getElementById("createScriptBtn").addEventListener("click", () =>
-      handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput")
-    );
-
-    document.getElementById("generateKeyBtn").addEventListener("click", async () => {
-      const scriptName = document.getElementById("keyScriptSelect").value;
-      const customKey = document.getElementById("customKeyInput").value.trim();
-      const res = await callApi("/api/keys", "POST", { scriptName, customKey });
-      if (res.data) {
-        renderSnapshot(res.data);
-        document.getElementById("customKeyInput").value = "";
-      }
+    const createScriptBtn = document.getElementById("createScriptBtn");
+    if (createScriptBtn) {
+      createScriptBtn.onclick = () =>
+        handleAddScript("scriptNameInput", "scriptLoaderInput", "scriptFileInput");
+    }
       showToast(res.ok ? "Key yaradıldı!" : "Xəta: " + res.error);
     });
 
@@ -2208,7 +2263,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           });
         }
       });
-
+      renderButtonsEditor([]);
       const res = await callApi("/api/dashboard");
       if (res.data) renderSnapshot(res.data);
     };
