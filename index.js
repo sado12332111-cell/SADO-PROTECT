@@ -405,6 +405,33 @@ const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") =>
     }
   }
 
+  // Sunucu ID-yə görə tapıla bilən kanal və ya mesaj məlumatlarından sunucu adını çıxarır
+  if (APP_CONFIG.DISCORD_TOKEN) {
+    const channelsResult = await fetchDiscordJsonViaHttps(`/guilds/${cleanId}/channels`, APP_CONFIG.DISCORD_TOKEN, true);
+    if (channelsResult.ok && Array.isArray(channelsResult.data)) {
+      const guildNamedItem = channelsResult.data.find(
+        (ch) => ch && ch.guild && ch.guild.name && !isGenericGuildLabel(ch.guild.name)
+      );
+      if (guildNamedItem) {
+        const extractedGuildName = String(guildNamedItem.guild.name).trim();
+        APP_STATE.guildCache[cleanId] = extractedGuildName;
+        return extractedGuildName;
+      }
+    }
+
+    const activeChanId = String(APP_STATE.bot.panelChannelId || "").trim();
+    if (activeChanId) {
+      const chanInfo = await fetchDiscordJsonViaHttps(`/channels/${activeChanId}`, APP_CONFIG.DISCORD_TOKEN, true);
+      if (chanInfo.ok && chanInfo.data && chanInfo.data.guild_id === cleanId && chanInfo.data.guild?.name) {
+        const chGuildName = String(chanInfo.data.guild.name).trim();
+        if (!isGenericGuildLabel(chGuildName)) {
+          APP_STATE.guildCache[cleanId] = chGuildName;
+          return chGuildName;
+        }
+      }
+    }
+  }
+
   if (cleanPreferred && !isGenericGuildLabel(cleanPreferred)) {
     APP_STATE.guildCache[cleanId] = cleanPreferred;
     return cleanPreferred;
@@ -565,8 +592,8 @@ const registerSlashCommands = async () => {
         }))
     : [];
 
-  const commands = [
-    new SlashCommandBuilder()
+  const buildPanelSlashCommand = (useChoices) => {
+    const cmd = new SlashCommandBuilder()
       .setName("panel")
       .setDescription("SADO PROTECT skript və key idarəetmə panelini açır")
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -575,14 +602,19 @@ const registerSlashCommands = async () => {
           .setName("script")
           .setDescription("Mövcud script seçin (boş buraxsanız aktiv script açılır)")
           .setRequired(false);
-        if (scriptChoices.length > 0) {
+        if (useChoices && scriptChoices.length > 0) {
           optionBuilder.addChoices(...scriptChoices);
           optionBuilder.setAutocomplete(false);
         } else {
           optionBuilder.setAutocomplete(true);
         }
         return optionBuilder;
-      }),
+      });
+    return cmd.toJSON();
+  };
+
+  const guildCommandsPayload = [
+    buildPanelSlashCommand(true),
     new SlashCommandBuilder()
       .setName("genkey")
       .setDescription("Yeni lisenziya açarı yaradır")
@@ -598,14 +630,16 @@ const registerSlashCommands = async () => {
           .setName("note")
           .setDescription("Key üçün qeyd")
           .setRequired(false)
-      ),
+      )
+      .toJSON(),
     new SlashCommandBuilder()
       .setName("whitelist")
       .setDescription("İstifadəçini whitelist siyahısına əlavə edir")
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addUserOption((opt) =>
         opt.setName("user").setDescription("Discord istifadəçisi").setRequired(true)
-      ),
+      )
+      .toJSON(),
     new SlashCommandBuilder()
       .setName("blacklist")
       .setDescription("İstifadəçini blacklist siyahısına əlavə edir")
@@ -616,11 +650,16 @@ const registerSlashCommands = async () => {
       .addStringOption((opt) =>
         opt.setName("reason").setDescription("Səbəb").setRequired(false)
       )
-  ].map((cmd) => cmd.toJSON());
+      .toJSON()
+  ];
+
+  const globalCommandsPayload = guildCommandsPayload.map((c) =>
+    c.name === "panel" ? buildPanelSlashCommand(false) : c
+  );
 
   const rest = new REST({ version: "10" }).setToken(APP_CONFIG.DISCORD_TOKEN);
   try {
-    await rest.put(Routes.applicationCommands(appId), { body: commands });
+    await rest.put(Routes.applicationCommands(appId), { body: globalCommandsPayload });
     const targetGuildIds = new Set(
       [
         APP_STATE.bot.guildId,
@@ -634,7 +673,7 @@ const registerSlashCommands = async () => {
     );
     for (const gId of targetGuildIds) {
       await rest
-        .put(Routes.applicationGuildCommands(appId, gId), { body: commands })
+        .put(Routes.applicationGuildCommands(appId, gId), { body: guildCommandsPayload })
         .catch(() => null);
     }
   } catch (err) {
@@ -2865,4 +2904,4 @@ app.listen(APP_CONFIG.PORT, "0.0.0.0", () => {
   console.log(`[SADO_PROTECT_SERVER] Listening on port ${APP_CONFIG.PORT}`);
   startDiscordBot();
   registerSlashCommands().catch(() => null);
-});6
+});
