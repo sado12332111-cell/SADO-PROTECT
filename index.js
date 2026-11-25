@@ -277,7 +277,7 @@ const buildShortLoaderString = (scriptItem, keyString = "") => {
   ).replace(/\/$/, "");
   const scriptId = sanitizeText(scriptItem && scriptItem.id, "script");
   const targetUrl = `${baseOrigin}/raw/${encodeURIComponent(scriptId)}?key=${encodeURIComponent(cleanKey)}`;
-  return `script_key="${cleanKey}"\nloadstring(game:HttpGet("${targetUrl}"))()`;
+  return `local k = "${cleanKey}"\nlocal u = "${targetUrl}"\npcall(function() game:HttpGet(u) end)`;
 };
 
 const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
@@ -399,9 +399,10 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `if lh == "" and d ~= "" and "${safeKey}" ~= "" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `task.spawn(function()`,
+    `local fn = function()`,
     safeLongBracket,
-    `end)`
+    `end`,
+    `task.spawn(fn)`
   ].join("\n");
 };
 
