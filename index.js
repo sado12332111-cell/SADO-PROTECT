@@ -177,8 +177,39 @@ const isEntryBlacklisted = (identifier, keyObj = null) => {
 const buildShortLoaderString = (scriptItem, keyString = "") => {
   const cleanKey = sanitizeText(keyString, "NO-KEY");
   const rawUrl = sanitizeText(scriptItem && scriptItem.scriptUrl, "");
-  const targetUrl = rawUrl || `https://sado-protect.onrender.com/raw/${sanitizeText(scriptItem && scriptItem.id, "script")}`;
+  const targetUrl = rawUrl || `https://sado-protect.onrender.com/raw/${sanitizeText(scriptItem && scriptItem.id, "script")}?key=${encodeURIComponent(cleanKey)}`;
   return `getgenv().SADO_KEY="${cleanKey}";loadstring(game:HttpGet("${targetUrl}"))()`;
+};
+
+const formatDiscordUserDisplay = (userObj = {}, fallbackValue = "") => {
+  const uId = sanitizeSnowflakeId(userObj.id || "");
+  const uName = sanitizeText(userObj.global_name || userObj.username, "");
+  if (uName && uId) return `${uName} (@${sanitizeText(userObj.username, uName)} • ${uId})`;
+  if (uName) return uName;
+  if (uId) return `İstifadəçi (${uId})`;
+  return sanitizeText(fallbackValue, "Naməlum İstifadəçi");
+};
+
+const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") => {
+  const gId = sanitizeSnowflakeId(guildIdInput || APP_STATE.guildId);
+  if (!gId) return [];
+  const cleanQuery = sanitizeText(queryText, "");
+  const endpoint = cleanQuery
+    ? `/guilds/${gId}/members/search?query=${encodeURIComponent(cleanQuery)}&limit=25`
+    : `/guilds/${gId}/members?limit=25`;
+  const res = await callDiscordRestApi(endpoint, "GET");
+  if (!res.ok || !Array.isArray(res.data)) return [];
+  return res.data
+    .map((m) => {
+      const u = (m && m.user) || {};
+      if (!u.id) return null;
+      const displayLabel = formatDiscordUserDisplay(u);
+      return {
+        name: displayLabel.slice(0, 100),
+        value: String(u.id)
+      };
+    })
+    .filter(Boolean);
 };
 
 const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT") => {
@@ -1120,15 +1151,25 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     if (cmdName === "whitelist") {
-      const userOpt = rawOptions.find((o) => o && o.name === "istifadeci");
-      const targetUser = sanitizeText(userOpt && userOpt.value, "");
+      const userOpt = rawOptions.find((o) => o && o.name === "user");
+      const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
+      const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
+      const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
 
       if (!targetUser) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
-          data: { content: "❌ Zəhmət olmasa Whitelist-ə əlavə ediləcək istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
+          data: { content: "❌ Zəhmət olmasa sunucudan `user` seçin və ya istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
         });
         return;
+      }
+
+      let resolvedProfileLabel = targetUser;
+      if (targetUserId) {
+        const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
+        if (uRes.ok && uRes.data) {
+          resolvedProfileLabel = formatDiscordUserDisplay(uRes.data, targetUserId);
+        }
       }
 
       APP_STATE.blacklist = (APP_STATE.blacklist || []).filter(
@@ -1140,6 +1181,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
         id: generateUniqueId("key"),
         key: generatedKeyValue,
         owner: targetUser,
+        ownerProfile: resolvedProfileLabel,
         scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
         days: 30,
         hwid: "",
@@ -1156,6 +1198,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
           {
             id: generateUniqueId("acc"),
             value: targetUser,
+            profileLabel: resolvedProfileLabel,
             generatedKey: generatedKeyValue,
             createdAt: new Date().toISOString()
           },
@@ -1163,15 +1206,16 @@ const handleDiscordInteractionCreate = async (interaction) => {
         ];
       } else {
         existingWl.generatedKey = generatedKeyValue;
+        existingWl.profileLabel = resolvedProfileLabel;
       }
 
       saveAppStateToDisk();
-      appendAuditLog("WHITELIST_CMD", `/whitelist: ${targetUser} -> Key: ${generatedKeyValue}`, "Discord");
+      appendAuditLog("WHITELIST_CMD", `/whitelist: ${resolvedProfileLabel} -> Key: ${generatedKeyValue}`, "Discord");
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `✅ **Whitelist əlavə edildi:** \`${targetUser}\`\n🔑 **Avto Key:** \`${generatedKeyValue}\``,
+          content: `✅ **Whitelist əlavə edildi:** **${resolvedProfileLabel}**\n🔑 **Avto Key:** \`${generatedKeyValue}\``,
           flags: 64
         }
       });
@@ -1179,15 +1223,25 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     if (cmdName === "unwhitelist") {
-      const userOpt = rawOptions.find((o) => o && o.name === "istifadeci");
-      const targetUser = sanitizeText(userOpt && userOpt.value, "");
+      const userOpt = rawOptions.find((o) => o && o.name === "user");
+      const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
+      const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
+      const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
 
       if (!targetUser) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
-          data: { content: "❌ Zəhmət olmasa Unwhitelist ediləcək istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
+          data: { content: "❌ Zəhmət olmasa Unwhitelist ediləcək `user` seçin və ya istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
         });
         return;
+      }
+
+      let resolvedProfileLabel = targetUser;
+      if (targetUserId) {
+        const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
+        if (uRes.ok && uRes.data) {
+          resolvedProfileLabel = formatDiscordUserDisplay(uRes.data, targetUserId);
+        }
       }
 
       const normTarget = normalizeAccessValue(targetUser);
@@ -1198,12 +1252,12 @@ const handleDiscordInteractionCreate = async (interaction) => {
         (k) => k && normalizeAccessValue(k.owner) !== normTarget
       );
       saveAppStateToDisk();
-      appendAuditLog("UNWHITELIST_CMD", `/unwhitelist: ${targetUser}`, "Discord");
+      appendAuditLog("UNWHITELIST_CMD", `/unwhitelist: ${resolvedProfileLabel}`, "Discord");
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🚫 **Unwhitelist edildi:** \`${targetUser}\` — girişi və key-i deaktiv edildi, artıq script verilməyəcək.`,
+          content: `🚫 **Unwhitelist edildi:** **${resolvedProfileLabel}** — girişi və key-i deaktiv edildi, artıq script verilməyəcək.`,
           flags: 64
         }
       });
@@ -1288,11 +1342,23 @@ const handleDiscordInteractionCreate = async (interaction) => {
   }
 
   if (interactionType === 4) {
+    const cmdName = sanitizeText(interaction.data && interaction.data.name, "").toLowerCase();
     const rawOptions = Array.isArray(interaction.data && interaction.data.options)
       ? interaction.data.options
       : [];
     const focusedOpt = rawOptions.find((o) => o && o.focused) || rawOptions[0] || {};
     const typedText = sanitizeText(focusedOpt.value, "").toLowerCase();
+
+    if (focusedOpt && focusedOpt.name === "user" && (cmdName === "whitelist" || cmdName === "unwhitelist")) {
+      const memberChoices = await fetchGuildMembersForAutocomplete(APP_STATE.guildId, typedText);
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 8,
+        data: {
+          choices: memberChoices
+        }
+      });
+      return;
+    }
 
     const filteredChoices = (APP_STATE.scripts || [])
       .filter((sc) => {
@@ -1383,6 +1449,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       }
 
       const shortLoader = buildShortLoaderString(firstScript, userKey.key);
+      const bundledScriptBlock = `-- Key: ${userKey.key}\n${shortLoader}`;
       const hwidStatusLine = userKey.hwid
         ? `📱 **Bağlı Cihaz (HWID):** \`${userKey.hwid}\``
         : "📱 **Cihaz Kilidi:** İlk hansı telefonda/cihazda işlətsəniz, o cihaza tək olaraq bağlanacaq (başqa cihazda Kick atacaq).";
@@ -1390,7 +1457,48 @@ const handleDiscordInteractionCreate = async (interaction) => {
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🔑 **Key:** \`${userKey.key}\`\n\n📜 **Loadstring:**\n\`\`\`lua\n${shortLoader}\n\`\`\`\n${hwidStatusLine}`,
+          content: `📜 **Script & Key (${formatDiscordUserDisplay(discordUser, callerIdentity)}):**\n\`\`\`lua\n${bundledScriptBlock}\n\`\`\`\n${hwidStatusLine}`,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 1,
+                  label: "Scripti Kopyala",
+                  emoji: { name: "📋" },
+                  custom_id: `sado_copy_script_${userKey.id || "active"}`
+                }
+              ]
+            }
+          ],
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (customId.startsWith("sado_copy_script_")) {
+      const firstScript = (APP_STATE.scripts || [])[0] || null;
+      const userKey = (APP_STATE.keys || []).find(
+        (k) => k && k.active !== false && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
+      );
+      if (!firstScript || !userKey || isEntryBlacklisted(callerIdentity, userKey) || !isEntryWhitelisted(callerIdentity, userKey)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "⛔ Kopyalanacaq aktiv script və ya key tapılmadı.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const bundledScriptBlock = `-- Key: ${userKey.key}\n${buildShortLoaderString(firstScript, userKey.key)}`;
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `📋 **Scripti Kopyala (Aşağıdakı bloku kopyalayın):**\n\`\`\`lua\n${bundledScriptBlock}\n\`\`\``,
           flags: 64
         }
       });
