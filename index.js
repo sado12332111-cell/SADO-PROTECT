@@ -358,6 +358,17 @@ const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") =>
       .filter(Boolean);
   }
   return res.data
+    .map((m) => {
+      const u = (m && m.user) || {};
+      if (!u.id) return null;
+      return {
+        name: formatDiscordUserDisplay(u).slice(0, 100),
+        value: String(u.id)
+      };
+    })
+    .filter(Boolean);
+};
+
 const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT", boundHwid = "") => {
   const cleanScript = String(rawCodeText || "");
   const encodedPayload = Buffer.from(cleanScript, "utf8").toString("base64");
@@ -1531,96 +1542,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `✅ Yeni key yaradıldı və saytdakı **Keylər** bölməsinə əlavə olundu: \`${newKeyCode}\` (Script: **${targetScript}**, Müddət: **30 gün**)`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (cmdName === "unwhitelist") {
-      const userOpt = rawOptions.find((o) => o && o.name === "user");
-      const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
-      const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
-      const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
-
-      if (!targetUser) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: { content: "❌ Zəhmət olmasa Unwhitelist ediləcək `user` seçin və ya istifadəçi ID/Nick/HWID daxil edin.", flags: 64 }
-        });
-        return;
-      }
-
-      let resolvedProfileLabel = targetUser;
-      if (targetUserId) {
-        const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
-        if (uRes.ok && uRes.data) {
-          resolvedProfileLabel = formatDiscordUserDisplay(uRes.data, targetUserId);
-        }
-      }
-
-      const normTarget = normalizeAccessValue(targetUser);
-      APP_STATE.whitelist = (APP_STATE.whitelist || []).filter(
-        (w) => w && normalizeAccessValue(w.value) !== normTarget
-      );
-      APP_STATE.keys = (APP_STATE.keys || []).filter(
-        (k) => k && normalizeAccessValue(k.owner) !== normTarget
-      );
-      saveAppStateToDisk();
-      appendAuditLog("UNWHITELIST_CMD", `/unwhitelist: ${resolvedProfileLabel}`, "Discord");
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `🚫 **Unwhitelist edildi:** **${resolvedProfileLabel}** — girişi və key-i deaktiv edildi, artıq script verilməyəcək.`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (cmdName === "key") {
-      const actionOpt = rawOptions.find((o) => o && o.name === "action");
-      const valOpt = rawOptions.find((o) => o && o.name === "value");
-      const actionVal = sanitizeText(actionOpt && actionOpt.value, "generate");
-      const argVal = sanitizeText(valOpt && valOpt.value, "");
-
-      if (actionVal === "check") {
-        const foundKey = (APP_STATE.keys || []).find(
-          (k) => sanitizeText(k.key, "").toUpperCase() === argVal.toUpperCase()
-        );
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: foundKey
-              ? `🔑 Key tapıldı: \`${foundKey.key}\` | Script: **${sanitizeText(foundKey.scriptName, "Hamısı")}** | Status: **${foundKey.active !== false ? "Aktiv" : "Deaktiv"}**`
-              : "❌ Daxil edilən key tapılmadı.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      const newKeyCode = generateLicenseKeyString();
-      const targetScript = argVal || ((APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi");
-      const keyRecord = {
-        id: generateUniqueId("key"),
-        key: newKeyCode,
-        scriptName: targetScript,
-        days: 30,
-        hwid: "",
-        active: true,
-        createdAt: new Date().toISOString()
-      };
-      APP_STATE.keys = [keyRecord, ...(APP_STATE.keys || [])];
-      saveAppStateToDisk();
-      appendAuditLog("KEY_CREATED", `Slash komanda ilə key yaradıldı: ${newKeyCode}`, "Discord");
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `✅ Yeni key yaradıldı: \`${newKeyCode}\` (Script: **${targetScript}**, Müddət: **30 gün**)`,
+          content: `✅ Yeni key yaradıldı və saytdakı **Keylər** bölməsinə əlavə olundu: \`${newKeyCode}\` (Script: **${targetScript}**, Müddət: **Lifetime**)`,
           flags: 64
         }
       });
@@ -1915,13 +1837,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       return;
     }
 
-    if (customId.startsWith("sado_copy_script_")) {
-      const firstScript = (APP_STATE.scripts || [])[0] || null;
-      const userKey = (APP_STATE.keys || []).find(
-        (k) => k && k.active !== false && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
-      );
-      if (!firstScript || !userKey || isEntryBlacklisted(callerIdentity, userKey) || !isEntryWhitelisted(callerIdentity, userKey)) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
+    await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
           data: {
             content: "⛔ Kopyalanacaq aktiv script və ya key tapılmadı.",
