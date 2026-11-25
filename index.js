@@ -308,16 +308,11 @@ const discordClient = new Client({
 const BOT_RUNTIME = {
   isReady: true,
   gatewayReady: false,
-  botTag: "SADO PROTECT",
-  botId: "",
-  startedAt: new Date().toISOString(),
-  lastError: ""
-};
-
-const resolveGuildDisplayName = async (guildIdInput) => {
+const resolveGuildDisplayName = async (guildIdInput, preferredNameInput = "") => {
   const cleanId = String(guildIdInput || "").trim();
+  const cleanPreferred = String(preferredNameInput || "").trim();
   if (!cleanId) {
-    return "Sunucu seçilməyib";
+    return cleanPreferred || "Sunucu seçilməyib";
   }
 
   try {
@@ -372,14 +367,19 @@ const resolveGuildDisplayName = async (guildIdInput) => {
     return widgetResult.data.name;
   }
 
-  if (APP_STATE.guildCache && APP_STATE.guildCache[cleanId]) {
+  if (cleanPreferred && !cleanPreferred.startsWith("Sunucu (")) {
+    APP_STATE.guildCache[cleanId] = cleanPreferred;
+    return cleanPreferred;
+  }
+
+  if (APP_STATE.guildCache && APP_STATE.guildCache[cleanId] && !APP_STATE.guildCache[cleanId].startsWith("Sunucu (")) {
     return APP_STATE.guildCache[cleanId];
   }
 
-  return `Sunucu (${cleanId})`;
+  return "Bağlı Sunucu";
 };
 
-const syncActiveGuildName = async (targetGuildId) => {
+const syncActiveGuildName = async (targetGuildId, preferredName = "") => {
   const idToUse = String(targetGuildId || APP_STATE.bot.guildId || "").trim();
   if (!idToUse) {
     APP_STATE.bot.guildId = "";
@@ -388,7 +388,7 @@ const syncActiveGuildName = async (targetGuildId) => {
     savePersistentState();
     return APP_STATE.bot.guildName;
   }
-  const resolved = await resolveGuildDisplayName(idToUse);
+  const resolved = await resolveGuildDisplayName(idToUse, preferredName);
   APP_STATE.bot.guildId = idToUse;
   APP_STATE.bot.guildName = resolved;
   APP_STATE.bot.connected = true;
@@ -511,6 +511,16 @@ const registerSlashCommands = async () => {
     return;
   }
 
+  const scriptChoices = Array.isArray(APP_STATE.scripts)
+    ? APP_STATE.scripts
+        .filter((s) => s && s.id && s.name)
+        .slice(0, 25)
+        .map((s) => ({
+          name: String(s.name).slice(0, 100),
+          value: String(s.id)
+        }))
+    : [];
+
   const commands = [
     new SlashCommandBuilder()
       .setName("panel")
@@ -519,15 +529,8 @@ const registerSlashCommands = async () => {
       .addStringOption((opt) => {
         const optionBuilder = opt
           .setName("script")
-          .setDescription("Panel açılacaq script adı")
-          .setRequired(false)
-          .setAutocomplete(true);
-        const scriptChoices = Array.isArray(APP_STATE.scripts)
-          ? APP_STATE.scripts.slice(0, 25).map((s) => ({
-              name: String(s.name || "Script").slice(0, 100),
-              value: String(s.id || "")
-            }))
-          : [];
+          .setDescription("Mövcud script seçin (boş buraxsanız aktiv script açılır)")
+          .setRequired(false);
         if (scriptChoices.length > 0) {
           optionBuilder.addChoices(...scriptChoices);
         }
@@ -603,7 +606,7 @@ const handleDiscordInteraction = async (interaction) => {
       const choices = (filteredScripts.length > 0 ? filteredScripts : APP_STATE.scripts)
         .slice(0, 25)
         .map((s) => ({
-          name: `${String(s.name || "Script").slice(0, 80)} (${s.sourceType === "file" ? s.fileName || "Dosya" : "URL"})`.slice(0, 100),
+          name: String(s.name || "Script").slice(0, 100),
           value: String(s.id || "")
         }));
       await interaction.respond(choices);
@@ -626,10 +629,11 @@ const handleDiscordInteraction = async (interaction) => {
           APP_STATE.bot.activeScriptId = chosenScript;
         }
         if (interaction.guildId) {
-          if (interaction.guild && interaction.guild.name) {
-            APP_STATE.guildCache[interaction.guildId] = interaction.guild.name;
+          const liveGuildName = interaction.guild && interaction.guild.name ? interaction.guild.name : "";
+          if (liveGuildName) {
+            APP_STATE.guildCache[interaction.guildId] = liveGuildName;
           }
-          await syncActiveGuildName(interaction.guildId);
+          await syncActiveGuildName(interaction.guildId, liveGuildName);
         }
         APP_STATE.bot.panelChannelId = interaction.channelId;
         const payload = buildPanelEmbedPayload(chosenScript);
@@ -923,12 +927,17 @@ const startDiscordBot = async () => {
 };
 
 const buildPublicSnapshot = () => {
-  const activeGuildName =
+  const rawGuildName =
     APP_STATE.bot.guildId && APP_STATE.bot.guildName
       ? APP_STATE.bot.guildName
-      : APP_STATE.bot.guildId
-      ? APP_STATE.guildCache[APP_STATE.bot.guildId] || `Sunucu (${APP_STATE.bot.guildId})`
-      : "Sunucu seçilməyib";
+      : APP_STATE.bot.guildId && APP_STATE.guildCache
+      ? APP_STATE.guildCache[APP_STATE.bot.guildId] || ""
+      : "";
+  const activeGuildName = APP_STATE.bot.guildId
+    ? rawGuildName && !rawGuildName.startsWith("Sunucu (")
+      ? rawGuildName
+      : "Bağlı Sunucu"
+    : "Sunucu seçilməyib";
 
   return {
     botStatus: {
