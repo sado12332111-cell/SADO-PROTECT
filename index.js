@@ -290,7 +290,11 @@ const TOKEN_SEGMENTS_B64 = Object.freeze([
 const assembleVaultToken = () => {
   try {
     const joinedB64 = TOKEN_SEGMENTS_B64.join("");
-    return Buffer.from(joinedB64, "base64").toString("utf8").trim();
+    const decoded = Buffer.from(joinedB64, "base64").toString("utf8").trim();
+    if (/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{10,}$/.test(decoded)) {
+      return decoded;
+    }
+    return decoded;
   } catch (_err) {
     return "";
   }
@@ -708,10 +712,14 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
     }
   } catch (_err) {}
 
-  if (manualName) {
+  if (manualName && !/^Sunucu\s*#?\d+$/i.test(manualName)) {
     return manualName;
   }
-  if (sanitizeText(APP_STATE.guildId, "") === cleanId && sanitizeText(APP_STATE.guildName, "")) {
+  if (
+    sanitizeText(APP_STATE.guildId, "") === cleanId &&
+    sanitizeText(APP_STATE.guildName, "") &&
+    !/^Sunucu\s*#?\d+$/i.test(sanitizeText(APP_STATE.guildName, ""))
+  ) {
     return sanitizeText(APP_STATE.guildName, "");
   }
 
@@ -2708,7 +2716,7 @@ const handleHttpRequest = async (req, res) => {
 
       const resolvedName = await resolveGuildDisplayName(cleanGuildId, body.guildName || "");
       APP_STATE.guildId = cleanGuildId;
-      APP_STATE.guildName = resolvedName || APP_STATE.guildName || `Sunucu #${cleanGuildId}`;
+      APP_STATE.guildName = resolvedName || (sanitizeText(body.guildName, "") || "Bağlı Sunucu");
       if (cleanChannelId) {
         APP_STATE.panelChannelId = cleanChannelId;
       }
