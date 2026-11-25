@@ -337,7 +337,7 @@ const TOKEN_SEGMENTS_PARTS = Object.freeze([
 
 const assembleVaultToken = () => {
   try {
-    const partOne = Buffer.from("TVRVeU1qQTBNRFF5TkRJNE1qSTFNVFF5TVRJd1h6", "base64").toString("utf8");
+    const partOne = Buffer.from("MTU2MjA4MDY1NDI4MjE5OTEyMQ==", "base64").toString("utf8");
     const partTwo = Buffer.from("RzRpSThnLkRwSlk1TDFpN1F5RXg1Y255c0lQZHdZ", "base64").toString("utf8");
     const partThree = Buffer.from("R3lNZEVhUFdSaTYxd2pj", "base64").toString("utf8");
     const rawCandidate = `${partOne}${partTwo}${partThree}`.trim();
@@ -1614,7 +1614,7 @@ const buildDashboardHtmlDocument = () => {
     .topbar {
       position: sticky;
       top: 0;
-      z-index: 40;
+      z-index: 120;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -1623,6 +1623,33 @@ const buildDashboardHtmlDocument = () => {
       background: rgba(8, 15, 29, 0.92);
       backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--border-color);
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      position: relative;
+      z-index: 125;
+    }
+
+    .menu-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      color: var(--text-primary);
+      font-size: 20px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      touch-action: manipulation;
+      position: relative;
+      z-index: 130;
     }
 
     .topbar-left {
@@ -2482,69 +2509,6 @@ const buildDashboardHtmlDocument = () => {
           card.appendChild(top);
         }
 
-        container.appendChild(card);
-      });
-    };
-
-    const renderAccessSection = (whitelistArr, blacklistArr) => {
-      const container = document.getElementById("accessListsContainer");
-      if (!container) return;
-      container.innerHTML = "";
-
-      const combined = [
-        ...(whitelistArr || []).map((item) => ({ ...item, listType: "whitelist" })),
-        ...(blacklistArr || []).map((item) => ({ ...item, listType: "blacklist" }))
-      ];
-
-      if (combined.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "item-card";
-        empty.textContent = "Whitelist və ya Blacklist qeydi yoxdur.";
-        container.appendChild(empty);
-        return;
-      }
-
-      combined.forEach((entry) => {
-        const card = document.createElement("div");
-        card.className = "item-card";
-
-        const top = document.createElement("div");
-        top.className = "item-header";
-
-        const valEl = document.createElement("div");
-        valEl.className = "item-name";
-        valEl.textContent = entry.value;
-
-        const rightBox = document.createElement("div");
-        rightBox.className = "btn-row";
-
-        const badge = document.createElement("span");
-        badge.className = "pill";
-        badge.textContent = entry.listType === "whitelist" ? "WHITELIST" : "BLACKLIST";
-
-        const removeBtn = document.createElement("button");
-        removeBtn.type = "button";
-        removeBtn.className = "btn btn-danger btn-sm";
-        removeBtn.textContent = "Sil";
-        removeBtn.addEventListener("click", async () => {
-          try {
-            await apiRequest(
-              "/api/access/" + encodeURIComponent(entry.listType) + "/" + encodeURIComponent(entry.id),
-              "DELETE"
-            );
-            showToast("Qeyd silindi");
-            await refreshDashboardSnapshot();
-          } catch (err) {
-            showToast(err.message);
-          }
-        });
-
-        rightBox.appendChild(badge);
-        rightBox.appendChild(removeBtn);
-
-        top.appendChild(valEl);
-        top.appendChild(rightBox);
-        card.appendChild(top);
         container.appendChild(card);
       });
     };
