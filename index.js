@@ -377,23 +377,32 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     "https://sado-protect.onrender.com"
   ).replace(/\/$/, "");
 
-  const b64Payload = Buffer.from(cleanScript, "utf8").toString("base64");
+  const safeLongBracket = (() => {
+    let eq = "";
+    while (cleanScript.includes(`]${eq}]`)) {
+      eq += "=";
+    }
+    return `[${eq}[${cleanScript}]${eq}]`;
+  })();
 
   return [
-    `local d="" pcall(function() if gethwid then d=tostring(gethwid() or "") end end)`,
-    `if d=="" then pcall(function() d=tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end) end`,
-    `if d=="" then pcall(function() local p=game:GetService("Players").LocalPlayer if p then d="u_"..tostring(p.UserId) end end) end`,
-    `if "${lockedHwid}"~="" and d~="" and d:lower()~="${lockedHwid}":lower() then`,
-    `  pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu key yalniz 1 cihaz/telefon ucundur — Kick edildi") end) return`,
+    `local p = game:GetService("Players").LocalPlayer`,
+    `local d = ""`,
+    `pcall(function() if gethwid then d = tostring(gethwid() or "") end end)`,
+    `if d == "" then pcall(function() d = tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end) end`,
+    `if d == "" and p then d = "u_" .. tostring(p.UserId) end`,
+    `local lh = "${lockedHwid}"`,
+    `if lh ~= "" and d ~= "" and string.lower(d) ~= string.lower(lh) then`,
+    `  pcall(function() if p then p:Kick("Bu key yalniz ilk cihaz/telefon ucundur — Kick edildi") end end)`,
+    `  return`,
     `end`,
-    `if "${lockedHwid}"=="" and d~="" and "${safeKey}"~="" then`,
-    `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid="..game:GetService("HttpService"):UrlEncode(d)) end)`,
+    `if lh == "" and d ~= "" and "${safeKey}" ~= "" then`,
+    `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `local b="${b64Payload}"`,
-    `local c="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"`,
-    `b=b:gsub("[^"..c.."=]","")`,
-    `local out=(b:gsub(".",function(x) if x=="=" then return "" end local r,f="",(c:find(x)-1) for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and "1" or "0") end return r end):gsub("%d%d%d?%d?%d?%d?%d?%d?",function(x) if #x~=8 then return "" end local n=0 for i=1,8 do n=n+(x:sub(i,i)=="1" and 2^(8-i) or 0) end return string.char(n) end))`,
-    `local fn=loadstring(out) if fn then task.spawn(fn) end`
+    `local run = function()`,
+    safeLongBracket,
+    `end`,
+    `task.spawn(function() pcall(run) end)`
   ].join("\n");
 };
 
