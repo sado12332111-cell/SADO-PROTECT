@@ -731,27 +731,29 @@ const resolveGuildDisplayName = async (guildIdInput, explicitGuildName = "") => 
 // ----------------------------------------------------------------------------
 
 const buildSlashCommandsPayload = () => {
-  const scriptChoices = (Array.isArray(APP_STATE.scripts) ? APP_STATE.scripts : [])
-    .slice(0, 25)
-    .map((sc) => {
-      const scName = sanitizeText(sc && sc.name, "Script");
-      return {
-        name: scName.slice(0, 100),
-        value: scName.slice(0, 100)
+  const hasScripts = Array.isArray(APP_STATE.scripts) && APP_STATE.scripts.length > 0;
+
+  const scriptOption = hasScripts
+    ? {
+        name: "script",
+        description: "Panel açılacaq mövcud scripti seçin",
+        type: 3,
+        required: false,
+        choices: APP_STATE.scripts.slice(0, 25).map((sc) => {
+          const scName = sanitizeText(sc && sc.name, "Script").slice(0, 100);
+          return {
+            name: scName,
+            value: scName
+          };
+        })
+      }
+    : {
+        name: "script",
+        description: "Panel açılacaq mövcud scripti seçin",
+        type: 3,
+        required: false,
+        autocomplete: true
       };
-    });
-
-  const scriptOption = {
-    name: "script",
-    description: "Panel açılacaq mövcud scripti seçin",
-    type: 3,
-    required: false,
-    autocomplete: true
-  };
-
-  if (scriptChoices.length > 0) {
-    scriptOption.choices = scriptChoices;
-  }
 
   return [
     {
