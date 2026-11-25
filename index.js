@@ -138,6 +138,55 @@ const generateLicenseKeyString = () => {
 
 const normalizeAccessValue = (value) => sanitizeText(value, "").toLowerCase();
 
+const collectUserMatchTokens = (identifier, keyObj = null) => {
+  const tokens = new Set();
+  const addRaw = (raw) => {
+    const clean = sanitizeText(raw, "");
+    if (!clean) return;
+    tokens.add(clean.toLowerCase());
+    const idMatch = clean.match(/\b(\d{15,22})\b/);
+    if (idMatch && idMatch[1]) {
+      tokens.add(idMatch[1].toLowerCase());
+    }
+    const atMatch = clean.match(/@([^\s•)]+)/);
+    if (atMatch && atMatch[1]) {
+      tokens.add(atMatch[1].trim().toLowerCase());
+    }
+  };
+
+  addRaw(identifier);
+  if (keyObj) {
+    addRaw(keyObj.owner);
+    addRaw(keyObj.ownerId);
+    addRaw(keyObj.key);
+  }
+  return tokens;
+};
+
+const findMatchingUserKey = (callerUser = {}, callerIdentity = "") => {
+  const callerTokens = collectUserMatchTokens(callerIdentity, {
+    owner: callerIdentity,
+    ownerId: callerUser.id || "",
+    key: ""
+  });
+  const usernameLower = sanitizeText(callerUser.username, "").toLowerCase();
+  const globalNameLower = sanitizeText(callerUser.global_name, "").toLowerCase();
+  if (usernameLower) callerTokens.add(usernameLower);
+  if (globalNameLower) callerTokens.add(globalNameLower);
+
+  const keysList = APP_STATE.keys || [];
+  for (const k of keysList) {
+    if (!k || k.active === false) continue;
+    const keyTokens = collectUserMatchTokens("", k);
+    for (const tok of callerTokens) {
+      if (tok && keyTokens.has(tok)) {
+        return k;
+      }
+    }
+  }
+  return null;
+};
+
 const findKeyByValueOrUser = (rawIdentifier) => {
   const cleanIdent = sanitizeText(rawIdentifier, "");
   const lowerIdent = cleanIdent.toLowerCase();
@@ -145,33 +194,79 @@ const findKeyByValueOrUser = (rawIdentifier) => {
     if (!k) return false;
     const keyMatch = sanitizeText(k.key, "").toLowerCase() === lowerIdent;
     const ownerMatch = sanitizeText(k.owner, "").toLowerCase() === lowerIdent;
+    const ownerIdMatch = sanitizeText(k.ownerId, "").toLowerCase() === lowerIdent;
     const hwidMatch = sanitizeText(k.hwid, "").toLowerCase() === lowerIdent;
-    return keyMatch || ownerMatch || hwidMatch;
+    return keyMatch || ownerMatch || ownerIdMatch || hwidMatch;
   }) || null;
 };
 
-const isEntryWhitelisted = (identifier, keyObj = null) => {
-  const targets = new Set();
-  if (identifier) targets.add(normalizeAccessValue(identifier));
-  if (keyObj) {
-    if (keyObj.owner) targets.add(normalizeAccessValue(keyObj.owner));
-    if (keyObj.hwid) targets.add(normalizeAccessValue(keyObj.hwid));
-    if (keyObj.key) targets.add(normalizeAccessValue(keyObj.key));
+const isEntryWhitelisted = (identifier, keyObj = null, extraUserObj = null) => {
+  const targets = collectUserMatchTokens(identifier, keyObj);
+  if (extraUserObj) {
+    const extraTokens = collectUserMatchTokens("", {
+      owner: extraUserObj.username || "",
+      ownerId: extraUserObj.id || "",
+      key: ""
+    });
+    for (const et of extraTokens) targets.add(et);
+    if (extraUserObj.global_name) targets.add(sanitizeText(extraUserObj.global_name, "").toLowerCase());
   }
+
   const list = APP_STATE.whitelist || [];
-  return list.some((item) => item && targets.has(normalizeAccessValue(item.value)));
+  return list.some((item) => {
+    if (!item) return false;
+    const itemTokens = collectUserMatchTokens(item.value, {
+      owner: item.value || "",
+      ownerId: item.userId || "",
+      key: item.generatedKey || ""
+    });
+    for (const t of targets) {
+      if (t && itemTokens.has(t)) return true;
+    }
+    return false;
+  });
 };
 
-const isEntryBlacklisted = (identifier, keyObj = null) => {
-  const targets = new Set();
-  if (identifier) targets.add(normalizeAccessValue(identifier));
-  if (keyObj) {
-    if (keyObj.owner) targets.add(normalizeAccessValue(keyObj.owner));
-    if (keyObj.hwid) targets.add(normalizeAccessValue(keyObj.hwid));
-    if (keyObj.key) targets.add(normalizeAccessValue(keyObj.key));
+const isEntryBlacklisted = (identifier, keyObj = null, extraUserObj = null) => {
+  const targets = collectUserMatchTokens(identifier, keyObj);
+  if (extraUserObj) {
+    const extraTokens = collectUserMatchTokens("", {
+      owner: extraUserObj.username || "",
+      ownerId: extraUserObj.id || "",
+      key: ""
+    });
+    for (const et of extraTokens) targets.add(et);
   }
+
   const list = APP_STATE.blacklist || [];
-  return list.some((item) => item && targets.has(normalizeAccessValue(item.value)));
+  return list.some((item) => {
+    if (!item) return false;
+    const itemTokens = collectUserMatchTokens(item.value, {
+      owner: item.value || "",
+      ownerId: item.userId || "",
+      key: ""
+    });
+    for (const t of targets) {
+      if (t && itemTokens.has(t)) return true;
+    }
+    return false;
+  });
+};
+
+const formatRemainingKeyTime = (keyObj) => {
+  if (!keyObj) return "0 gün";
+  const daysNum = Number(keyObj.days);
+  if (!Number.isFinite(daysNum) || daysNum <= 0) {
+    return "Lifetime";
+  }
+  const createdMs = Date.parse(sanitizeText(keyObj.createdAt, "")) || Date.now();
+  const expiresMs = createdMs + daysNum * 24 * 60 * 60 * 1000;
+  const diffMs = expiresMs - Date.now();
+  if (diffMs <= 0) {
+    return "Vaxtı bitib";
+  }
+  const remDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+  return `${remDays} gün`;
 };
 
 const buildShortLoaderString = (scriptItem, keyString = "") => {
@@ -1236,8 +1331,9 @@ const handleDiscordInteractionCreate = async (interaction) => {
         owner: resolvedProfileLabel,
         ownerId: targetUser,
         scriptName: chosenScriptName,
-        days: 30,
+        days: 0,
         hwid: "",
+        hwidResetCount: 0,
         active: true,
         createdAt: new Date().toISOString()
       };
@@ -1376,8 +1472,9 @@ const handleDiscordInteractionCreate = async (interaction) => {
         owner: callerLabel,
         ownerId: sanitizeText(callerUser.id, ""),
         scriptName: targetScript,
-        days: 30,
+        days: 0,
         hwid: "",
+        hwidResetCount: 0,
         active: true,
         createdAt: new Date().toISOString()
       };
@@ -1606,31 +1703,48 @@ const handleDiscordInteractionCreate = async (interaction) => {
         return;
       }
 
-      const userKey = (APP_STATE.keys || []).find(
-        (k) => k && k.active !== false && normalizeAccessValue(k.owner) === normalizeAccessValue(callerIdentity)
-      );
+      const userKey = findMatchingUserKey(discordUser, callerIdentity);
+      const whitelisted = isEntryWhitelisted(callerIdentity, userKey, discordUser);
+      const blacklisted = isEntryBlacklisted(callerIdentity, userKey, discordUser);
 
-      if (isEntryBlacklisted(callerIdentity, userKey) || !isEntryWhitelisted(callerIdentity, userKey) || !userKey) {
+      if (blacklisted || (!whitelisted && !userKey)) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
           data: {
-            content: "⛔ **Giriş Qadağandır:** Script əldə etmək üçün Whitelist-də olmalı və aktiv Key-iniz olmalıdır.",
+            content: "⛔ **Giriş Qadağandır:** Script əldə etmək üçün Whitelist-də olmalı və ya aktiv Key-iniz olmalıdır.",
             flags: 64
           }
         });
         return;
       }
 
-      const shortLoader = buildShortLoaderString(firstScript, userKey.key);
-      const bundledScriptBlock = `-- Key: ${userKey.key}\n${shortLoader}`;
-      const hwidStatusLine = userKey.hwid
-        ? `📱 **Bağlı Cihaz (HWID):** \`${userKey.hwid}\``
-        : "📱 **Cihaz Kilidi:** İlk hansı telefonda/cihazda işlətsəniz, o cihaza tək olaraq bağlanacaq (başqa cihazda Kick atacaq).";
+      const activeKeyCode = userKey ? userKey.key : generateLicenseKeyString();
+      if (!userKey) {
+        APP_STATE.keys = [
+          {
+            id: generateUniqueId("key"),
+            key: activeKeyCode,
+            owner: formatDiscordUserDisplay(discordUser, callerIdentity),
+            ownerId: callerUserId,
+            scriptName: firstScript.name,
+            days: 0,
+            hwid: "",
+            hwidResetCount: 0,
+            active: true,
+            createdAt: new Date().toISOString()
+          },
+          ...(APP_STATE.keys || [])
+        ];
+        saveAppStateToDisk();
+      }
+
+      const shortLoader = buildShortLoaderString(firstScript, activeKeyCode);
+      const bundledScriptBlock = `-- Key: ${activeKeyCode}\n${shortLoader}`;
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `📜 **Script & Key (${formatDiscordUserDisplay(discordUser, callerIdentity)}):**\n\`\`\`lua\n${bundledScriptBlock}\n\`\`\`\n${hwidStatusLine}`,
+          content: `\`\`\`lua\n${bundledScriptBlock}\n\`\`\``,
           components: [
             {
               type: 1,
@@ -1640,11 +1754,115 @@ const handleDiscordInteractionCreate = async (interaction) => {
                   style: 1,
                   label: "Scripti Kopyala",
                   emoji: { name: "📋" },
-                  custom_id: `sado_copy_script_${userKey.id || "active"}`
+                  custom_id: `sado_copy_script_${activeKeyCode}`
                 }
               ]
             }
           ],
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (customId.startsWith("sado_copy_script_")) {
+      const firstScript = (APP_STATE.scripts || [])[0] || null;
+      const userKey = findMatchingUserKey(discordUser, callerIdentity);
+      const whitelisted = isEntryWhitelisted(callerIdentity, userKey, discordUser);
+      const blacklisted = isEntryBlacklisted(callerIdentity, userKey, discordUser);
+
+      if (!firstScript || blacklisted || (!whitelisted && !userKey)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "⛔ Kopyalanacaq aktiv script və ya key tapılmadı.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const cleanKeyStr = userKey ? userKey.key : generateLicenseKeyString();
+      const cleanLoaderStr = buildShortLoaderString(firstScript, cleanKeyStr);
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `-- Key: ${cleanKeyStr}\n${cleanLoaderStr}`,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (customId.includes("btn_reset_hwid")) {
+      const matchedKey = findMatchingUserKey(discordUser, callerIdentity);
+      const whitelisted = isEntryWhitelisted(callerIdentity, matchedKey, discordUser);
+      const blacklisted = isEntryBlacklisted(callerIdentity, matchedKey, discordUser);
+
+      if (blacklisted || (!whitelisted && !matchedKey)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "⛔ **Reset HWID Qadağandır:** Bu funksiya yalnız Key-i olan və ya Whitelist-də olan istifadəçilər üçün işləyir.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      let resetCount = 0;
+      let totalResetsDone = 0;
+      APP_STATE.keys = (APP_STATE.keys || []).map((k) => {
+        if (!k) return k;
+        const isTarget = matchedKey && k.id === matchedKey.id;
+        if (isTarget) {
+          resetCount += 1;
+          totalResetsDone = Number(k.hwidResetCount || 0) + 1;
+          return {
+            ...k,
+            hwid: "",
+            hwidResetCount: totalResetsDone
+          };
+        }
+        return k;
+      });
+      saveAppStateToDisk();
+      appendAuditLog("HWID_RESET", `HWID sıfırlandı (${formatDiscordUserDisplay(discordUser, callerIdentity)})`, "Discord");
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `🔄 **HWID sıfırlandı!**\n🔑 **Key:** \`${matchedKey.key}\`\n♻️ **Reset HWID sayı:** **${totalResetsDone || resetCount}**\n📱 Scripti ilk hansı telefonda/cihazda işlətsəniz, ona bağlanacaq (digər cihazlarda Kick atacaq).`,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (customId.includes("btn_get_stats")) {
+      const matchedKey = findMatchingUserKey(discordUser, callerIdentity);
+      const whitelisted = isEntryWhitelisted(callerIdentity, matchedKey, discordUser);
+      const blacklisted = isEntryBlacklisted(callerIdentity, matchedKey, discordUser);
+
+      if (blacklisted || (!whitelisted && !matchedKey)) {
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "⛔ **Get Stats Qadağandır:** Bu funksiya yalnız Key-i olan və ya Whitelist-də olan istifadəçilər üçün işləyir.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const keyValueText = matchedKey ? `\`${matchedKey.key}\`` : "Yoxdur";
+      const hwidResetsText = String(Number((matchedKey && matchedKey.hwidResetCount) || 0));
+      const remainingTimeText = formatRemainingKeyTime(matchedKey);
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `📊 **Sizin Statistikalar (${formatDiscordUserDisplay(discordUser, callerIdentity)}):**\n🔑 **Key:** ${keyValueText}\n♻️ **Reset HWID sayı:** **${hwidResetsText}**\n⏳ **Qalan müddət:** **${remainingTimeText}**`,
           flags: 64
         }
       });
@@ -2880,7 +3098,7 @@ const buildDashboardHtmlDocument = () => {
         top.appendChild(codeEl);
         top.appendChild(delBtn);
 
-        const durationText = Number(k.days) === 0 ? "Ömürlük" : String(k.days) + " gün";
+        const durationText = Number(k.days) === 0 ? "Lifetime" : String(k.days) + " gün";
         const hwidText = k.hwid ? ("HWID: " + k.hwid) : "HWID: Bağlanmayıb (İlk cihaza bağlanacaq)";
         const statusText = k.active === false ? "Deaktiv" : "Aktiv";
         const meta = document.createElement("div");
@@ -3553,8 +3771,9 @@ const handleHttpRequest = async (req, res) => {
           key: generatedKeyValue,
           owner: val,
           scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
-          days: 30,
+          days: 0,
           hwid: "",
+          hwidResetCount: 0,
           active: true,
           createdAt: new Date().toISOString()
         };
