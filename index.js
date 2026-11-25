@@ -277,14 +277,7 @@ const buildShortLoaderString = (scriptItem, keyString = "") => {
   ).replace(/\/$/, "");
   const scriptId = sanitizeText(scriptItem && scriptItem.id, "script");
   const targetUrl = `${baseOrigin}/raw/${encodeURIComponent(scriptId)}?key=${encodeURIComponent(cleanKey)}`;
-  return [
-    `getgenv().SADO_KEY="${cleanKey}"`,
-    `local _d=tostring((gethwid and gethwid()) or getgenv().SADO_HWID or (syn and syn.request and "SYN") or (game and game.RbxAnalyticsService and pcall(function() return game.RbxAnalyticsService:GetClientId() end) and game.RbxAnalyticsService:GetClientId()) or "")`,
-    `local _u="${targetUrl}"..(_d~="" and ("&hwid="..tostring(_d)) or "")`,
-    `local _src=game:HttpGet(_u)`,
-    `local _fn=loadstring(_src)`,
-    `if _fn then return _fn() end`
-  ].join(";");
+  return `script_key="${cleanKey}"\nloadstring(game:HttpGet("${targetUrl}"))()`;
 };
 
 const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
@@ -378,52 +371,20 @@ const fetchGuildMembersForAutocomplete = async (guildIdInput, queryText = "") =>
 };
 
 const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptName = "SADO_SCRIPT", boundHwid = "") => {
-  const cleanScript = String(rawCodeText || "");
-  const encodedPayload = Buffer.from(cleanScript, "utf8").toString("base64");
-  const expectedKey = sanitizeText(keyString, "");
-  const lockedHwid = sanitizeText(boundHwid, "");
+  const cleanScript = String(rawCodeText || "").trim();
+  const lockedHwid = sanitizeText(boundHwid, "").replace(/"/g, '\\"');
+  const safeName = sanitizeText(scriptName, "PROTECTED");
 
   return [
-    `-- [[ SADO PROTECT ANTI-LEAK & HWID SHIELD — ${sanitizeText(scriptName, "PROTECTED")} ]]`,
-    `local _K = tostring((getgenv and getgenv().SADO_KEY) or "${expectedKey}")`,
-    `if _K == "" then error("[SADO PROTECT] Key tələb olunur — Script bloklandı!", 0) end`,
-    `local function _kickDevice(msg)`,
-    `  pcall(function()`,
-    `    local lp = game and game:GetService("Players") and game:GetService("Players").LocalPlayer`,
-    `    if lp and lp.Kick then lp:Kick(msg) end`,
-    `  end)`,
-    `  pcall(function()`,
-    `    local sg = game and game:GetService("StarterGui")`,
-    `    if sg and sg.SetCore then`,
-    `      sg:SetCore("SendNotification", { Title = "SADO PROTECT", Text = msg, Duration = 6 })`,
-    `    end`,
-    `  end)`,
-    `  error(msg, 0)`,
+    `-- [[ SADO PROTECT — ${safeName} ]]`,
+    `if "${lockedHwid}" ~= "" and gethwid then`,
+    `  local ok, h = pcall(gethwid)`,
+    `  if ok and h and tostring(h) ~= "" and tostring(h):lower() ~= "${lockedHwid}":lower() then`,
+    `    pcall(function() game:GetService("Players").LocalPlayer:Kick("Bu script başqa cihaza bağlıdır — Kick edildi") end)`,
+    `    return`,
+    `  end`,
     `end`,
-    `local _HWID = tostring((gethwid and gethwid()) or (getgenv and getgenv().SADO_HWID) or "")`,
-    `if "${lockedHwid}" ~= "" and _HWID ~= "" and tostring(_HWID):lower() ~= tostring("${lockedHwid}"):lower() then`,
-    `  _kickDevice("[SADO PROTECT] Bu script başqa telefonda/cihazda işlədilir — Kick edildi!")`,
-    `end`,
-    `local _B = "${encodedPayload}"`,
-    `local _CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"`,
-    `local function _DEC(data)`,
-    `  data = string.gsub(data, "[^".._CHARS.."=]", "")`,
-    `  return (data:gsub(".", function(x)`,
-    `    if x == "=" then return "" end`,
-    `    local r, f = "", (_CHARS:find(x, 1, true) - 1)`,
-    `    for i = 6, 1, -1 do r = r .. (f % 2^i - f % 2^(i-1) > 0 and "1" or "0") end`,
-    `    return r`,
-    `  end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)`,
-    `    if #x ~= 8 then return "" end`,
-    `    local c = 0`,
-    `    for i = 1, 8 do c = c + (x:sub(i,i) == "1" and 2^(8-i) or 0) end`,
-    `    return string.char(c)`,
-    `  end))`,
-    `end`,
-    `local _FN = loadstring(_DEC(_B))`,
-    `_B = nil`,
-    `if not _FN then error("[SADO PROTECT] Qorunan payload oxuna bilmədi!", 0) end`,
-    `return _FN()`
+    cleanScript
   ].join("\n");
 };
 
@@ -1717,12 +1678,11 @@ const handleDiscordInteractionCreate = async (interaction) => {
       }
 
       const shortLoader = buildShortLoaderString(firstScript, activeKeyCode);
-      const bundledScriptBlock = `-- Key: ${activeKeyCode}\n${shortLoader}`;
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `\`\`\`lua\n${bundledScriptBlock}\n\`\`\``,
+          content: `\`\`\`lua\n${shortLoader}\n\`\`\``,
           components: [
             {
               type: 1,
@@ -1765,7 +1725,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `-- Key: ${cleanKeyStr}\n${cleanLoaderStr}`,
+          content: cleanLoaderStr,
           flags: 64
         }
       });
