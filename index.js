@@ -314,6 +314,21 @@ const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
 
 const isLegacyVolatileHashHwid = (hwidValue) => /^[0-9A-F]{24}$/.test(sanitizeText(hwidValue, ""));
 
+const isRobloxExecutorRequest = (req) => {
+  const ua = sanitizeText(req.headers["user-agent"], "").toLowerCase();
+  const accept = sanitizeText(req.headers["accept"], "").toLowerCase();
+  if (accept.includes("text/html") || accept.includes("application/xhtml")) {
+    return false;
+  }
+  if (ua.includes("mozilla/") || ua.includes("chrome/") || ua.includes("safari/") || ua.includes("firefox/") || ua.includes("edg/")) {
+    return false;
+  }
+  if (ua.includes("roblox") || req.headers["roblox-id"] || req.headers["syn-fingerprint"] || req.headers["krnl-hwid"] || req.headers["flux-fingerprint"] || req.headers["delta-fingerprint"] || req.headers["codex-fingerprint"] || req.headers["arceus-fingerprint"] || req.headers["x-hwid"]) {
+    return true;
+  }
+  return ua === "" || ua.includes("wininet") || ua.includes("okhttp");
+};
+
 const buildDeviceKickLuaPayload = (reasonText = "Bu key başqa cihaza/telefona bağlıdır — Kick edildi") => {
   const safeReason = sanitizeText(reasonText, "Bu key başqa cihaza/telefona bağlıdır — Kick edildi").replace(/"/g, '\\"');
   return [
@@ -383,7 +398,17 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     "https://sado-protect.onrender.com"
   ).replace(/\/$/, "");
 
+  const xorKey = crypto.randomBytes(16);
+  const srcBuf = Buffer.from(cleanScript, "utf8");
+  const encBytes = new Array(srcBuf.length);
+  for (let i = 0; i < srcBuf.length; i += 1) {
+    encBytes[i] = srcBuf[i] ^ xorKey[i % xorKey.length];
+  }
+  const keyTableLua = `{${Array.from(xorKey).join(",")}}`;
+  const dataTableLua = `{${encBytes.join(",")}}`;
+
   return [
+    `-- [[ SADO PROTECT ANTI-LEAK SHIELD ]]`,
     `local p = game:GetService("Players").LocalPlayer`,
     `local d = ""`,
     `pcall(function() if gethwid then d = tostring(gethwid() or "") end end)`,
@@ -397,7 +422,17 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `if lh == "" and d ~= "" and "${safeKey}" ~= "" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    cleanScript
+    `local _k = ${keyTableLua}`,
+    `local _b = ${dataTableLua}`,
+    `local _t = table.create(#_b)`,
+    `for i = 1, #_b do`,
+    `  _t[i] = string.char(bit32.bxor(_b[i], _k[((i - 1) % #_k) + 1]))`,
+    `end`,
+    `local _src = table.concat(_t)`,
+    `_b = nil; _t = nil`,
+    `local _fn = loadstring(_src)`,
+    `_src = nil`,
+    `if _fn then _fn() end`
   ].join("\n");
 };
 
@@ -3794,6 +3829,17 @@ const handleHttpRequest = async (req, res) => {
     }
 
     if (method === "GET" && pathname.startsWith("/raw/")) {
+      if (!isRobloxExecutorRequest(req)) {
+        appendAuditLog("ANTI_LEAK_BLOCK", `Brauzer/kənar sorğu bloklandı (${pathname})`, "Anti-Leak");
+        res.writeHead(403, {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "X-Robots-Tag": "noindex, nofollow"
+        });
+        res.end("-- [[ SADO PROTECT: Giriş qadağandır! Bu link yalnız Roblox Executor daxilində işləyir. ]]");
+        return;
+      }
+
       const scId = sanitizeText(pathname.replace("/raw/", ""), "");
       const found = (APP_STATE.scripts || []).find((s) => s && s.id === scId);
       if (!found) {
@@ -3845,7 +3891,10 @@ const handleHttpRequest = async (req, res) => {
         : `loadstring(game:HttpGet("${cleanUrl}"))()`;
 
       const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, effectiveLockedHwid, found.id);
-      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate"
+      });
       res.end(protectedCode);
       return;
     }
