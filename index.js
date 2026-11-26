@@ -277,7 +277,13 @@ const buildShortLoaderString = (scriptItem, keyString = "") => {
   ).replace(/\/$/, "");
   const scriptId = sanitizeText(scriptItem && scriptItem.id, "script");
   const targetUrl = `${baseOrigin}/raw/${encodeURIComponent(scriptId)}?key=${encodeURIComponent(cleanKey)}`;
-  return `local k = "${cleanKey}"\nlocal u = "${targetUrl}"\npcall(function() game:HttpGet(u) end)`;
+  return [
+    `local d = ""`,
+    `pcall(function() if gethwid then d = tostring(gethwid() or "") end end)`,
+    `if d == "" then pcall(function() d = tostring(game:GetService("RbxAnalyticsService"):GetClientId() or "") end) end`,
+    `local u = "${targetUrl}" .. (d ~= "" and ("&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) or "")`,
+    `loadstring(game:HttpGet(u))()`
+  ].join("\n");
 };
 
 const extractDeviceHwidFromRequest = (req, reqUrl, explicitHwid = "") => {
@@ -377,14 +383,6 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     "https://sado-protect.onrender.com"
   ).replace(/\/$/, "");
 
-  const safeLongBracket = (() => {
-    let eq = "";
-    while (cleanScript.includes(`]${eq}]`)) {
-      eq += "=";
-    }
-    return `[${eq}[${cleanScript}]${eq}]`;
-  })();
-
   return [
     `local p = game:GetService("Players").LocalPlayer`,
     `local d = ""`,
@@ -399,10 +397,7 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `if lh == "" and d ~= "" and "${safeKey}" ~= "" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
-    `local fn = function()`,
-    safeLongBracket,
-    `end`,
-    `task.spawn(fn)`
+    cleanScript
   ].join("\n");
 };
 
@@ -3847,7 +3842,7 @@ const handleHttpRequest = async (req, res) => {
       const cleanUrl = sanitizeText(found.scriptUrl, "");
       const rawCode = found.sourceType === "file"
         ? String(found.scriptContent || "").trim()
-        : `pcall(function() game:HttpGet("${cleanUrl}") end)`;
+        : `loadstring(game:HttpGet("${cleanUrl}"))()`;
 
       const protectedCode = wrapScriptWithAntiLeakProtection(rawCode, matchedKey.key, found.name, effectiveLockedHwid, found.id);
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
