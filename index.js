@@ -3878,10 +3878,14 @@ const handleHttpRequest = async (req, res) => {
 
       const incomingDeviceHwid = extractDeviceHwidFromRequest(req, reqUrl, "");
       const boundHwid = sanitizeText(matchedKey.hwid, "");
+      const wasRecentlyReset = Number(matchedKey.hwidResetCount || 0) > 0 && !boundHwid;
 
       if (incomingDeviceHwid) {
         if (!boundHwid || isLegacyVolatileHashHwid(boundHwid)) {
           matchedKey.hwid = incomingDeviceHwid;
+          if (wasRecentlyReset) {
+            matchedKey.hwidResetCount = 0;
+          }
           saveAppStateToDisk();
           appendAuditLog("HWID_BOUND", `Key ${matchedKey.key} ilk cihaza bağlandı: ${incomingDeviceHwid}`, "HWID-Lock");
         } else if (boundHwid.toLowerCase() !== incomingDeviceHwid.toLowerCase()) {
