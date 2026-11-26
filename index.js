@@ -323,10 +323,7 @@ const isRobloxExecutorRequest = (req) => {
   if (ua.includes("mozilla/") || ua.includes("chrome/") || ua.includes("safari/") || ua.includes("firefox/") || ua.includes("edg/")) {
     return false;
   }
-  if (ua.includes("roblox") || req.headers["roblox-id"] || req.headers["syn-fingerprint"] || req.headers["krnl-hwid"] || req.headers["flux-fingerprint"] || req.headers["delta-fingerprint"] || req.headers["codex-fingerprint"] || req.headers["arceus-fingerprint"] || req.headers["x-hwid"]) {
-    return true;
-  }
-  return ua === "" || ua.includes("wininet") || ua.includes("okhttp");
+  return true;
 };
 
 const buildDeviceKickLuaPayload = (reasonText = "Bu key başqa cihaza/telefona bağlıdır — Kick edildi") => {
@@ -422,17 +419,29 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `if lh == "" and d ~= "" and "${safeKey}" ~= "" then`,
     `  pcall(function() game:HttpGet("${baseOrigin}/raw/${safeScriptId}?key=${safeKey}&hwid=" .. game:GetService("HttpService"):UrlEncode(d)) end)`,
     `end`,
+    `local function _bx(a, b)`,
+    `  if bit32 and bit32.bxor then return bit32.bxor(a, b) end`,
+    `  local r, m = 0, 1`,
+    `  while a > 0 or b > 0 do`,
+    `    local x, y = a % 2, b % 2`,
+    `    if x ~= y then r = r + m end`,
+    `    a, b, m = math.floor(a / 2), math.floor(b / 2), m * 2`,
+    `  end`,
+    `  return r`,
+    `end`,
     `local _k = ${keyTableLua}`,
     `local _b = ${dataTableLua}`,
-    `local _t = table.create(#_b)`,
+    `local _t = {}`,
     `for i = 1, #_b do`,
-    `  _t[i] = string.char(bit32.bxor(_b[i], _k[((i - 1) % #_k) + 1]))`,
+    `  _t[i] = string.char(_bx(_b[i], _k[((i - 1) % #_k) + 1]))`,
     `end`,
     `local _src = table.concat(_t)`,
     `_b = nil; _t = nil`,
-    `local _fn = loadstring(_src)`,
+    `local _ok, _fn = pcall(loadstring, _src)`,
     `_src = nil`,
-    `if _fn then _fn() end`
+    `if _ok and type(_fn) == "function" then`,
+    `  pcall(_fn)`,
+    `end`
   ].join("\n");
 };
 
