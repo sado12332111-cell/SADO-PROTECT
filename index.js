@@ -316,11 +316,12 @@ const isLegacyVolatileHashHwid = (hwidValue) => /^[0-9A-F]{24}$/.test(sanitizeTe
 
 const isRobloxExecutorRequest = (req) => {
   const ua = sanitizeText(req.headers["user-agent"], "").toLowerCase();
-  const accept = sanitizeText(req.headers["accept"], "").toLowerCase();
-  if (accept.includes("text/html") || accept.includes("application/xhtml")) {
+  const secFetchMode = sanitizeText(req.headers["sec-fetch-mode"], "").toLowerCase();
+  const secFetchDest = sanitizeText(req.headers["sec-fetch-dest"], "").toLowerCase();
+  if (secFetchMode === "navigate" || secFetchDest === "document") {
     return false;
   }
-  if (ua.includes("mozilla/") || ua.includes("chrome/") || ua.includes("safari/") || ua.includes("firefox/") || ua.includes("edg/")) {
+  if (ua.includes("mozilla/") && (ua.includes("chrome/") || ua.includes("safari/") || ua.includes("firefox/") || ua.includes("edg/"))) {
     return false;
   }
   return true;
@@ -437,10 +438,11 @@ const wrapScriptWithAntiLeakProtection = (rawCodeText, keyString = "", scriptNam
     `end`,
     `local _src = table.concat(_t)`,
     `_b = nil; _t = nil`,
-    `local _ok, _fn = pcall(loadstring, _src)`,
+    `local _loader = loadstring or load`,
+    `local _ok, _fn = pcall(_loader, _src)`,
     `_src = nil`,
     `if _ok and type(_fn) == "function" then`,
-    `  pcall(_fn)`,
+    `  if task and task.spawn then pcall(task.spawn, _fn) else pcall(_fn) end`,
     `end`
   ].join("\n");
 };
