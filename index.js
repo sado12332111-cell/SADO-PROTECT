@@ -2348,18 +2348,49 @@ const renderDashboardHtml = () => {
       (d.buttons || []).forEach((btn, idx) => {
         const row = document.createElement("div");
         row.className = "design-btn-row";
-        row.innerHTML = `
-          <span style="font-size:12px;color:#94a3b8;min-width:22px;">#${idx + 1}</span>
-          <input type="text" data-btn-idx="${idx}" data-field="label" value="${escapeHtml(btn.label)}" style="flex:1;min-width:120px;" />
-          <select data-btn-idx="${idx}" data-field="style" style="width:155px;">
-            <option value="1" ${btn.style === 1 ? "selected" : ""}>${styleLabelMap[1]}</option>
-            <option value="2" ${btn.style === 2 ? "selected" : ""}>${styleLabelMap[2]}</option>
-            <option value="3" ${btn.style === 3 ? "selected" : ""}>${styleLabelMap[3]}</option>
-            <option value="4" ${btn.style === 4 ? "selected" : ""}>${styleLabelMap[4]}</option>
-          </select>
-          <button type="button" class="btn btn-ghost btn-sm" data-move-up="${idx}" ${idx === 0 ? "disabled" : ""}>▲</button>
-          <button type="button" class="btn btn-ghost btn-sm" data-move-down="${idx}" ${idx === d.buttons.length - 1 ? "disabled" : ""}>▼</button>
-        `;
+        row.innerHTML =
+          '<span style="font-size:12px;color:#94a3b8;min-width:22px;">#' +
+          (idx + 1) +
+          '</span>' +
+          '<input type="text" data-btn-idx="' +
+          idx +
+          '" data-field="label" value="' +
+          escapeHtml(btn.label) +
+          '" style="flex:1;min-width:120px;" />' +
+          '<select data-btn-idx="' +
+          idx +
+          '" data-field="style" style="width:155px;">' +
+          '<option value="1" ' +
+          (btn.style === 1 ? "selected" : "") +
+          ">" +
+          styleLabelMap[1] +
+          "</option>" +
+          '<option value="2" ' +
+          (btn.style === 2 ? "selected" : "") +
+          ">" +
+          styleLabelMap[2] +
+          "</option>" +
+          '<option value="3" ' +
+          (btn.style === 3 ? "selected" : "") +
+          ">" +
+          styleLabelMap[3] +
+          "</option>" +
+          '<option value="4" ' +
+          (btn.style === 4 ? "selected" : "") +
+          ">" +
+          styleLabelMap[4] +
+          "</option>" +
+          "</select>" +
+          '<button type="button" class="btn btn-ghost btn-sm" data-move-up="' +
+          idx +
+          '" ' +
+          (idx === 0 ? "disabled" : "") +
+          ">▲</button>" +
+          '<button type="button" class="btn btn-ghost btn-sm" data-move-down="' +
+          idx +
+          '" ' +
+          (idx === d.buttons.length - 1 ? "disabled" : "") +
+          ">▼</button>";
         editorEl.appendChild(row);
       });
 
