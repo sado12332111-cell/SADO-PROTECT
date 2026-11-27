@@ -1401,6 +1401,44 @@ const handleDiscordInteractionCreate = async (interaction) => {
               footer: { text: "SADO PROTECT • Şəxsi Loader (Başqa cihazda işləmir)" }
             }
           ],
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Scripti Kopyala",
+                  emoji: { name: "📋" },
+                  custom_id: `sado_copy_script:${matchedScript ? matchedScript.id : "general"}:${userKeyRecord.key}`.slice(0, 100)
+                }
+              ]
+            }
+          ],
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (btnId === "sado_copy_script" || customId.startsWith("sado_copy_script:")) {
+      const copyParts = customId.split(":");
+      const copyScriptId = copyParts[1] || "";
+      const copyKeyVal = copyParts[2] || "";
+      const targetScript = ctxScripts.find((s) => s.id === copyScriptId) || matchedScript || ctxScripts[0] || null;
+      const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(
+        /\/+$/,
+        ""
+      );
+      const rawScriptLink = targetScript
+        ? `${basePublicUrl}/raw/${targetScript.id}?key=${encodeURIComponent(copyKeyVal)}`
+        : `${basePublicUrl}/raw/default?key=${encodeURIComponent(copyKeyVal)}`;
+      const cleanCopyLoader = buildShortLoaderString(rawScriptLink);
+
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: cleanCopyLoader,
           flags: 64
         }
       });
@@ -2091,14 +2129,10 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       align-items: center;
     }
 
-    .toast-container {
-      position: fixed;
-      right: 18px;
-      bottom: 18px;
+    .btn-order-actions {
       display: flex;
-      flex-direction: column;
-      gap: 8px;
-      z-index: 999;
+      gap: 4px;
+      align-items: center;
     }
 
     .toast {
@@ -2537,7 +2571,11 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
             '<option value="4"' + (Number(btn.style) === 4 ? " selected" : "") + '>Qırmızı</option>' +
             "</select>" +
             '<input type="text" class="btn-resp-inp" placeholder="Cavab mesajı" value="' + escapeHtml(btn.responseText || "") + '" />' +
+            '<div class="btn-order-actions">' +
+            '<button type="button" class="btn btn-secondary btn-sm btn-move-up" title="Yuxarı daşı"' + (idx === 0 ? " disabled" : "") + ">▲</button>" +
+            '<button type="button" class="btn btn-secondary btn-sm btn-move-down" title="Aşağı daşı"' + (idx === clientState.designerButtons.length - 1 ? " disabled" : "") + ">▼</button>" +
             '<button type="button" class="btn btn-danger btn-sm btn-remove-design">Sil</button>' +
+            "</div>" +
             "</div>"
           );
         })
@@ -2554,6 +2592,29 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
           renderLivePreview();
         };
         rowEl.querySelectorAll("input, select").forEach((el) => el.addEventListener("input", syncRow));
+
+        const moveUpBtn = rowEl.querySelector(".btn-move-up");
+        if (moveUpBtn) {
+          moveUpBtn.addEventListener("click", () => {
+            if (idx <= 0) return;
+            const tempItem = clientState.designerButtons[idx - 1];
+            clientState.designerButtons[idx - 1] = clientState.designerButtons[idx];
+            clientState.designerButtons[idx] = tempItem;
+            renderDesignButtonsEditor();
+          });
+        }
+
+        const moveDownBtn = rowEl.querySelector(".btn-move-down");
+        if (moveDownBtn) {
+          moveDownBtn.addEventListener("click", () => {
+            if (idx >= clientState.designerButtons.length - 1) return;
+            const tempItem = clientState.designerButtons[idx + 1];
+            clientState.designerButtons[idx + 1] = clientState.designerButtons[idx];
+            clientState.designerButtons[idx] = tempItem;
+            renderDesignButtonsEditor();
+          });
+        }
+
         rowEl.querySelector(".btn-remove-design").addEventListener("click", () => {
           if (clientState.designerButtons.length <= 1) {
             showToast("Ən azı 1 düymə qalmalıdır");
