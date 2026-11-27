@@ -2284,6 +2284,15 @@ const renderDashboardHtml = () => {
       draftDesign: null
     };
 
+    const escapeHtml = (str) => {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    };
+
     const showToast = (msg) => {
       const el = document.getElementById("toastEl");
       if (!el) return;
@@ -2474,7 +2483,10 @@ const renderDashboardHtml = () => {
       }
 
       if (document.getElementById("headerGuildName")) {
-        document.getElementById("headerGuildName").textContent = guild.displayName || "Bağlı Sunucu Yoxdur";
+        const gText =
+          guild.guildName ||
+          (guild.guildId ? "Sunucu #" + guild.guildId.slice(-6) : "Bağlı Sunucu Yoxdur");
+        document.getElementById("headerGuildName").textContent = gText;
       }
       if (document.getElementById("headerPlanName")) {
         document.getElementById("headerPlanName").textContent = plan.name || "Free";
@@ -2714,28 +2726,28 @@ const renderDashboardHtml = () => {
               (ak.revoked ? "Ləğv edilib" : "Aktiv") +
               "</td>" +
               "<td><button class='btn btn-danger btn-sm' data-revoke-api='" +
-              escapeHtml(ak.id) +
-              "'>Sil</button></td>" +
-              "</tr>"
-            );
-          })
-          .join("");
+      const defaultDesignFallback = {
+        title: "SADO PROTECT • Lisenziya & Script Paneli",
+        description:
+          "Aşağıdakı düymələrdən istifadə edərək lisenziya açarınızı aktivləşdirə, HWID sıfırlaya və ya scriptinizi əldə edə bilərsiniz.",
+        color: 6323199,
+        footerText: "SADO PROTECT • Premium Təhlükəsizlik Sistemi",
+        imageUrl: "",
+        buttons: [
+          { id: "btn_redeem_key", label: "Reedem Key", style: 1, emoji: "🔑" },
+          { id: "btn_get_script", label: "Get Script", style: 3, emoji: "📜" },
+          { id: "btn_reset_hwid", label: "Reset HWID", style: 4, emoji: "⚙️" },
+          { id: "btn_stats", label: "Statistikam", style: 2, emoji: "📊" }
+        ]
+      };
 
-        document.querySelectorAll("[data-revoke-api]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            try {
-              await apiRequest("/api/admin/api-keys/" + encodeURIComponent(btn.getAttribute("data-revoke-api")), "DELETE");
-              showToast("API açar silindi");
-              await refreshDashboardSnapshot();
-            } catch (err) {
-              showToast(err.message);
-            }
-          });
-        });
-      }
+      const incomingDesign =
+        snap.panelDesign && typeof snap.panelDesign === "object" && Array.isArray(snap.panelDesign.buttons) && snap.panelDesign.buttons.length > 0
+          ? snap.panelDesign
+          : defaultDesignFallback;
 
-      if (!clientState.draftDesign) {
-        clientState.draftDesign = JSON.parse(JSON.stringify(snap.panelDesign || {}));
+      if (!clientState.draftDesign || !Array.isArray(clientState.draftDesign.buttons) || clientState.draftDesign.buttons.length === 0) {
+        clientState.draftDesign = JSON.parse(JSON.stringify(incomingDesign));
         renderDesignEditor();
       }
     };
@@ -2970,10 +2982,13 @@ const createHttpServer = () => {
         const callbackUrl = `${baseUrl}/auth/discord/callback`;
         const hasSecret = Boolean(sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", ""));
         if (!hasSecret) {
+          const fallbackName =
+            (APP_STATE.guildName && APP_STATE.guildName.trim()) ||
+            "Discord Hesabı";
           APP_STATE.connectedDiscordUser = {
-            userId: DEFAULT_CLIENT_ID,
-            username: "Discord User",
-            displayName: "Discord User",
+            userId: APP_STATE.guildId || DEFAULT_CLIENT_ID,
+            username: fallbackName,
+            displayName: fallbackName,
             avatarUrl: "",
             connectedAt: new Date().toISOString()
           };
@@ -3047,6 +3062,10 @@ const createHttpServer = () => {
                 tenant.guildName = info.name;
                 resolvedName = info.name;
               }
+            }
+            if (!resolvedName) {
+              resolvedName = tenant.guildName || `Sunucu (${guildId})`;
+              tenant.guildName = resolvedName;
             }
             syncTenantIntoGlobalIfPrimary(tenant);
           }
