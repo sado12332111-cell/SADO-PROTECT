@@ -670,48 +670,48 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     !/^Discord Sunucusu/i.test(globalName) &&
     !/^Sunucu\s*\(/i.test(globalName) &&
     !/^Sunucu\s*#/i.test(globalName) &&
-    !/^Sunucu$/i.test(globalName)
-  ) {
-    return {
-      id: cleanId,
-      name: globalName
-    };
-  }
-
-  return {
-    id: cleanId,
-    name: `Sunucu (${cleanId.slice(-4)})`
-  };
-};
-
-const respondToDiscordInteraction = async (interactionId, interactionToken, responseBody) => {
-  return discordApiRequest(
-    `/interactions/${interactionId}/${interactionToken}/callback`,
-    "POST",
-    responseBody
-  );
-};
-
-const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = "") => {
+const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = "", activeKeyCode = "") => {
   const scripts = getScriptsForGuild(guildId);
   const chosen =
     (preferredScriptId && scripts.find((s) => s.id === preferredScriptId)) ||
     scripts[0] ||
     null;
 
-  if (!chosen) {
+  const scriptName = chosen
+    ? sanitizeText(chosen.name, "SADO PROTECT Script")
+    : "SADO PROTECT Script";
+  const safeKey = sanitizeText(activeKeyCode, "SADO-ACTIVE-KEY");
+  const safeUserId = sanitizeText(userId, "0");
+
+  if (chosen && chosen.mode === "url" && chosen.url) {
     return {
-      scriptName: "SADO PROTECT Script",
-      code: '-- Hələ script əlavə edilməyib\nprint("SADO PROTECT Active")'
+      scriptName,
+      code: [
+        `script_key = "${safeKey}";`,
+        `-- ${scriptName} • SADO PROTECT Loader (Junkie / LuaArmor / LuaProtect style)`,
+        `loadstring(game:HttpGet("${chosen.url}"))()`
+      ].join("\n")
+    };
+  }
+
+  if (chosen && chosen.code && chosen.code.trim().length > 0 && chosen.code.trim().length <= 420) {
+    return {
+      scriptName,
+      code: [
+        `script_key = "${safeKey}";`,
+        `-- ${scriptName} • Protected by SADO PROTECT`,
+        chosen.code.trim()
+      ].join("\n")
     };
   }
 
   return {
-    scriptName: sanitizeText(chosen.name, "SADO PROTECT Script"),
-    code:
-      chosen.mode === "url" && chosen.url
-        ? `loadstring(game:HttpGet("${chosen.url}"))()`
-        : chosen.code || '-- Script məzmunu boşdur\nprint("SADO PROTECT Active")'
+    scriptName,
+    code: [
+      `script_key = "${safeKey}";`,
+      `getgenv().SadoProtect = { User = "${safeUserId}", Script = "${scriptName}", Key = "${safeKey}" };`,
+      `loadstring(game:HttpGet("https://api.sado-protect.local/loader/${encodeURIComponent(chosen ? chosen.id : "default")}?uid=${encodeURIComponent(safeUserId)}"))()`
+    ].join("\n")
   };
 };
 
@@ -1033,22 +1033,25 @@ const handleDiscordInteraction = async (interaction) => {
             String(w.discordId) === actorId &&
             (!boundScriptId || !w.scriptId || w.scriptId === boundScriptId)
         );
-        const hasValidKey =
-          userWl &&
-          userWl.keyCode &&
-          (userWl.keyCode === "MANUAL-WL" ||
-            keys.some(
+        const matchedKeyObj = userWl
+          ? keys.find(
               (k) =>
                 String(k.code || "").toUpperCase() === String(userWl.keyCode || "").toUpperCase() &&
                 !k.revoked
-            ));
+            )
+          : null;
+        const hasValidKey = Boolean(
+          userWl &&
+            userWl.keyCode &&
+            (userWl.keyCode === "MANUAL-WL" || matchedKeyObj)
+        );
 
         if (!userWl || !hasValidKey) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
               content:
-                "❌ Aktiv açarınız tapılmadı! Zəhmət olmasa **Reedem Key** düyməsi ilə aktiv açar daxil edin.",
+                "❌ Əvvəlcə aktiv Key daxil edin! **Reedem Key** düyməsinə basıb açarınızı yazın, sonra **Get Script** ilə qısa scriptinizi əldə edin.",
               flags: 64
             }
           });
@@ -1056,14 +1059,21 @@ const handleDiscordInteraction = async (interaction) => {
         }
 
         const effectiveScriptId = boundScriptId || userWl.scriptId || "";
-        const scriptInfo = getScriptContentForUser(guildId, actorId, effectiveScriptId);
-        const safeCode = String(scriptInfo.code || '-- print("SADO PROTECT")').slice(0, 1800);
+        const activeKeyLabel =
+          userWl.keyCode === "MANUAL-WL" ? "WHITELIST-KEY" : String(userWl.keyCode || "");
+        const scriptInfo = getScriptContentForUser(
+          guildId,
+          actorId,
+          effectiveScriptId,
+          activeKeyLabel
+        );
+        const safeCode = String(scriptInfo.code || "").slice(0, 1800);
         const copyBtnCustomId = buildSafeCustomId("btn_copy_script", effectiveScriptId);
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `📜 **${scriptInfo.scriptName}** üçün scriptiniz hazırdır:\n\`\`\`lua\n${safeCode}\n\`\`\``,
+            content: `🔑 Key təsdiqləndi (\`${activeKeyLabel}\`) • **${scriptInfo.scriptName}** üçün qısa script:\n\`\`\`lua\n${safeCode}\n\`\`\``,
             components: [
               {
                 type: 1,
@@ -1090,7 +1100,8 @@ const handleDiscordInteraction = async (interaction) => {
         const scriptInfo = getScriptContentForUser(
           guildId,
           actorId,
-          boundScriptId || (userWl ? userWl.scriptId || "" : "")
+          boundScriptId || (userWl ? userWl.scriptId || "" : ""),
+          userWl ? userWl.keyCode || "" : ""
         );
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
