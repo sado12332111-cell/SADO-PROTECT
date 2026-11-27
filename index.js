@@ -112,6 +112,51 @@ const sanitizeHexColor = (value, fallback = "#f59e0b") => {
     const g = normalized[2];
     const b = normalized[3];
     return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return fallback;
+};
+
+const hexColorToDiscordInt = (hexColor) => {
+  const cleanHex = sanitizeHexColor(hexColor, "#f59e0b").replace("#", "");
+  const parsed = Number.parseInt(cleanHex, 16);
+  return Number.isFinite(parsed) ? parsed : 0xf59e0b;
+};
+
+const generateUniqueId = (prefix = "item") => {
+  const randomPart = crypto.randomBytes(4).toString("hex");
+  return `${prefix}_${Date.now()}_${randomPart}`;
+};
+
+const generateLicenseKeyString = () => {
+  const partA = crypto.randomBytes(2).toString("hex").toUpperCase();
+  const partB = crypto.randomBytes(2).toString("hex").toUpperCase();
+  const partC = crypto.randomBytes(2).toString("hex").toUpperCase();
+  return `SADO-${partA}-${partB}-${partC}`;
+};
+
+const normalizeAccessValue = (rawVal) => sanitizeText(rawVal, "").toLowerCase();
+
+const collectUserMatchTokens = (identifier, keyObj = null) => {
+  const tokens = new Set();
+  const addToken = (val) => {
+    const clean = sanitizeText(val, "").toLowerCase();
+    if (!clean) return;
+    tokens.add(clean);
+    const idMatch = clean.match(/\b(\d{15,22})\b/);
+    if (idMatch && idMatch[1]) tokens.add(idMatch[1]);
+    const atMatch = clean.match(/@([a-z0-9._-]+)/i);
+    if (atMatch && atMatch[1]) tokens.add(atMatch[1].toLowerCase());
+  };
+
+  addToken(identifier);
+  if (keyObj) {
+    addToken(keyObj.owner);
+    addToken(keyObj.ownerId);
+    addToken(keyObj.key);
+  }
+  return tokens;
+};
+
 const isEntryWhitelisted = (identifier, keyObj = null, extraUserObj = null, requiredScriptName = "") => {
   const targets = collectUserMatchTokens(identifier, keyObj);
   if (extraUserObj) {
@@ -149,6 +194,28 @@ const isEntryWhitelisted = (identifier, keyObj = null, extraUserObj = null, requ
     if (!itemScriptLower || itemScriptLower === "ümumi" || itemScriptLower === "hamısı") return true;
     return itemScriptLower === reqScriptLower;
   });
+};
+
+const findMatchingUserKey = (callerUser = {}, callerIdentity = "") => {
+  const callerTokens = collectUserMatchTokens(callerIdentity, {
+    owner: callerIdentity,
+    ownerId: callerUser.id || "",
+    key: ""
+  });
+  const usernameLower = sanitizeText(callerUser.username, "").toLowerCase();
+  const globalNameLower = sanitizeText(callerUser.global_name, "").toLowerCase();
+  if (usernameLower) callerTokens.add(usernameLower);
+  if (globalNameLower) callerTokens.add(globalNameLower);
+
+  const keysList = APP_STATE.keys || [];
+  for (const k of keysList) {
+    if (!k || k.active === false) continue;
+    const keyTokens = collectUserMatchTokens("", k);
+    for (const tok of callerTokens) {
+      if (tok && keyTokens.has(tok)) return k;
+    }
+  }
+  return null;
 };
 
 const findMatchingUserKeyForScript = (callerUser = {}, callerIdentity = "", requiredScriptName = "") => {
@@ -198,33 +265,6 @@ const findKeyByValueOrUser = (rawIdentifier) => {
     const hwidMatch = sanitizeText(k.hwid, "").toLowerCase() === lowerIdent;
     return keyMatch || ownerMatch || ownerIdMatch || hwidMatch;
   }) || null;
-};
-
-const isEntryWhitelisted = (identifier, keyObj = null, extraUserObj = null) => {
-  const targets = collectUserMatchTokens(identifier, keyObj);
-  if (extraUserObj) {
-    const extraTokens = collectUserMatchTokens("", {
-      owner: extraUserObj.username || "",
-      ownerId: extraUserObj.id || "",
-      key: ""
-    });
-    for (const et of extraTokens) targets.add(et);
-    if (extraUserObj.global_name) targets.add(sanitizeText(extraUserObj.global_name, "").toLowerCase());
-  }
-
-  const list = APP_STATE.whitelist || [];
-  return list.some((item) => {
-    if (!item) return false;
-    const itemTokens = collectUserMatchTokens(item.value, {
-      owner: item.value || "",
-      ownerId: item.userId || "",
-      key: item.generatedKey || ""
-    });
-    for (const t of targets) {
-      if (t && itemTokens.has(t)) return true;
-    }
-    return false;
-  });
 };
 
 const isEntryBlacklisted = (identifier, keyObj = null, extraUserObj = null) => {
@@ -3913,13 +3953,36 @@ const handleHttpRequest = async (req, res) => {
         return;
       }
 
-      const whitelisted = isEntryWhitelisted(identityCheck, matchedKey, null, targetScript.name);
-      if (!whitelisted && (APP_STATE.whitelist || []).length > 0) {
+      const scriptWhitelisted = isEntryWhitelisted(identityCheck, matchedKey, null, targetScript.name);
+      if (!scriptWhitelisted && (APP_STATE.whitelist || []).length > 0) {
         sendJsonResponse(res, 403, {
           allowed: false,
           action: "kick",
           reason: `"${targetScript.name}" scripti üçün Whitelist-də deyilsiniz — Kick edildi`
         });
+        return;
+      }
+
+      sendJsonResponse(res, 200, {
+        allowed: true,
+        script: {
+          id: targetScript.id,
+          name: targetScript.name,
+          sourceType: targetScript.sourceType,
+          scriptUrl: targetScript.scriptUrl,
+          scriptContent: targetScript.scriptContent
+        }
+      });
+      return;
+    }
+
+    if (method === "GET" && pathname.startsWith("/raw/")) {
+      if (!isRobloxExecutorRequest(req)) {
+        res.writeHead(403, {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store, no-cache, must-revalidate"
+        });
+        res.end("-- [[ SADO PROTECT ANTI-LEAK ]]\n-- Bu link birbaşa brauzerdə və ya kənar alətlə açıla bilməz.");
         return;
       }
 
