@@ -237,6 +237,7 @@ const getTenantRecordByGuildId = (guildIdInput) => {
       panelChannelId: isPrimaryGuild ? sanitizeSnowflakeId(APP_STATE.panelChannelId) : "",
       planTier: "free",
       boundApiKey: "",
+      botAddedBy: null,
       scripts: belongsToPrimary ? [...primaryScripts] : [],
       keys: isPrimaryGuild ? [...(APP_STATE.keys || [])] : [],
       whitelist: isPrimaryGuild ? [...(APP_STATE.whitelist || [])] : [],
@@ -252,6 +253,9 @@ const getTenantRecordByGuildId = (guildIdInput) => {
   }
   if (tenants[cleanGid].boundApiKey === undefined) {
     tenants[cleanGid].boundApiKey = "";
+  }
+  if (tenants[cleanGid].botAddedBy === undefined) {
+    tenants[cleanGid].botAddedBy = null;
   }
   return tenants[cleanGid];
 };
@@ -421,14 +425,53 @@ const resolveGuildDisplayName = async (guildId, fallbackName = "") => {
   return sanitizeText(fallbackName, "");
 };
 
-const getScriptsForGuild = (guildId) => {
+const fetchBotAdderFromAuditLog = async (guildId) => {
   const cleanGid = sanitizeSnowflakeId(guildId);
-  if (!cleanGid) return [];
-  const tenant = getTenantRecordByGuildId(cleanGid);
-  if (tenant && Array.isArray(tenant.scripts)) {
-    return tenant.scripts;
+  if (!cleanGid || !BOT_RUNTIME.botUserId) return null;
+  try {
+    const auditData = await discordRestRequest(
+      "GET",
+      `/guilds/${cleanGid}/audit-logs?action_type=28&limit=10`
+    );
+    const entries = auditData && Array.isArray(auditData.audit_log_entries) ? auditData.audit_log_entries : [];
+    const users = auditData && Array.isArray(auditData.users) ? auditData.users : [];
+    const matchedEntry = entries.find(
+      (ent) => ent && String(ent.target_id || "") === String(BOT_RUNTIME.botUserId)
+    );
+    if (!matchedEntry) return null;
+    const inviterId = sanitizeSnowflakeId(matchedEntry.user_id || "");
+    const foundUser = users.find((u) => u && String(u.id || "") === inviterId);
+    const displayName =
+      (foundUser && (foundUser.global_name || foundUser.username)) ||
+      (inviterId ? `User (${inviterId})` : "");
+    if (!displayName) return null;
+    return {
+      userId: inviterId,
+      username: foundUser && foundUser.username ? String(foundUser.username) : displayName,
+      displayName: String(displayName),
+      avatarUrl:
+        foundUser && foundUser.avatar && foundUser.id
+          ? `https://cdn.discordapp.com/avatars/${foundUser.id}/${foundUser.avatar}.png?size=64`
+          : ""
+    };
+  } catch (_err) {
+    return null;
   }
-  return [];
+};
+
+const syncBotAdderForGuild = async (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return null;
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  if (!tenant) return null;
+  const adderInfo = await fetchBotAdderFromAuditLog(cleanGid);
+  if (adderInfo) {
+    tenant.botAddedBy = adderInfo;
+    syncTenantIntoGlobalIfPrimary(tenant);
+    saveAppStateToDisk();
+    return adderInfo;
+  }
+  return tenant.botAddedBy || null;
 };
 
 const getKeysForGuild = (guildId) => {
@@ -1527,6 +1570,16 @@ const connectDiscordGateway = () => {
             saveAppStateToDisk();
           }
           await syncSlashCommandsWithDiscord(gid);
+          await syncBotAdderForGuild(gid);
+        }
+        return;
+      }
+
+      if (eventName === "GUILD_MEMBER_ADD") {
+        const gid = sanitizeSnowflakeId(eventData.guild_id || "");
+        const addedUser = eventData.user || {};
+        if (gid && BOT_RUNTIME.botUserId && String(addedUser.id || "") === String(BOT_RUNTIME.botUserId)) {
+          await syncBotAdderForGuild(gid);
         }
         return;
       }
@@ -1567,6 +1620,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const cleanGuildId = sanitizeSnowflakeId(requestedGuildId);
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId) : null;
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
+  let botAddedByInfo = tenant && tenant.botAddedBy ? tenant.botAddedBy : null;
 
   if (cleanGuildId) {
     const freshName = await resolveGuildDisplayName(cleanGuildId, resolvedGuildName);
@@ -1577,6 +1631,9 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
         syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
       }
+    }
+    if (!botAddedByInfo) {
+      botAddedByInfo = await syncBotAdderForGuild(cleanGuildId);
     }
   }
 
@@ -1601,6 +1658,13 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
       inviteUrl: DISCORD_INVITE_URL,
       lastError: BOT_RUNTIME.lastError || "",
       lastConnectedAt: BOT_RUNTIME.lastConnectedAt || ""
+    },
+    guild: {
+      guildId: cleanGuildId,
+      guildName: resolvedGuildName,
+      displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
+      panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
+      botAddedBy: botAddedByInfo
     },
     guild: {
       guildId: cleanGuildId,
@@ -1939,6 +2003,9 @@ const renderDashboardHtml = () => {
         <a id="topJoinDiscordLink" class="btn btn-primary btn-sm" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener noreferrer">
           ➕ Join Discord
         </a>
+        <button id="discordAdderProfileBtn" type="button" class="btn btn-ghost btn-sm" title="Botu əlavə edən Discord hesabı">
+          👤 <span id="topDiscordAccountLabel">Discord Hesabı</span>
+        </button>
         <button id="refreshSnapshotBtn" class="btn btn-ghost btn-sm">🔄 Yenilə</button>
       </div>
     </header>
@@ -2551,6 +2618,21 @@ const renderDashboardHtml = () => {
       if (document.getElementById("headerGuildName")) {
         document.getElementById("headerGuildName").textContent = guild.displayName || "Bağlı Sunucu Yoxdur";
       }
+      const adderObj = guild.botAddedBy || null;
+      const topDiscordLabelEl = document.getElementById("topDiscordAccountLabel");
+      const discordAdderBtnEl = document.getElementById("discordAdderProfileBtn");
+      if (topDiscordLabelEl) {
+        topDiscordLabelEl.textContent =
+          adderObj && adderObj.displayName ? adderObj.displayName : "Discord Hesabı";
+      }
+      if (discordAdderBtnEl) {
+        discordAdderBtnEl.setAttribute(
+          "data-account-info",
+          adderObj && adderObj.displayName
+            ? adderObj.displayName + (adderObj.userId ? " (ID: " + adderObj.userId + ")" : "")
+            : "Botu əlavə edən Discord hesabı hələ qeyd olunmayıb"
+        );
+      }
       const guildInp = document.getElementById("guildIdInput");
       if (guildInp && document.activeElement !== guildInp) {
         guildInp.value = clientState.deviceGuildId || guild.guildId || "";
@@ -2879,6 +2961,14 @@ const renderDashboardHtml = () => {
       });
 
       document.getElementById("refreshSnapshotBtn").addEventListener("click", refreshDashboardSnapshot);
+      const adderProfileBtn = document.getElementById("discordAdderProfileBtn");
+      if (adderProfileBtn) {
+        adderProfileBtn.addEventListener("click", () => {
+          const infoText =
+            adderProfileBtn.getAttribute("data-account-info") || "Discord hesabı tapılmadı";
+          showToast("Discord: " + infoText);
+        });
+      }
       document.getElementById("sendPanelQuickBtn").addEventListener("click", sendQuickPanel);
       document.getElementById("sendDesignedPanelBtn").addEventListener("click", sendQuickPanel);
 
@@ -3171,17 +3261,24 @@ const server = http.createServer(async (req, res) => {
       }
 
       const planCfg = getPlanConfigByTier(foundApiKey.planTier);
+      const adderAccountLabel =
+        tenant.botAddedBy && tenant.botAddedBy.displayName
+          ? tenant.botAddedBy.displayName +
+            (tenant.botAddedBy.userId ? ` (${tenant.botAddedBy.userId})` : "")
+          : `Sunucu ${tenant.guildId}`;
+
       tenant.planTier = planCfg.id;
       tenant.boundApiKey = foundApiKey.key;
       foundApiKey.boundGuildId = tenant.guildId;
+      foundApiKey.usedBy = adderAccountLabel;
       foundApiKey.boundAt = new Date().toISOString();
 
       syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
       appendAuditLog(
         "PLAN_ACTIVATED",
-        `API açar ilə plan bağlandı: ${planCfg.label} (${foundApiKey.key})`,
-        "Dashboard",
+        `API açar ilə plan bağlandı: ${planCfg.label} (${foundApiKey.key}) — İstifadə edən: ${adderAccountLabel}`,
+        adderAccountLabel,
         tenant.guildId
       );
 
