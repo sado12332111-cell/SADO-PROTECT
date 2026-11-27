@@ -680,7 +680,7 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
 
   return {
     id: cleanId,
-    name: ""
+    name: `Sunucu (${cleanId.slice(-4)})`
   };
 };
 
@@ -2509,10 +2509,11 @@ const renderDashboardHtml = () => {
           guild.guildName &&
           !/^Discord Sunucusu/i.test(guild.guildName) &&
           !/^Sunucu\\s*#/i.test(guild.guildName) &&
-          !/^Sunucu\\s*\\(/i.test(guild.guildName) &&
           !/^Sunucu$/i.test(guild.guildName)
             ? guild.guildName
-            : "Bağlı Sunucu Yoxdur";
+            : guild.guildId
+              ? "Sunucu (" + String(guild.guildId).slice(-4) + ")"
+              : "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
       if (document.getElementById("headerPlanName")) {
@@ -3165,7 +3166,6 @@ const createHttpServer = () => {
               const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
               if (
                 prevName &&
-                !/^Sunucu\s*\(/i.test(prevName) &&
                 !/^Sunucu\s*#/i.test(prevName) &&
                 !/^Sunucu$/i.test(prevName) &&
                 !/^Discord Sunucusu/i.test(prevName)
@@ -3174,8 +3174,9 @@ const createHttpServer = () => {
                 tenant.guildName = resolvedName;
                 APP_STATE.guildName = resolvedName;
               } else {
-                tenant.guildName = "";
-                APP_STATE.guildName = "";
+                resolvedName = `Sunucu (${guildId.slice(-4)})`;
+                tenant.guildName = resolvedName;
+                APP_STATE.guildName = resolvedName;
               }
             }
             syncTenantIntoGlobalIfPrimary(tenant);
