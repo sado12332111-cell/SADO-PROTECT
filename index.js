@@ -2731,6 +2731,14 @@ const renderDashboardHtml = () => {
       try {
         const guildId = document.getElementById("guildIdInput").value.trim();
         const panelChannelId = document.getElementById("panelChannelInput").value.trim();
+        await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
+        showToast("Sunucu və kanal yadda saxlandı");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
     const scriptModeSelect = document.getElementById("scriptModeSelect");
     const scriptFileRow = document.getElementById("scriptFileRow");
     const scriptFileInput = document.getElementById("scriptFileInput");
