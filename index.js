@@ -3,110 +3,163 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const WebSocket = require("ws");
+const { URL } = require("url");
 
-const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
-const STATE_FILE_PATH = path.join(DATA_DIR, "sado_protect_state.json");
+let WebSocketClient = null;
+try {
+  WebSocketClient = require("ws");
+} catch (_wsErr) {
+  WebSocketClient = null;
+}
+
+const SERVER_PORT = Number(process.env.PORT || 3000);
+const DATA_DIR_PATH = path.join(__dirname, "data");
+const STATE_FILE_PATH = path.join(DATA_DIR_PATH, "sado-state.json");
 const DISCORD_INVITE_URL =
   "https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot";
+const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 
 const DEFAULT_PANEL_DESIGN = {
   title: "SADO PROTECT • Lisenziya & Script Paneli",
   description:
     "Aşağıdakı düymələrdən istifadə edərək lisenziya açarınızı aktivləşdirə, HWID sıfırlaya və ya scriptinizi əldə edə bilərsiniz.",
-  colorHex: "#5865F2",
+  colorHex: "#6366f1",
   footerText: "SADO PROTECT • Premium Təhlükəsizlik Sistemi",
-  thumbnailUrl: "",
   imageUrl: "",
   buttons: [
-    {
-      id: "btn_get_script",
-      label: "Get Script",
-      style: 3,
-      emoji: "📜",
-      responseText: "Whitelist yoxlanılır və script hazırlanır..."
-    },
-    {
-      id: "btn_redeem_key",
-      label: "Key Aktiv Et",
-      style: 1,
-      emoji: "🔑",
-      responseText: "Zəhmət olmasa /key komandası ilə və ya paneldən açarınızı daxil edin."
-    },
-    {
-      id: "btn_reset_hwid",
-      label: "Reset HWID",
-      style: 2,
-      emoji: "🔄",
-      responseText: "HWID sıfırlama sorğunuz qəbul edildi."
-    },
-    {
-      id: "btn_my_stats",
-      label: "Statistikam",
-      style: 2,
-      emoji: "📊",
-      responseText: "Aktiv abunəlik və cihaz statusunuz yoxlanılır..."
-    }
+    { id: "btn_redeem_key", label: "Reedem Key", emoji: "🔑", style: "Primary", enabled: true },
+    { id: "btn_get_script", label: "Get Script", emoji: "📜", style: "Success", enabled: true },
+    { id: "btn_reset_hwid", label: "Reset HWID", emoji: "⚙️", style: "Danger", enabled: true },
+    { id: "btn_stats", label: "Statistikam", emoji: "📊", style: "Secondary", enabled: true }
   ]
+};
+
+const PLAN_CONFIGS = {
+  free: {
+    id: "free",
+    label: "Free",
+    priceLabel: "Pulsuz",
+    scriptLimit: 1
+  },
+  premium_1: {
+    id: "premium_1",
+    label: "Premium (1$)",
+    priceLabel: "1$",
+    scriptLimit: 5
+  },
+  premium_2: {
+    id: "premium_2",
+    label: "Premium (2$)",
+    priceLabel: "2$",
+    scriptLimit: null
+  }
+};
+
+const normalizePlanTier = (rawTier) => {
+  const clean = String(rawTier || "").trim().toLowerCase();
+  if (clean === "premium_2" || clean === "2$" || clean === "2" || clean === "lifetime" || clean === "unlimited") {
+    return "premium_2";
+  }
+  if (clean === "premium_1" || clean === "1$" || clean === "1" || clean === "premium") {
+    return "premium_1";
+  }
+  return "free";
+};
+
+const getPlanConfigByTier = (tierInput) => {
+  const norm = normalizePlanTier(tierInput);
+  return PLAN_CONFIGS[norm] || PLAN_CONFIGS.free;
 };
 
 const ensureStorageDirectory = () => {
   try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(DATA_DIR_PATH)) {
+      fs.mkdirSync(DATA_DIR_PATH, { recursive: true });
     }
   } catch (_err) {}
 };
 
 const sanitizeText = (value, fallback = "") => {
   if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : fallback;
+  return value.trim();
 };
 
 const sanitizeSnowflakeId = (value) => {
-  const str = String(value || "").trim();
-  return /^\d{15,22}$/.test(str) ? str : "";
+  const digits = String(value || "").replace(/\D/g, "");
+  return /^\d{15,22}$/.test(digits) ? digits : "";
 };
 
-const normalizeColorHex = (value) => {
-  const raw = String(value || "").trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toUpperCase();
-  if (/^[0-9a-fA-F]{6}$/.test(raw)) return `#${raw.toUpperCase()}`;
-  return "#5865F2";
+const generateUniqueId = (prefix = "id") => {
+  return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
 };
 
-const hexColorToInt = (hexStr) => {
-  const clean = normalizeColorHex(hexStr).replace("#", "");
-  const parsed = parseInt(clean, 16);
-  return Number.isNaN(parsed) ? 5793266 : parsed;
+const generateLicenseKeyString = () => {
+  const partA = crypto.randomBytes(2).toString("hex").toUpperCase();
+  const partB = crypto.randomBytes(2).toString("hex").toUpperCase();
+  const partC = crypto.randomBytes(2).toString("hex").toUpperCase();
+  return `SADO-${partA}-${partB}-${partC}`;
+};
+
+const generateApiKeyString = () => {
+  const p1 = crypto.randomBytes(3).toString("hex").toUpperCase();
+  const p2 = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return `SADO-API-${p1}-${p2}`;
+};
+
+const normalizeHexColor = (hexInput) => {
+  const clean = String(hexInput || "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(clean)) return clean;
+  return "#6366f1";
+};
+
+const normalizeButtonStyle = (styleInput) => {
+  const valid = ["Primary", "Secondary", "Success", "Danger"];
+  return valid.includes(styleInput) ? styleInput : "Primary";
 };
 
 const normalizePanelDesign = (rawDesign) => {
-  const src = rawDesign && typeof rawDesign === "object" ? rawDesign : {};
-  const rawButtons = Array.isArray(src.buttons) ? src.buttons : DEFAULT_PANEL_DESIGN.buttons;
-  const normalizedButtons = rawButtons.slice(0, 5).map((btn, idx) => {
-    const safeBtn = btn && typeof btn === "object" ? btn : {};
-    const styleNum = Number(safeBtn.style);
-    const validStyle = [1, 2, 3, 4].includes(styleNum) ? styleNum : 1;
-    return {
-      id: sanitizeText(safeBtn.id, `custom_btn_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60),
-      label: sanitizeText(safeBtn.label, `Düymə ${idx + 1}`).slice(0, 40),
-      style: validStyle,
-      emoji: sanitizeText(safeBtn.emoji, "").slice(0, 12),
-      responseText: sanitizeText(safeBtn.responseText, "Əməliyyat icra edildi.").slice(0, 400)
-    };
-  });
+  const source = rawDesign && typeof rawDesign === "object" ? rawDesign : {};
+  const rawButtons = Array.isArray(source.buttons) ? source.buttons : DEFAULT_PANEL_DESIGN.buttons;
+  const buttonMap = new Map();
+
+  for (const btn of rawButtons) {
+    if (!btn || !btn.id) continue;
+    const defaultMatch = DEFAULT_PANEL_DESIGN.buttons.find((d) => d.id === btn.id);
+    if (!defaultMatch) continue;
+    buttonMap.set(btn.id, {
+      id: btn.id,
+      label: sanitizeText(btn.label, defaultMatch.label).slice(0, 40) || defaultMatch.label,
+      emoji: sanitizeText(btn.emoji, defaultMatch.emoji).slice(0, 8),
+      style: normalizeButtonStyle(btn.style || defaultMatch.style),
+      enabled: typeof btn.enabled === "boolean" ? btn.enabled : true
+    });
+  }
+
+  const orderedButtons = [];
+  for (const btn of rawButtons) {
+    if (btn && btn.id && buttonMap.has(btn.id)) {
+      orderedButtons.push(buttonMap.get(btn.id));
+      buttonMap.delete(btn.id);
+    }
+  }
+  for (const defBtn of DEFAULT_PANEL_DESIGN.buttons) {
+    if (buttonMap.has(defBtn.id)) {
+      orderedButtons.push(buttonMap.get(defBtn.id));
+    }
+  }
 
   return {
-    title: sanitizeText(src.title, DEFAULT_PANEL_DESIGN.title).slice(0, 180),
-    description: sanitizeText(src.description, DEFAULT_PANEL_DESIGN.description).slice(0, 2000),
-    colorHex: normalizeColorHex(src.colorHex),
-    footerText: sanitizeText(src.footerText, DEFAULT_PANEL_DESIGN.footerText).slice(0, 150),
-    thumbnailUrl: sanitizeText(src.thumbnailUrl, "").slice(0, 500),
-    imageUrl: sanitizeText(src.imageUrl, "").slice(0, 500),
-    buttons: normalizedButtons.length > 0 ? normalizedButtons : [...DEFAULT_PANEL_DESIGN.buttons]
+    title: sanitizeText(source.title, DEFAULT_PANEL_DESIGN.title).slice(0, 120) || DEFAULT_PANEL_DESIGN.title,
+    description:
+      sanitizeText(source.description, DEFAULT_PANEL_DESIGN.description).slice(0, 600) ||
+      DEFAULT_PANEL_DESIGN.description,
+    colorHex: normalizeHexColor(source.colorHex),
+    footerText:
+      sanitizeText(source.footerText, DEFAULT_PANEL_DESIGN.footerText).slice(0, 120) ||
+      DEFAULT_PANEL_DESIGN.footerText,
+    imageUrl: sanitizeText(source.imageUrl, "").slice(0, 400),
+    buttons: orderedButtons
   };
 };
 
@@ -121,6 +174,7 @@ const loadInitialAppState = () => {
     whitelist: [],
     blacklist: [],
     tenants: {},
+    apiKeys: [],
     panelDesign: { ...DEFAULT_PANEL_DESIGN, buttons: [...DEFAULT_PANEL_DESIGN.buttons] },
     auditLogs: [],
     updatedAt: new Date().toISOString()
@@ -139,6 +193,7 @@ const loadInitialAppState = () => {
           whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
           blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [],
           tenants: parsed.tenants && typeof parsed.tenants === "object" ? parsed.tenants : {},
+          apiKeys: Array.isArray(parsed.apiKeys) ? parsed.apiKeys : [],
           panelDesign: normalizePanelDesign(parsed.panelDesign),
           auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : []
         };
@@ -151,202 +206,12 @@ const loadInitialAppState = () => {
 
 const APP_STATE = loadInitialAppState();
 
-const generateUniqueId = (prefix = "id") => {
-  const rand = crypto.randomBytes(4).toString("hex").toUpperCase();
-  return `${prefix}_${Date.now().toString(36).toUpperCase()}_${rand}`;
-};
-
-const generateLicenseKeyString = () => {
-  const partA = crypto.randomBytes(2).toString("hex").toUpperCase();
-  const partB = crypto.randomBytes(2).toString("hex").toUpperCase();
-  const partC = crypto.randomBytes(2).toString("hex").toUpperCase();
-  return `SADO-${partA}-${partB}-${partC}`;
-};
-
-const normalizeAccessValue = (value) =>
-  String(value || "")
-    .trim()
-    .replace(/^<@!?(\d+)>$/, "$1")
-    .replace(/^@+/, "")
-    .toLowerCase();
-
-const formatDiscordUserDisplay = (userObj, fallbackId = "") => {
-  if (!userObj || typeof userObj !== "object") {
-    return fallbackId ? `ID: ${fallbackId}` : "Naməlum İstifadəçi";
-  }
-  const uid = sanitizeSnowflakeId(userObj.id || fallbackId);
-  const username = sanitizeText(userObj.username, "");
-  const globalName = sanitizeText(userObj.global_name, "");
-  const discrim = sanitizeText(userObj.discriminator, "");
-  const tag = username
-    ? discrim && discrim !== "0"
-      ? `${username}#${discrim}`
-      : `@${username}`
-    : "";
-
-  if (globalName && tag && globalName.toLowerCase() !== username.toLowerCase()) {
-    return uid ? `${globalName} (${tag} • ${uid})` : `${globalName} (${tag})`;
-  }
-  if (tag) {
-    return uid ? `${tag} (${uid})` : tag;
-  }
-  return uid ? `ID: ${uid}` : "Naməlum İstifadəçi";
-};
-
-const collectUserMatchTokens = (rawStr, extraUserObj = null) => {
-  const tokens = new Set();
-  const addToken = (val) => {
-    const clean = normalizeAccessValue(val);
-    if (clean) tokens.add(clean);
-  };
-
-  const str = String(rawStr || "").trim();
-  if (str) {
-    addToken(str);
-    const idMatches = str.match(/\d{15,22}/g);
-    if (idMatches) {
-      idMatches.forEach((idPart) => addToken(idPart));
-    }
-    const atMatches = str.match(/@([a-zA-Z0-9_.]{2,32})/g);
-    if (atMatches) {
-      atMatches.forEach((atPart) => addToken(atPart));
-    }
-    const beforeParen = str.split("(")[0].trim();
-    if (beforeParen) addToken(beforeParen);
-  }
-
-  if (extraUserObj && typeof extraUserObj === "object") {
-    addToken(extraUserObj.id);
-    addToken(extraUserObj.userId);
-    addToken(extraUserObj.ownerId);
-    addToken(extraUserObj.username);
-    addToken(extraUserObj.global_name);
-    addToken(extraUserObj.owner);
-    addToken(extraUserObj.value);
-    addToken(extraUserObj.key);
-    addToken(extraUserObj.generatedKey);
-  }
-
-  return tokens;
-};
-
-const buildShortLoaderString = (rawEndpointUrl) => {
-  const cleanUrl = sanitizeText(rawEndpointUrl, "");
-  return `local u="${cleanUrl}" loadstring(game:HttpGet(u))()`;
-};
-
-const buildDeviceKickLuaPayload = (reasonText = "Cihaz uyğunsuzluğu səbəbilə giriş bloklandı") => {
-  const safeReason = String(reasonText || "Giriş bloklandı").replace(/["\\\r\n]/g, " ");
-  return [
-    `local p=game:GetService("Players").LocalPlayer`,
-    `if p then pcall(function() p:Kick("[SADO PROTECT] ${safeReason}") end) end`
-  ].join("\n");
-};
-
-const isRobloxExecutorRequest = (req) => {
-  const headers = (req && req.headers) || {};
-  const ua = String(headers["user-agent"] || "").toLowerCase();
-  const accept = String(headers["accept"] || "").toLowerCase();
-  const secFetchMode = String(headers["sec-fetch-mode"] || "").toLowerCase();
-  const secFetchDest = String(headers["sec-fetch-dest"] || "").toLowerCase();
-
-  if (secFetchMode === "navigate" || secFetchDest === "document") {
-    return false;
-  }
-  if (accept.includes("text/html") && !ua.includes("roblox")) {
-    return false;
-  }
-  if (
-    (ua.includes("mozilla/5.0") ||
-      ua.includes("chrome/") ||
-      ua.includes("safari/") ||
-      ua.includes("firefox/") ||
-      ua.includes("edg/")) &&
-    !ua.includes("roblox")
-  ) {
-    return false;
-  }
-  if (!ua || ua.includes("curl/") || ua.includes("wget/") || ua.includes("python-requests") || ua.includes("postman")) {
-    return false;
-  }
-  return true;
-};
-
-const buildAntiLeakBlockedLua = () => {
-  return [
-    `-- [SADO PROTECT] Anti-Leak Protection Active`,
-    `local p=game:GetService("Players").LocalPlayer`,
-    `if p then pcall(function() p:Kick("[SADO PROTECT] Sızdırma cəhdi bloklandı!") end) end`
-  ].join("\n");
-};
-
-const wrapScriptWithAntiLeakProtection = (rawLuaCode, boundHwid = "", rawEndpointUrl = "", activeKeyStr = "") => {
-  const cleanCode = String(rawLuaCode || "");
-  const safeBoundHwid = String(boundHwid || "").replace(/["\\\r\n]/g, "");
-  const safeEndpoint = String(rawEndpointUrl || "").replace(/["\\\r\n]/g, "");
-  const safeKey = String(activeKeyStr || "").replace(/["\\\r\n]/g, "");
-
-  const xorKey = (crypto.randomBytes(1)[0] % 200) + 27;
-  const rawBytes = Buffer.from(cleanCode, "utf8");
-  const encodedNums = new Array(rawBytes.length);
-  for (let i = 0; i < rawBytes.length; i += 1) {
-    encodedNums[i] = rawBytes[i] ^ ((xorKey + (i % 31)) & 255);
-  }
-  const encodedArrayLiteral = `{${encodedNums.join(",")}}`;
-
-  return [
-    `local _P=game:GetService("Players")`,
-    `local _R=game:GetService("RbxAnalyticsService")`,
-    `local _H=game:GetService("HttpService")`,
-    `local function _gid()`,
-    `  local s,r=pcall(function() return _R:GetClientId() end)`,
-    `  if s and type(r)=="string" and #r>3 then return r end`,
-    `  local s2,r2=pcall(function() if gethwid then return gethwid() end end)`,
-    `  if s2 and type(r2)=="string" and #r2>3 then return r2 end`,
-    `  local lp=_P.LocalPlayer`,
-    `  return lp and ("UID_"..tostring(lp.UserId)) or "UNKNOWN"`,
-    `end`,
-    `local function _kick(m)`,
-    `  local lp=_P.LocalPlayer`,
-    `  if lp then pcall(function() lp:Kick("[SADO PROTECT] "..tostring(m)) end) end`,
-    `end`,
-    `local _bh="${safeBoundHwid}"`,
-    `local _ch=_gid()`,
-    `if _bh~="" and _ch~="UNKNOWN" and _bh~=_ch then`,
-    `  _kick("Bu açar başqa cihaza bağlıdır — Kick edildi")`,
-    `  return`,
-    `end`,
-    `if _bh=="" and "${safeEndpoint}"~="" and _ch~="UNKNOWN" then`,
-    `  pcall(function()`,
-    `    local sep=string.find("${safeEndpoint}","?",1,true) and "&" or "?"`,
-    `    game:HttpGet("${safeEndpoint}"..sep.."key=".._H:UrlEncode("${safeKey}").."&hwid=".._H:UrlEncode(_ch))`,
-    `  end)`,
-    `end`,
-    `local function _bxor(a,b)`,
-    `  if bit32 and bit32.bxor then return bit32.bxor(a,b) end`,
-    `  local res,bit=0,1`,
-    `  while a>0 or b>0 do`,
-    `    local aa,bb=a%2,b%2`,
-    `    if aa~=bb then res=res+bit end`,
-    `    a=(a-aa)/2`,
-    `    b=(b-bb)/2`,
-    `    bit=bit*2`,
-    `  end`,
-    `  return res`,
-    `end`,
-    `local _enc=${encodedArrayLiteral}`,
-    `local _k=${xorKey}`,
-    `local _out={}`,
-    `for _i=1,#_enc do`,
-    `  _out[_i]=string.char(_bxor(_enc[_i],(_k+((_i-1)%31))%256))`,
-    `end`,
-    `local _src=table.concat(_out)`,
-    `local _ld=loadstring or load`,
-    `local _fn=_ld and _ld(_src)`,
-    `if type(_fn)=="function" then`,
-    `  task.spawn(_fn)`,
-    `end`
-  ].join("\n");
+const saveAppStateToDisk = () => {
+  try {
+    ensureStorageDirectory();
+    APP_STATE.updatedAt = new Date().toISOString();
+    fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(APP_STATE, null, 2), "utf8");
+  } catch (_err) {}
 };
 
 const ensureTenantStore = () => {
@@ -370,6 +235,8 @@ const getTenantRecordByGuildId = (guildIdInput) => {
       guildId: cleanGid,
       guildName: isPrimaryGuild ? sanitizeText(APP_STATE.guildName, "") : "",
       panelChannelId: isPrimaryGuild ? sanitizeSnowflakeId(APP_STATE.panelChannelId) : "",
+      planTier: "free",
+      boundApiKey: "",
       scripts: belongsToPrimary ? [...primaryScripts] : [],
       keys: isPrimaryGuild ? [...(APP_STATE.keys || [])] : [],
       whitelist: isPrimaryGuild ? [...(APP_STATE.whitelist || [])] : [],
@@ -380,1311 +247,1128 @@ const getTenantRecordByGuildId = (guildIdInput) => {
       auditLogs: isPrimaryGuild ? [...(APP_STATE.auditLogs || [])] : []
     };
   }
+  if (!tenants[cleanGid].planTier) {
+    tenants[cleanGid].planTier = "free";
+  }
+  if (tenants[cleanGid].boundApiKey === undefined) {
+    tenants[cleanGid].boundApiKey = "";
+  }
   return tenants[cleanGid];
+};
+
+const resolveTenantEffectivePlan = (tenantRec) => {
+  if (!tenantRec) return getPlanConfigByTier("free");
+  const apiList = Array.isArray(APP_STATE.apiKeys) ? APP_STATE.apiKeys : [];
+  const boundKeyStr = sanitizeText(tenantRec.boundApiKey, "");
+  if (boundKeyStr) {
+    const matchedApi = apiList.find(
+      (ak) => ak && ak.active !== false && sanitizeText(ak.key, "") === boundKeyStr
+    );
+    if (matchedApi) {
+      return getPlanConfigByTier(matchedApi.planTier);
+    }
+  }
+  return getPlanConfigByTier(tenantRec.planTier);
 };
 
 const syncTenantIntoGlobalIfPrimary = (tenantRec) => {
   if (!tenantRec) return;
   const primaryGid = sanitizeSnowflakeId(APP_STATE.guildId);
-  if (!primaryGid || primaryGid === tenantRec.guildId) {
-    APP_STATE.guildId = tenantRec.guildId;
-    APP_STATE.guildName = tenantRec.guildName;
-    APP_STATE.panelChannelId = tenantRec.panelChannelId;
+  if (primaryGid && primaryGid === tenantRec.guildId) {
+    APP_STATE.guildName = tenantRec.guildName || APP_STATE.guildName;
+    APP_STATE.panelChannelId = tenantRec.panelChannelId || APP_STATE.panelChannelId;
     APP_STATE.scripts = tenantRec.scripts;
     APP_STATE.keys = tenantRec.keys;
     APP_STATE.whitelist = tenantRec.whitelist;
     APP_STATE.blacklist = tenantRec.blacklist;
-    APP_STATE.panelDesign = tenantRec.panelDesign;
+    APP_STATE.panelDesign = normalizePanelDesign(tenantRec.panelDesign);
     APP_STATE.auditLogs = tenantRec.auditLogs;
   }
 };
 
-const resolveRequestGuildId = (req, reqUrl = null, bodyObj = null) => {
-  const fromBody = bodyObj && sanitizeSnowflakeId(bodyObj.guildId);
-  if (fromBody) return fromBody;
-  const fromQuery = reqUrl && reqUrl.searchParams && sanitizeSnowflakeId(reqUrl.searchParams.get("guildId"));
-  if (fromQuery) return fromQuery;
-  const fromHeader = req && req.headers && sanitizeSnowflakeId(req.headers["x-guild-id"]);
-  if (fromHeader) return fromHeader;
-  return "";
-};
-
-const saveAppStateToDisk = () => {
-  try {
-    ensureStorageDirectory();
-    APP_STATE.updatedAt = new Date().toISOString();
-    fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(APP_STATE, null, 2), "utf8");
-  } catch (_err) {}
-};
-
-const appendAuditLog = (actionType, summaryText, actorLabel = "Sistem", guildIdInput = "") => {
+const appendAuditLog = (action, detail, actor = "System", targetGuildId = "") => {
   const entry = {
     id: generateUniqueId("log"),
-    action: sanitizeText(actionType, "INFO"),
-    summary: sanitizeText(summaryText, ""),
-    actor: sanitizeText(actorLabel, "Sistem"),
+    action,
+    detail,
+    actor,
+    guildId: sanitizeSnowflakeId(targetGuildId),
     createdAt: new Date().toISOString()
   };
-
-  const tenant = getTenantRecordByGuildId(guildIdInput);
-  if (tenant) {
-    tenant.auditLogs = [entry, ...(tenant.auditLogs || [])].slice(0, 60);
-    syncTenantIntoGlobalIfPrimary(tenant);
-  } else {
-    APP_STATE.auditLogs = [entry, ...(APP_STATE.auditLogs || [])].slice(0, 60);
+  const cleanGid = sanitizeSnowflakeId(targetGuildId);
+  if (cleanGid) {
+    const tenant = getTenantRecordByGuildId(cleanGid);
+    if (tenant) {
+      tenant.auditLogs = [entry, ...(Array.isArray(tenant.auditLogs) ? tenant.auditLogs : [])].slice(0, 120);
+      syncTenantIntoGlobalIfPrimary(tenant);
+    }
   }
+  APP_STATE.auditLogs = [entry, ...(Array.isArray(APP_STATE.auditLogs) ? APP_STATE.auditLogs : [])].slice(0, 120);
   saveAppStateToDisk();
 };
 
 const BOT_RUNTIME = {
   connected: false,
-  connecting: false,
   botUserId: "",
   botUsername: "",
   lastError: "",
   lastConnectedAt: "",
-  ws: null,
+  socket: null,
   heartbeatTimer: null,
   reconnectTimer: null,
-  keepAliveTimer: null,
   seq: null,
-  sessionId: ""
+  sessionId: "",
+  resumeGatewayUrl: "",
+  guildNames: {}
 };
 
 const resolveDiscordBotToken = () => {
-  const candidates = [
-    process.env.DISCORD_BOT_TOKEN,
-    process.env.BOT_TOKEN,
-    process.env.DISCORD_TOKEN,
-    process.env.TOKEN
-  ];
-  for (const item of candidates) {
-    const clean = sanitizeText(item, "").replace(/^Bot\s+/i, "");
-    if (clean.length > 20) return clean;
-  }
-  return "";
+  const raw =
+    process.env.DISCORD_BOT_TOKEN ||
+    process.env.BOT_TOKEN ||
+    process.env.DISCORD_TOKEN ||
+    "";
+  return String(raw).trim();
 };
 
-const callDiscordRestApi = (apiPath, method = "GET", bodyPayload = null, tokenOverride = "") =>
-  new Promise((resolve) => {
-    const token = tokenOverride || resolveDiscordBotToken();
+const discordRestRequest = (method, endpointPath, bodyPayload = null, customToken = "") => {
+  return new Promise((resolve, reject) => {
+    const token = String(customToken || resolveDiscordBotToken()).trim();
     if (!token) {
-      resolve({ ok: false, status: 401, error: "Render Environment-də DISCORD_BOT_TOKEN tapılmadı" });
+      reject(new Error("DISCORD_BOT_TOKEN təyin edilməyib"));
       return;
     }
 
-    const serializedBody = bodyPayload ? JSON.stringify(bodyPayload) : "";
-    const headers = {
-      Authorization: `Bot ${token}`,
-      "User-Agent": "SadoProtectBot (https://sadoprotect.local, 1.0)"
+    const fullUrl = new URL(`${DISCORD_API_BASE}${endpointPath}`);
+    const payloadStr = bodyPayload !== null ? JSON.stringify(bodyPayload) : null;
+
+    const options = {
+      hostname: fullUrl.hostname,
+      port: 443,
+      path: `${fullUrl.pathname}${fullUrl.search}`,
+      method,
+      headers: {
+        Authorization: `Bot ${token}`,
+        "User-Agent": "SadoProtectBot (https://sado-protect.local, 1.0.0)"
+      }
     };
-    if (serializedBody) {
-      headers["Content-Type"] = "application/json";
-      headers["Content-Length"] = Buffer.byteLength(serializedBody);
+
+    if (payloadStr !== null) {
+      options.headers["Content-Type"] = "application/json";
+      options.headers["Content-Length"] = Buffer.byteLength(payloadStr);
     }
 
-    const req = https.request(
-      {
-        hostname: "discord.com",
-        port: 443,
-        path: `/api/v10${apiPath}`,
-        method,
-        headers
-      },
-      (res) => {
-        let chunks = "";
-        res.on("data", (d) => {
-          chunks += d;
-        });
-        res.on("end", () => {
-          let parsed = null;
+    const req = https.request(options, (res) => {
+      let rawChunks = "";
+      res.on("data", (chunk) => {
+        rawChunks += chunk.toString("utf8");
+      });
+      res.on("end", () => {
+        let parsedJson = null;
+        if (rawChunks) {
           try {
-            parsed = chunks ? JSON.parse(chunks) : {};
-          } catch (_err) {
-            parsed = { raw: chunks };
+            parsedJson = JSON.parse(rawChunks);
+          } catch (_e) {
+            parsedJson = rawChunks;
           }
-          const ok = res.statusCode >= 200 && res.statusCode < 300;
-          resolve({
-            ok,
-            status: res.statusCode,
-            data: parsed,
-            error: ok
-              ? ""
-              : sanitizeText(parsed && parsed.message, `Discord API xətası (${res.statusCode})`)
-          });
-        });
-      }
-    );
-
-    req.on("error", (err) => {
-      resolve({ ok: false, status: 0, error: err.message || "Şəbəkə xətası" });
+        }
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(parsedJson);
+        } else {
+          const errMsg =
+            parsedJson && typeof parsedJson === "object" && parsedJson.message
+              ? `${parsedJson.message} (HTTP ${res.statusCode})`
+              : `Discord API xətası (HTTP ${res.statusCode})`;
+          reject(new Error(errMsg));
+        }
+      });
     });
 
-    if (serializedBody) {
-      req.write(serializedBody);
+    req.on("error", (err) => {
+      reject(err);
+    });
+
+    if (payloadStr !== null) {
+      req.write(payloadStr);
     }
     req.end();
   });
+};
+
+const fetchGuildInfoFromDiscord = async (guildId) => {
+  const cleanId = sanitizeSnowflakeId(guildId);
+  if (!cleanId) return null;
+  try {
+    const guildData = await discordRestRequest("GET", `/guilds/${cleanId}`);
+    if (guildData && guildData.name) {
+      BOT_RUNTIME.guildNames[cleanId] = String(guildData.name);
+      return guildData;
+    }
+  } catch (_err) {}
+  return null;
+};
 
 const resolveGuildDisplayName = async (guildId, fallbackName = "") => {
   const cleanId = sanitizeSnowflakeId(guildId);
   if (!cleanId) return "";
-  const guildRes = await callDiscordRestApi(`/guilds/${cleanId}`, "GET");
-  if (guildRes.ok && guildRes.data && guildRes.data.name) {
-    return sanitizeText(guildRes.data.name, fallbackName || "Bağlı Sunucu");
+  if (BOT_RUNTIME.guildNames[cleanId]) {
+    return BOT_RUNTIME.guildNames[cleanId];
   }
-  return sanitizeText(fallbackName, "Bağlı Sunucu");
+  const guildData = await fetchGuildInfoFromDiscord(cleanId);
+  if (guildData && guildData.name) {
+    return String(guildData.name);
+  }
+  return sanitizeText(fallbackName, "");
 };
 
-const buildSlashCommandsPayloadForGuild = (guildIdInput = "") => {
-  const scriptOption = {
-    name: "script",
-    description: "Panel açılacaq mövcud scripti seçin",
-    type: 3,
-    required: false,
-    autocomplete: true
-  };
+const getScriptsForGuild = (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return [];
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  if (tenant && Array.isArray(tenant.scripts)) {
+    return tenant.scripts;
+  }
+  return [];
+};
 
-  const whitelistScriptOption = {
+const getKeysForGuild = (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return [];
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  return tenant && Array.isArray(tenant.keys) ? tenant.keys : [];
+};
+
+const getWhitelistForGuild = (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return [];
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  return tenant && Array.isArray(tenant.whitelist) ? tenant.whitelist : [];
+};
+
+const getBlacklistForGuild = (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return [];
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  return tenant && Array.isArray(tenant.blacklist) ? tenant.blacklist : [];
+};
+
+const getDesignForGuild = (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return normalizePanelDesign(DEFAULT_PANEL_DESIGN);
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  return tenant ? normalizePanelDesign(tenant.panelDesign) : normalizePanelDesign(DEFAULT_PANEL_DESIGN);
+};
+
+const buildSlashCommandsPayloadForGuild = (guildId = "") => {
+  const guildScripts = getScriptsForGuild(guildId).slice(0, 25);
+  const scriptChoices = guildScripts.map((sc) => ({
+    name: String(sc.name || "Script").slice(0, 100),
+    value: String(sc.id)
+  }));
+
+  const scriptOptionBase = {
     name: "script",
-    description: "Avto key bağlanacaq mövcud scripti seçin",
+    description: "Script seçin",
     type: 3,
     required: false,
     autocomplete: true
   };
+  if (scriptChoices.length > 0) {
+    scriptOptionBase.choices = scriptChoices;
+  }
+
+  const requiredScriptOption = {
+    name: "script",
+    description: "Hansı script üçün Whitelist edilsin?",
+    type: 3,
+    required: true,
+    autocomplete: true
+  };
+  if (scriptChoices.length > 0) {
+    requiredScriptOption.choices = scriptChoices;
+  }
 
   return [
     {
       name: "panel",
-      description: "Mövcud scriptə və ya ümumi dizayna uyğun idarəetmə panelini açır",
-      options: [scriptOption]
+      description: "Lisenziya və Script idarəetmə panelini göndər",
+      options: [
+        {
+          name: "script",
+          description: "Panel açılacaq mövcud scripti seçin",
+          type: 3,
+          required: false,
+          autocomplete: true,
+          ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+        }
+      ]
     },
     {
       name: "whitelist",
-      description: "Sunucudan user və mövcud script seçərək Whitelist-ə əlavə edir və avto Key yaradır",
+      description: "İstifadəçini seçilən scriptin Whitelist siyahısına əlavə et",
       options: [
         {
           name: "user",
-          description: "Sunucudakı istifadəçini seçin",
-          type: 6,
+          description: "Discord İstifadəçi ID və ya @mention",
+          type: 3,
           required: true
         },
-        whitelistScriptOption
+        requiredScriptOption
       ]
     },
     {
       name: "unwhitelist",
-      description: "Sunucudakı istifadəçini seçilən script üzrə Whitelist-dən çıxarır və girişini bağlayır",
+      description: "İstifadəçini Whitelist siyahısından çıxar",
       options: [
         {
           name: "user",
-          description: "Sunucudakı istifadəçini seçin",
-          type: 6,
+          description: "Discord İstifadəçi ID və ya @mention",
+          type: 3,
           required: true
         },
-        whitelistScriptOption
+        scriptOptionBase
       ]
     },
     {
-      name: "scripts",
-      description: "Bütün mövcud scriptlərin siyahısını göstərir",
-      options: []
-    },
-    {
       name: "key",
-      description: "Yeni lisenziya key yaradır (saytdakı Keylərə düşür) və ya key statusunu yoxlayır",
+      description: "Lisenziya açarını aktivləşdir və HWID bağla",
       options: [
         {
-          name: "action",
-          description: "Əməliyyat növü",
+          name: "key",
+          description: "SADO-XXXX-XXXX-XXXX açarını daxil edin",
           type: 3,
-          required: true,
-          choices: [
-            { name: "Yeni Key Yarat", value: "generate" },
-            { name: "Key Yoxla", value: "check" }
-          ]
+          required: true
         },
         {
-          name: "value",
-          description: "Script adı və ya yoxlanacaq key",
+          name: "hwid",
+          description: "Cihaz / Executor HWID (istəyə bağlı)",
           type: 3,
           required: false
         }
       ]
     },
     {
+      name: "scripts",
+      description: "Bu sunucudakı mövcud scriptləri göstər"
+    },
+    {
       name: "status",
-      description: "SADO PROTECT bot və panel statistikasını göstərir",
-      options: []
+      description: "SADO PROTECT sistem və bot statusunu göstər"
     }
   ];
 };
 
-const buildSlashCommandsPayload = () => buildSlashCommandsPayloadForGuild(APP_STATE.guildId);
-
-const syncSlashCommandsWithDiscord = async (specificGuildId = "") => {
+const syncSlashCommandsWithDiscord = async (targetGuildId = "") => {
   const token = resolveDiscordBotToken();
-  if (!token) return;
+  if (!token || !BOT_RUNTIME.botUserId) return;
 
-  let appId = sanitizeSnowflakeId(BOT_RUNTIME.botUserId);
-  if (!appId) {
-    const meRes = await callDiscordRestApi("/users/@me", "GET", null, token);
-    if (meRes.ok && meRes.data && meRes.data.id) {
-      appId = sanitizeSnowflakeId(meRes.data.id);
-      BOT_RUNTIME.botUserId = appId;
+  const cleanGuildId = sanitizeSnowflakeId(targetGuildId);
+  const commandsPayload = buildSlashCommandsPayloadForGuild(cleanGuildId);
+
+  try {
+    if (cleanGuildId) {
+      await discordRestRequest(
+        "PUT",
+        `/applications/${BOT_RUNTIME.botUserId}/guilds/${cleanGuildId}/commands`,
+        commandsPayload
+      );
+    } else {
+      await discordRestRequest(
+        "PUT",
+        `/applications/${BOT_RUNTIME.botUserId}/commands`,
+        commandsPayload
+      );
     }
-  }
-  if (!appId) return;
+  } catch (_err) {}
+};
 
-  await callDiscordRestApi(`/applications/${appId}/commands`, "PUT", buildSlashCommandsPayload(), token);
-
-  const guildIdsToSync = new Set();
-  const primaryGid = sanitizeSnowflakeId(APP_STATE.guildId);
-  const explicitGid = sanitizeSnowflakeId(specificGuildId);
-  if (primaryGid) guildIdsToSync.add(primaryGid);
-  if (explicitGid) guildIdsToSync.add(explicitGid);
-  for (const tid of Object.keys(ensureTenantStore())) {
-    const cleanTid = sanitizeSnowflakeId(tid);
-    if (cleanTid) guildIdsToSync.add(cleanTid);
-  }
-
-  for (const gId of guildIdsToSync) {
-    const guildPayload = buildSlashCommandsPayloadForGuild(gId);
-    await callDiscordRestApi(`/applications/${appId}/guilds/${gId}/commands`, "PUT", guildPayload, token);
+const mapButtonStyleToDiscordInt = (styleStr) => {
+  switch (styleStr) {
+    case "Secondary":
+      return 2;
+    case "Success":
+      return 3;
+    case "Danger":
+      return 4;
+    case "Primary":
+    default:
+      return 1;
   }
 };
 
-const buildDiscordPanelMessagePayload = (selectedScriptName = "", guildIdInput = "") => {
+const hexColorToDiscordInt = (hexStr) => {
+  const clean = normalizeHexColor(hexStr).replace("#", "");
+  const parsed = parseInt(clean, 16);
+  return Number.isFinite(parsed) ? parsed : 0x6366f1;
+};
+
+const resolveScriptSourceLabel = (scriptObj) => {
+  if (!scriptObj) return "Təyin edilməyib";
+  if (scriptObj.sourceType === "file") {
+    return `Fayl (${scriptObj.fileName || "script.lua"})`;
+  }
+  return scriptObj.scriptUrl ? `URL (${scriptObj.scriptUrl})` : "URL";
+};
+
+const buildDiscordPanelMessagePayload = async (guildIdInput = "", selectedScriptIdInput = "") => {
   const cleanGuildId = sanitizeSnowflakeId(guildIdInput);
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId) : null;
-  const design = normalizePanelDesign(tenant ? tenant.panelDesign : DEFAULT_PANEL_DESIGN);
-  const scriptsPool = tenant ? tenant.scripts || [] : [];
-  const keysPool = tenant ? tenant.keys || [] : [];
-  const whitelistPool = tenant ? tenant.whitelist || [] : [];
-  const blacklistPool = tenant ? tenant.blacklist || [] : [];
-  const activeGuildName = tenant ? tenant.guildName : "";
-  const cleanQuery = sanitizeText(selectedScriptName, "");
+  const design = cleanGuildId ? getDesignForGuild(cleanGuildId) : normalizePanelDesign(DEFAULT_PANEL_DESIGN);
+  const guildScripts = cleanGuildId ? getScriptsForGuild(cleanGuildId) : [];
+  const guildKeys = cleanGuildId ? getKeysForGuild(cleanGuildId) : [];
+  const guildWhitelist = cleanGuildId ? getWhitelistForGuild(cleanGuildId) : [];
+  const guildBlacklist = cleanGuildId ? getBlacklistForGuild(cleanGuildId) : [];
+  const activePlan = resolveTenantEffectivePlan(tenant);
 
-  const matchedScript = cleanQuery
-    ? scriptsPool.find((s) => sanitizeText(s && s.name, "").toLowerCase() === cleanQuery.toLowerCase()) || null
-    : scriptsPool[0] || null;
+  const chosenScript =
+    guildScripts.find((s) => s.id === selectedScriptIdInput) ||
+    guildScripts.find((s) => s.name === selectedScriptIdInput) ||
+    guildScripts[0] ||
+    null;
 
-  const fields = [];
+  const guildName = cleanGuildId
+    ? await resolveGuildDisplayName(cleanGuildId, tenant ? tenant.guildName : "")
+    : "";
 
-  if (activeGuildName) {
-    fields.push({
-      name: "🏰 Bağlanan Sunucu",
-      value: `**${activeGuildName}**`,
-      inline: true
-    });
-  }
+  const activeScriptTitle = chosenScript ? chosenScript.name : "Script Seçilməyib";
+  const panelHeading = chosenScript ? `${design.title} — ${chosenScript.name}` : design.title;
 
-  if (matchedScript) {
-    fields.push({
-      name: "📜 Seçilmiş Script",
-      value: `**${matchedScript.name}**`,
-      inline: true
-    });
-    fields.push({
-      name: "🔗 Script Mənbəyi",
-      value:
-        matchedScript.sourceType === "file"
-          ? `Fayl (${sanitizeText(matchedScript.fileName, "script.lua")})`
-          : sanitizeText(matchedScript.scriptUrl, "Daxili Script"),
-      inline: true
-    });
-  } else {
-    fields.push({
-      name: "📜 Aktiv Script Sayı",
-      value: `${scriptsPool.length} ədəd`,
-      inline: true
-    });
-  }
-
-  fields.push({
-    name: "🔑 Aktiv Keylər",
-    value: `${keysPool.length} ədəd`,
-    inline: true
-  });
-
-  fields.push({
-    name: "🛡️ Whitelist / Blacklist",
-    value: `${whitelistPool.length} / ${blacklistPool.length}`,
-    inline: true
-  });
-
-  if (matchedScript && matchedScript.description) {
-    fields.push({
-      name: "📝 Script Haqqında",
-      value: matchedScript.description.slice(0, 400),
-      inline: false
-    });
-  }
-
-  const embed = {
-    title: matchedScript ? `${design.title} — ${matchedScript.name}` : design.title,
+  const embedObj = {
+    title: panelHeading,
     description: design.description,
-    color: hexColorToInt(design.colorHex),
-    fields,
+    color: hexColorToDiscordInt(design.colorHex),
+    fields: [
+      {
+        name: "🏰 Bağlanan Sunucu",
+        value: guildName || (cleanGuildId ? `ID: ${cleanGuildId}` : "Bağlı Sunucu Yoxdur"),
+        inline: true
+      },
+      {
+        name: "📜 Seçilmiş Script",
+        value: activeScriptTitle,
+        inline: true
+      },
+      {
+        name: "💎 Plan",
+        value: activePlan.label,
+        inline: true
+      },
+      {
+        name: "🔗 Script Mənbəyi",
+        value: resolveScriptSourceLabel(chosenScript),
+        inline: false
+      },
+      {
+        name: "🔑 Aktiv Keylər",
+        value: `${guildKeys.length} ədəd`,
+        inline: true
+      },
+      {
+        name: "🛡️ Whitelist / Blacklist",
+        value: `${guildWhitelist.length} / ${guildBlacklist.length}`,
+        inline: true
+      }
+    ],
     footer: {
       text: design.footerText
     },
     timestamp: new Date().toISOString()
   };
 
-  if (design.thumbnailUrl && /^https?:\/\//i.test(design.thumbnailUrl)) {
-    embed.thumbnail = { url: design.thumbnailUrl };
-  }
   if (design.imageUrl && /^https?:\/\//i.test(design.imageUrl)) {
-    embed.image = { url: design.imageUrl };
+    embedObj.image = { url: design.imageUrl };
   }
 
-  const actionButtons = design.buttons.slice(0, 5).map((btn, index) => {
-    const baseId = sanitizeText(btn.id, `btn_${index + 1}`);
-    const encodedCustomId = matchedScript
-      ? `sado_panel:${baseId}:${matchedScript.id}`
-      : `sado_panel:${baseId}:general`;
-
+  const activeButtons = (design.buttons || []).filter((b) => b.enabled !== false);
+  const discordButtons = activeButtons.slice(0, 5).map((btn) => {
+    const customId = chosenScript ? `${btn.id}::${chosenScript.id}` : btn.id;
     const component = {
       type: 2,
-      style: [1, 2, 3, 4].includes(Number(btn.style)) ? Number(btn.style) : 1,
-      label: sanitizeText(btn.label, `Düymə ${index + 1}`).slice(0, 80),
-      custom_id: encodedCustomId.slice(0, 100)
+      style: mapButtonStyleToDiscordInt(btn.style),
+      label: btn.label,
+      custom_id: customId
     };
-
     if (btn.emoji) {
       component.emoji = { name: btn.emoji };
     }
-
     return component;
   });
 
+  const components = [];
+  if (discordButtons.length > 0) {
+    components.push({
+      type: 1,
+      components: discordButtons
+    });
+  }
+
   return {
-    embeds: [embed],
-    components: [
-      {
-        type: 1,
-        components: actionButtons
-      }
-    ]
+    embeds: [embedObj],
+    components
   };
 };
 
-const publishPanelToDiscordChannel = async (channelIdInput, scriptNameInput = "", guildIdInput = "") => {
-  const tenant = getTenantRecordByGuildId(guildIdInput);
-  const cleanChannelId = sanitizeSnowflakeId(
-    channelIdInput || (tenant && tenant.panelChannelId) || APP_STATE.panelChannelId
+const getBasePublicUrl = (req) => {
+  const envUrl = sanitizeText(process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || "", "");
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, "");
+  }
+  const host = req.headers.host || `localhost:${SERVER_PORT}`;
+  const proto = req.headers["x-forwarded-proto"] || (host.includes("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
+};
+
+const buildLoaderScriptForRawId = (rawId, baseUrl) => {
+  const rawEndpoint = `${baseUrl}/raw/${encodeURIComponent(rawId)}`;
+  return `loadstring(game:HttpGet("${rawEndpoint}", true))()`;
+};
+
+const buildCopyReadyScriptText = (scriptObj, baseUrl, guildId = "") => {
+  if (!scriptObj) return "";
+  const rawEndpoint = `${baseUrl}/raw/${encodeURIComponent(scriptObj.id)}${
+    guildId ? `?guildId=${encodeURIComponent(guildId)}` : ""
+  }`;
+  return `loadstring(game:HttpGet("${rawEndpoint}", true))()`;
+};
+
+const parseCustomIdParts = (customIdStr) => {
+  const raw = String(customIdStr || "");
+  const idx = raw.indexOf("::");
+  if (idx === -1) {
+    return { actionId: raw, scriptId: "" };
+  }
+  return {
+    actionId: raw.slice(0, idx),
+    scriptId: raw.slice(idx + 2)
+  };
+};
+
+const extractDiscordUserId = (rawInput) => {
+  const match = String(rawInput || "").match(/\d{15,22}/);
+  return match ? match[0] : "";
+};
+
+const findScriptByIdentifier = (identifier, guildId = "") => {
+  const cleanIdent = sanitizeText(identifier, "");
+  if (!cleanIdent) return null;
+  const guildScripts = getScriptsForGuild(guildId);
+  return (
+    guildScripts.find(
+      (s) =>
+        s.id === cleanIdent ||
+        s.name.toLowerCase() === cleanIdent.toLowerCase()
+    ) || null
   );
-  if (!cleanChannelId) {
-    return {
-      ok: false,
-      error: "Etibarlı Panel Kanal ID daxil edilməyib"
-    };
-  }
-
-  const payload = buildDiscordPanelMessagePayload(scriptNameInput, guildIdInput);
-  const sendRes = await callDiscordRestApi(`/channels/${cleanChannelId}/messages`, "POST", payload);
-  if (!sendRes.ok) {
-    return {
-      ok: false,
-      error: sendRes.error || "Panel kanala göndərilə bilmədi"
-    };
-  }
-
-  if (tenant) {
-    tenant.panelChannelId = cleanChannelId;
-    syncTenantIntoGlobalIfPrimary(tenant);
-  } else {
-    APP_STATE.panelChannelId = cleanChannelId;
-  }
-  saveAppStateToDisk();
-  appendAuditLog("PANEL_SENT", `Panel #${cleanChannelId} kanalına göndərildi`, "Dashboard", guildIdInput);
-
-  return {
-    ok: true,
-    channelId: cleanChannelId,
-    messageId: sendRes.data && sendRes.data.id ? sendRes.data.id : ""
-  };
 };
 
-const respondToDiscordInteraction = async (interactionId, interactionToken, responseBody) => {
-  return callDiscordRestApi(`/interactions/${interactionId}/${interactionToken}/callback`, "POST", responseBody);
+const isUserBlacklisted = (userId, guildId = "") => {
+  const cleanUid = extractDiscordUserId(userId);
+  if (!cleanUid) return false;
+  const bl = getBlacklistForGuild(guildId);
+  return bl.some((item) => extractDiscordUserId(item.userId || item.value || item) === cleanUid);
 };
 
-const deferDiscordInteraction = async (interactionId, interactionToken, ephemeral = true) => {
-  return respondToDiscordInteraction(interactionId, interactionToken, {
-    type: 5,
-    data: ephemeral ? { flags: 64 } : {}
+const isUserWhitelisted = (userId, guildId = "", scriptId = "") => {
+  const cleanUid = extractDiscordUserId(userId);
+  if (!cleanUid) return false;
+  const wl = getWhitelistForGuild(guildId);
+  const cleanScriptId = sanitizeText(scriptId, "");
+  return wl.some((item) => {
+    const itemUid = extractDiscordUserId(item.userId || item.value || item);
+    if (itemUid !== cleanUid) return false;
+    if (!cleanScriptId) return true;
+    const itemScriptId = sanitizeText(item.scriptId || "", "");
+    return !itemScriptId || itemScriptId === cleanScriptId;
   });
 };
 
-const editDeferredDiscordResponse = async (applicationId, interactionToken, messagePayload) => {
-  const cleanAppId = sanitizeSnowflakeId(applicationId || BOT_RUNTIME.botUserId);
-  if (!cleanAppId || !interactionToken) return { ok: false };
-  return callDiscordRestApi(
-    `/webhooks/${cleanAppId}/${interactionToken}/messages/@original`,
-    "PATCH",
-    messagePayload
+const addUserToWhitelist = (userId, guildId = "", scriptId = "", scriptName = "", actor = "Discord") => {
+  const cleanUid = extractDiscordUserId(userId);
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanUid || !cleanGid) return null;
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  if (!tenant) return null;
+
+  const cleanScriptId = sanitizeText(scriptId, "");
+  const matchedScript = cleanScriptId ? findScriptByIdentifier(cleanScriptId, cleanGid) : null;
+  const finalScriptId = matchedScript ? matchedScript.id : cleanScriptId;
+  const finalScriptName = matchedScript ? matchedScript.name : sanitizeText(scriptName, "");
+
+  tenant.whitelist = (Array.isArray(tenant.whitelist) ? tenant.whitelist : []).filter((item) => {
+    const sameUser = extractDiscordUserId(item.userId || item.value || item) === cleanUid;
+    if (!sameUser) return true;
+    if (!finalScriptId) return false;
+    const existingSid = sanitizeText(item.scriptId || "", "");
+    return existingSid !== "" && existingSid !== finalScriptId;
+  });
+
+  const record = {
+    id: generateUniqueId("wl"),
+    userId: cleanUid,
+    scriptId: finalScriptId,
+    scriptName: finalScriptName,
+    addedBy: actor,
+    createdAt: new Date().toISOString()
+  };
+  tenant.whitelist.unshift(record);
+  syncTenantIntoGlobalIfPrimary(tenant);
+  saveAppStateToDisk();
+  return record;
+};
+
+const removeUserFromWhitelist = (userId, guildId = "", scriptId = "") => {
+  const cleanUid = extractDiscordUserId(userId);
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanUid || !cleanGid) return 0;
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  if (!tenant) return 0;
+
+  const cleanScriptId = sanitizeText(scriptId, "");
+  const beforeLen = (tenant.whitelist || []).length;
+  tenant.whitelist = (tenant.whitelist || []).filter((item) => {
+    const sameUser = extractDiscordUserId(item.userId || item.value || item) === cleanUid;
+    if (!sameUser) return true;
+    if (!cleanScriptId) return false;
+    const existingSid = sanitizeText(item.scriptId || "", "");
+    return existingSid !== "" && existingSid !== cleanScriptId;
+  });
+  const removedCount = beforeLen - tenant.whitelist.length;
+  syncTenantIntoGlobalIfPrimary(tenant);
+  saveAppStateToDisk();
+  return removedCount;
+};
+
+const redeemKeyForDiscordUser = (rawKey, discordUserId, hwidInput = "", guildId = "") => {
+  const cleanKey = sanitizeText(rawKey, "").toUpperCase();
+  const cleanUid = extractDiscordUserId(discordUserId);
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanKey) {
+    return { ok: false, message: "❌ Zəhmət olmasa etibarlı açar daxil edin." };
+  }
+  if (isUserBlacklisted(cleanUid, cleanGid)) {
+    return { ok: false, message: "⛔ Siz Blacklist siyahısındasınız, açar aktivləşdirilə bilməz." };
+  }
+
+  const tenant = cleanGid ? getTenantRecordByGuildId(cleanGid) : null;
+  const keysArr = tenant ? tenant.keys || [] : [];
+  const keyRecord = keysArr.find((k) => String(k.key || "").toUpperCase() === cleanKey);
+
+  if (!keyRecord) {
+    return { ok: false, message: "❌ Bu açar tapılmadı və ya silinib." };
+  }
+  if (keyRecord.status === "revoked" || keyRecord.status === "banned") {
+    return { ok: false, message: "⛔ Bu açar ləğv edilib." };
+  }
+  if (keyRecord.expiresAt && new Date(keyRecord.expiresAt).getTime() < Date.now()) {
+    return { ok: false, message: "⌛ Bu açarın vaxtı bitib." };
+  }
+
+  if (keyRecord.discordUserId && keyRecord.discordUserId !== cleanUid) {
+    return {
+      ok: false,
+      message: `🔒 Bu açar artıq başqa istifadəçiyə (<@${keyRecord.discordUserId}>) bağlıdır.`
+    };
+  }
+
+  const providedHwid = sanitizeText(hwidInput, "");
+  if (providedHwid) {
+    if (keyRecord.hwid && keyRecord.hwid !== providedHwid) {
+      return {
+        ok: false,
+        message: "🔒 Bu açar fərqli HWID cihazına bağlıdır. Əvvəlcə Reset HWID edin."
+      };
+    }
+    keyRecord.hwid = providedHwid;
+  }
+
+  keyRecord.discordUserId = cleanUid;
+  keyRecord.redeemedAt = keyRecord.redeemedAt || new Date().toISOString();
+  keyRecord.status = "active";
+
+  if (cleanGid) {
+    addUserToWhitelist(
+      cleanUid,
+      cleanGid,
+      keyRecord.scriptId || "",
+      keyRecord.scriptName || "",
+      "Key Redeem"
+    );
+  }
+
+  if (tenant) {
+    syncTenantIntoGlobalIfPrimary(tenant);
+  }
+  saveAppStateToDisk();
+  appendAuditLog(
+    "KEY_REDEEMED",
+    `Açar aktivləşdirildi: ${keyRecord.key} → İstifadəçi ${cleanUid}`,
+    cleanUid,
+    cleanGid
+  );
+
+  return {
+    ok: true,
+    keyRecord,
+    message: `✅ Açar uğurla aktivləşdirildi!\n🔑 **Açar:** \`${keyRecord.key}\`\n👤 **İstifadəçi:** <@${cleanUid}>\n💻 **HWID:** \`${keyRecord.hwid || "İlk script açılışında bağlanacaq"}\``
+  };
+};
+
+const resetHwidForDiscordUser = (discordUserId, guildId = "") => {
+  const cleanUid = extractDiscordUserId(discordUserId);
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  const tenant = cleanGid ? getTenantRecordByGuildId(cleanGid) : null;
+  const keysArr = tenant ? tenant.keys || [] : [];
+  const userKeys = keysArr.filter((k) => k.discordUserId === cleanUid);
+
+  if (!userKeys.length) {
+    return {
+      ok: false,
+      message: "❌ Adınıza bağlı aktiv açar tapılmadı. Əvvəlcə açar aktivləşdirin."
+    };
+  }
+
+  for (const k of userKeys) {
+    k.hwid = "";
+    k.hwidResetAt = new Date().toISOString();
+  }
+
+  if (tenant) {
+    syncTenantIntoGlobalIfPrimary(tenant);
+  }
+  saveAppStateToDisk();
+  appendAuditLog("HWID_RESET", `HWID sıfırlandı (${cleanUid})`, cleanUid, cleanGid);
+
+  return {
+    ok: true,
+    message:
+      "⚙️ **HWID uğurla sıfırlandı!**\nİndi scripti açdığınız yeni telefon/cihaz avtomatik olaraq açarınıza bağlanacaq."
+  };
+};
+
+const getScriptForDiscordUser = (discordUserId, guildId = "", scriptIdHint = "", baseUrl = "") => {
+  const cleanUid = extractDiscordUserId(discordUserId);
+  const cleanGid = sanitizeSnowflakeId(guildId);
+
+  if (isUserBlacklisted(cleanUid, cleanGid)) {
+    return {
+      ok: false,
+      message: "⛔ Siz Blacklist siyahısındasınız, scriptə giriş qadağandır."
+    };
+  }
+
+  const tenant = cleanGid ? getTenantRecordByGuildId(cleanGid) : null;
+  const keysArr = tenant ? tenant.keys || [] : [];
+  const scriptsArr = tenant ? tenant.scripts || [] : [];
+
+  const matchedKey = keysArr.find(
+    (k) =>
+      k.discordUserId === cleanUid &&
+      k.status !== "revoked" &&
+      k.status !== "banned" &&
+      (!k.expiresAt || new Date(k.expiresAt).getTime() >= Date.now())
+  );
+
+  const chosenScript =
+    (scriptIdHint && scriptsArr.find((s) => s.id === scriptIdHint)) ||
+    (matchedKey && matchedKey.scriptId && scriptsArr.find((s) => s.id === matchedKey.scriptId)) ||
+    scriptsArr[0] ||
+    null;
+
+  if (!chosenScript) {
+    return {
+      ok: false,
+      message: "❌ Bu sunucuda hələ script yaradılmayıb."
+    };
+  }
+
+  const whitelistedForScript = isUserWhitelisted(cleanUid, cleanGid, chosenScript.id);
+  if (!matchedKey && !whitelistedForScript) {
+    return {
+      ok: false,
+      message:
+        `🔒 **${chosenScript.name}** scriptini almaq üçün aktiv açarınız və ya bu scriptə Whitelist icazəniz olmalıdır.\n` +
+        "Əvvəlcə **Reedem Key** ilə açarınızı daxil edin."
+    };
+  }
+
+  const copyScriptText = buildCopyReadyScriptText(chosenScript, baseUrl, cleanGid);
+  return {
+    ok: true,
+    script: chosenScript,
+    copyScriptText,
+    message:
+      `📜 **${chosenScript.name}** hazırdır!\n` +
+      "Aşağıdakı kodu kopyalayıb executor-da işlədə və ya altdakı **Scripti Kopyala** düyməsinə basa bilərsiniz:\n" +
+      "```lua\n" +
+      copyScriptText +
+      "\n```"
+  };
+};
+
+const getStatsForDiscordUser = (discordUserId, guildId = "") => {
+  const cleanUid = extractDiscordUserId(discordUserId);
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  const tenant = cleanGid ? getTenantRecordByGuildId(cleanGid) : null;
+  const keysArr = tenant ? tenant.keys || [] : [];
+  const userKeys = keysArr.filter((k) => k.discordUserId === cleanUid);
+  const activeKey = userKeys[0] || null;
+  const wlStatus = isUserWhitelisted(cleanUid, cleanGid) ? "Bəli ✅" : "Xeyr ❌";
+  const blStatus = isUserBlacklisted(cleanUid, cleanGid) ? "Bəli ⛔" : "Xeyr ✅";
+
+  return (
+    `📊 **İstifadəçi Statistikası** (<@${cleanUid}>)\n` +
+    `• **Aktiv Açar:** ${activeKey ? `\`${activeKey.key}\`` : "Yoxdur"}\n` +
+    `• **Bağlı HWID:** ${activeKey && activeKey.hwid ? `\`${activeKey.hwid}\`` : "Bağlanmayıb"}\n` +
+    `• **Whitelist:** ${wlStatus}\n` +
+    `• **Blacklist:** ${blStatus}`
   );
 };
 
-const handleDiscordInteractionCreate = async (interaction) => {
-  if (!interaction || !interaction.id || !interaction.token) return;
-
-  const appId = sanitizeSnowflakeId(interaction.application_id || BOT_RUNTIME.botUserId);
-  const interactionGuildId = sanitizeSnowflakeId(interaction.guild_id || "");
-  const tenantCtx = getTenantRecordByGuildId(interactionGuildId);
-  const ctxScripts = tenantCtx ? tenantCtx.scripts : APP_STATE.scripts;
-  const ctxKeys = tenantCtx ? tenantCtx.keys : APP_STATE.keys;
-  const ctxWhitelist = tenantCtx ? tenantCtx.whitelist : APP_STATE.whitelist;
-  const ctxBlacklist = tenantCtx ? tenantCtx.blacklist : APP_STATE.blacklist;
-  const commitCtxState = () => {
-    if (tenantCtx) {
-      tenantCtx.scripts = ctxScripts;
-      tenantCtx.keys = ctxKeys;
-      tenantCtx.whitelist = ctxWhitelist;
-      tenantCtx.blacklist = ctxBlacklist;
-      syncTenantIntoGlobalIfPrimary(tenantCtx);
-    }
-    saveAppStateToDisk();
-  };
-
-  const interactionType = Number(interaction.type);
-
-  if (interactionType === 2) {
-    const cmdName = sanitizeText(interaction.data && interaction.data.name, "").toLowerCase();
-    const rawOptions = Array.isArray(interaction.data && interaction.data.options)
-      ? interaction.data.options
-      : [];
-
-    if (cmdName === "panel") {
-      const scriptOpt = rawOptions.find((o) => o && o.name === "script");
-      const chosenScriptName = sanitizeText(scriptOpt && scriptOpt.value, "");
-      const panelPayload = buildDiscordPanelMessagePayload(chosenScriptName, interactionGuildId);
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: panelPayload
-      });
-      return;
-    }
-
-    if (cmdName === "whitelist") {
-      await deferDiscordInteraction(interaction.id, interaction.token, true);
-      const userOpt = rawOptions.find((o) => o && o.name === "user");
-      const scriptOpt = rawOptions.find((o) => o && o.name === "script");
-      const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
-      const resolvedUserObj =
-        (userOpt &&
-          userOpt.value &&
-          interaction.data &&
-          interaction.data.resolved &&
-          interaction.data.resolved.users &&
-          interaction.data.resolved.users[String(userOpt.value)]) ||
-        null;
-      const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
-      const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
-      const chosenScriptName = sanitizeText(
-        scriptOpt && scriptOpt.value,
-        (ctxScripts[0] && ctxScripts[0].name) || "Ümumi"
-      );
-
-      if (!targetUser) {
-        await editDeferredDiscordResponse(appId, interaction.token, {
-          content: "❌ Zəhmət olmasa sunucudan `user` seçin."
-        });
-        return;
-      }
-
-      let resolvedProfileLabel = resolvedUserObj
-        ? formatDiscordUserDisplay(resolvedUserObj, targetUser)
-        : targetUser;
-      if (targetUserId && !resolvedUserObj) {
-        const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
-        if (uRes.ok && uRes.data) {
-          resolvedProfileLabel = formatDiscordUserDisplay(uRes.data, targetUserId);
-        }
-      }
-
-      ctxBlacklist.splice(
-        0,
-        ctxBlacklist.length,
-        ...ctxBlacklist.filter((b) => b && normalizeAccessValue(b.value) !== normalizeAccessValue(targetUser))
-      );
-
-      const generatedKeyValue = generateLicenseKeyString();
-      const autoKeyRecord = {
-        id: generateUniqueId("key"),
-        key: generatedKeyValue,
-        owner: resolvedProfileLabel,
-        ownerId: targetUser,
-        scriptName: chosenScriptName,
-        guildId: interactionGuildId,
-        days: 0,
-        hwid: "",
-        hwidResetCount: 0,
-        active: true,
-        createdAt: new Date().toISOString()
-      };
-      ctxKeys.unshift(autoKeyRecord);
-
-      const existingWl = ctxWhitelist.find(
-        (w) =>
-          w &&
-          normalizeAccessValue(w.value) === normalizeAccessValue(targetUser) &&
-          normalizeAccessValue(w.scriptName) === normalizeAccessValue(chosenScriptName)
-      );
-      if (!existingWl) {
-        ctxWhitelist.unshift({
-          id: generateUniqueId("acc"),
-          value: resolvedProfileLabel,
-          userId: targetUser,
-          scriptName: chosenScriptName,
-          generatedKey: generatedKeyValue,
-          createdAt: new Date().toISOString()
-        });
-      } else {
-        existingWl.generatedKey = generatedKeyValue;
-        existingWl.value = resolvedProfileLabel;
-        existingWl.userId = targetUser;
-        existingWl.scriptName = chosenScriptName;
-      }
-
-      commitCtxState();
-      appendAuditLog(
-        "WHITELIST_CMD",
-        `/whitelist: ${resolvedProfileLabel} | Script: ${chosenScriptName} -> Key: ${generatedKeyValue}`,
-        "Discord",
-        interactionGuildId
-      );
-
-      await editDeferredDiscordResponse(appId, interaction.token, {
-        embeds: [
-          {
-            title: "✅ Whitelist & Avtomatik Key Yaradıldı",
-            color: 2278750,
-            description: [
-              `**İstifadəçi:** ${targetUserId ? `<@${targetUserId}> • ` : ""}${resolvedProfileLabel}`,
-              `**Script:** \`${chosenScriptName}\``,
-              `**Avtomatik Key:** \`${generatedKeyValue}\``,
-              `Bu açar saytdakı **Keylər** bölməsinə əlavə edildi. İstifadəçi \`/panel\` üzərindən **Get Script** kliklədikdə bu açar ona avtomatik veriləcək.`
-            ].join("\n"),
-            footer: { text: "SADO PROTECT • Avto Lisenziya Sistemi" },
-            timestamp: new Date().toISOString()
-          }
-        ]
-      });
-      return;
-    }
-
-    if (cmdName === "unwhitelist") {
-      await deferDiscordInteraction(interaction.id, interaction.token, true);
-      const userOpt = rawOptions.find((o) => o && o.name === "user");
-      const scriptOpt = rawOptions.find((o) => o && o.name === "script");
-      const resolvedUserObj =
-        (userOpt &&
-          userOpt.value &&
-          interaction.data &&
-          interaction.data.resolved &&
-          interaction.data.resolved.users &&
-          interaction.data.resolved.users[String(userOpt.value)]) ||
-        null;
-      const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
-      const selectedScriptFilter = sanitizeText(scriptOpt && scriptOpt.value, "");
-
-      if (!targetUserId) {
-        await editDeferredDiscordResponse(appId, interaction.token, {
-          content: "❌ Zəhmət olmasa sunucudan `user` seçin."
-        });
-        return;
-      }
-
-      let resolvedProfileLabel = resolvedUserObj
-        ? formatDiscordUserDisplay(resolvedUserObj, targetUserId)
-        : `ID: ${targetUserId}`;
-      if (!resolvedUserObj) {
-        const uRes = await callDiscordRestApi(`/users/${targetUserId}`, "GET");
-        if (uRes.ok && uRes.data) {
-          resolvedProfileLabel = formatDiscordUserDisplay(uRes.data, targetUserId);
-        }
-      }
-
-      const targetTokens = collectUserMatchTokens(targetUserId, resolvedUserObj);
-
-      const matchesTargetUser = (rawVal, extraObj) => {
-        const entryTokens = collectUserMatchTokens(rawVal, extraObj);
-        for (const tk of targetTokens) {
-          if (entryTokens.has(tk)) return true;
-        }
-        return false;
-      };
-
-      const matchesSelectedScript = (entryScriptName) => {
-        if (!selectedScriptFilter) return true;
-        return normalizeAccessValue(entryScriptName) === normalizeAccessValue(selectedScriptFilter);
-      };
-
-      const beforeWlCount = ctxWhitelist.length;
-      const filteredWl = ctxWhitelist.filter(
-        (w) =>
-          !(
-            w &&
-            matchesTargetUser(w.value, { owner: w.value, ownerId: w.userId || "" }) &&
-            matchesSelectedScript(w.scriptName)
-          )
-      );
-      ctxWhitelist.splice(0, ctxWhitelist.length, ...filteredWl);
-
-      const beforeKeysCount = ctxKeys.length;
-      const filteredKeys = ctxKeys.filter(
-        (k) => !(k && matchesTargetUser(k.owner, k) && matchesSelectedScript(k.scriptName))
-      );
-      ctxKeys.splice(0, ctxKeys.length, ...filteredKeys);
-
-      const removedWlCount = beforeWlCount - ctxWhitelist.length;
-      const removedKeysCount = beforeKeysCount - ctxKeys.length;
-
-      commitCtxState();
-      appendAuditLog(
-        "UNWHITELIST_CMD",
-        `/unwhitelist: ${resolvedProfileLabel}${
-          selectedScriptFilter ? ` | Script: ${selectedScriptFilter}` : ""
-        } (Whitelist: -${removedWlCount}, Key: -${removedKeysCount})`,
-        "Discord",
-        interactionGuildId
-      );
-
-      await editDeferredDiscordResponse(appId, interaction.token, {
-        embeds: [
-          {
-            title: "🚫 Whitelist-dən Çıxarıldı",
-            color: 15548997,
-            description: [
-              `**İstifadəçi:** <@${targetUserId}> • ${resolvedProfileLabel}`,
-              selectedScriptFilter ? `**Script:** \`${selectedScriptFilter}\`` : "**Script:** Bütün scriptlər",
-              `**Silinən Whitelist qeydi:** ${removedWlCount} ədəd`,
-              `**Ləğv edilən Key:** ${removedKeysCount} ədəd`,
-              selectedScriptFilter
-                ? `İstifadəçinin \`${selectedScriptFilter}\` scriptinə girişi bağlandı.`
-                : "İstifadəçinin scriptlərə girişi bağlandı."
-            ].join("\n"),
-            footer: { text: "SADO PROTECT • Giriş Nəzarəti" },
-            timestamp: new Date().toISOString()
-          }
-        ]
-      });
-      return;
-    }
-
-    if (cmdName === "scripts") {
-      const listText =
-        ctxScripts.length > 0
-          ? ctxScripts
-              .map(
-                (s, idx) =>
-                  `**${idx + 1}. ${s.name}** — ${
-                    s.sourceType === "file"
-                      ? `Fayl (${sanitizeText(s.fileName, "script.lua")})`
-                      : sanitizeText(s.scriptUrl, "Daxili")
-                  }`
-              )
-              .join("\n")
-          : "Hələ heç bir script əlavə edilməyib.";
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          embeds: [
-            {
-              title: "📜 SADO PROTECT • Aktiv Scriptlər",
-              description: listText,
-              color: hexColorToInt((tenantCtx ? tenantCtx.panelDesign : APP_STATE.panelDesign).colorHex),
-              footer: { text: `Cəmi ${ctxScripts.length} script` }
-            }
-          ],
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (cmdName === "key") {
-      const actionOpt = rawOptions.find((o) => o && o.name === "action");
-      const valOpt = rawOptions.find((o) => o && o.name === "value");
-      const actionVal = sanitizeText(actionOpt && actionOpt.value, "check");
-      const valStr = sanitizeText(valOpt && valOpt.value, "");
-
-      if (actionVal === "generate") {
-        const senderObj = (interaction.member && interaction.member.user) || interaction.user || {};
-        const senderId = sanitizeSnowflakeId(senderObj.id || "");
-        const senderLabel = formatDiscordUserDisplay(senderObj, senderId);
-        const generated = generateLicenseKeyString();
-        const newKeyObj = {
-          id: generateUniqueId("key"),
-          key: generated,
-          owner: senderLabel,
-          ownerId: senderId,
-          scriptName: valStr || (ctxScripts[0] && ctxScripts[0].name) || "Ümumi",
-          guildId: interactionGuildId,
-          days: 0,
-          hwid: "",
-          hwidResetCount: 0,
-          active: true,
-          createdAt: new Date().toISOString()
-        };
-        ctxKeys.unshift(newKeyObj);
-        commitCtxState();
-        appendAuditLog(
-          "KEY_GENERATED",
-          `Discord /key ilə yeni key yaradıldı (${generated})`,
-          senderLabel,
-          interactionGuildId
-        );
-
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: `✅ Yeni Key Yaradıldı və saytdakı **Keylər** bölməsinə əlavə olundu:\n🔑 **Key:** \`${generated}\`\n📜 **Script:** \`${newKeyObj.scriptName}\``,
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      const foundKey = ctxKeys.find((k) => k && k.key.toLowerCase() === valStr.toLowerCase());
-      if (!foundKey) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "❌ Daxil edilən açar tapılmadı.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `🔑 **Key:** \`${foundKey.key}\`\n📜 **Script:** ${foundKey.scriptName}\n💻 **HWID:** ${
-            foundKey.hwid || "Təyin edilməyib"
-          }\n📌 **Status:** ${foundKey.active ? "Aktiv" : "Deaktiv"}`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (cmdName === "status") {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          embeds: [
-            {
-              title: "⚡ SADO PROTECT • Sistem Statusu",
-              color: 2278750,
-              fields: [
-                { name: "Bot Vəziyyəti", value: "Aktivdir", inline: true },
-                {
-                  name: "Sunucu",
-                  value: (tenantCtx && tenantCtx.guildName) || APP_STATE.guildName || "Bağlı Sunucu",
-                  inline: true
-                },
-                { name: "Scriptlər", value: `${ctxScripts.length}`, inline: true },
-                { name: "Keylər", value: `${ctxKeys.length}`, inline: true },
-                { name: "Whitelist", value: `${ctxWhitelist.length}`, inline: true },
-                { name: "Blacklist", value: `${ctxBlacklist.length}`, inline: true }
-              ]
-            }
-          ],
-          flags: 64
-        }
-      });
-      return;
-    }
-  }
-
-  if (interactionType === 4) {
-    const focusedOpt = Array.isArray(interaction.data && interaction.data.options)
-      ? interaction.data.options.find((o) => o && o.focused)
-      : null;
-    const query = sanitizeText(focusedOpt && focusedOpt.value, "").toLowerCase();
-    const choices = ctxScripts
-      .filter((s) => !query || sanitizeText(s.name, "").toLowerCase().includes(query))
-      .slice(0, 25)
-      .map((s) => ({
-        name: sanitizeText(s.name, "Script").slice(0, 100),
-        value: sanitizeText(s.name, "Script").slice(0, 100)
-      }));
-
-    await respondToDiscordInteraction(interaction.id, interaction.token, {
-      type: 8,
-      data: { choices }
-    });
-    return;
-  }
-
-  if (interactionType === 3) {
-    const customId = sanitizeText(interaction.data && interaction.data.custom_id, "");
-    const parts = customId.split(":");
-    const btnId = parts[1] || "";
-    const scriptId = parts[2] || "";
-    const senderObj = (interaction.member && interaction.member.user) || interaction.user || {};
-    const userId = sanitizeSnowflakeId(senderObj.id || "0");
-    const username = sanitizeText(senderObj.username, "İstifadəçi");
-    const userDisplayLabel = formatDiscordUserDisplay(senderObj, userId);
-
-    const activeDesign = tenantCtx ? tenantCtx.panelDesign : APP_STATE.panelDesign;
-    const matchedBtn = activeDesign.buttons.find((b) => b.id === btnId);
-    const matchedScript = ctxScripts.find((s) => s.id === scriptId) || ctxScripts[0] || null;
-
-    if (btnId === "btn_redeem_key") {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 9,
-        data: {
-          custom_id: `sado_redeem_modal:${matchedScript ? matchedScript.id : "general"}`.slice(0, 100),
-          title: "🔑 Lisenziya Açarı Aktiv Et",
-          components: [
-            {
-              type: 1,
-              components: [
-                {
-                  type: 4,
-                  custom_id: "redeem_key_input",
-                  label: "Lisenziya Açarınızı Daxil Edin",
-                  style: 1,
-                  min_length: 4,
-                  max_length: 64,
-                  placeholder: "Məs: SADO-XXXX-XXXX-XXXX",
-                  required: true
-                }
-              ]
-            }
-          ]
-        }
-      });
-      return;
-    }
-
-    if (btnId === "btn_reset_hwid") {
-      const userTokens = collectUserMatchTokens(userId, senderObj);
-      const userMatchedKeys = ctxKeys.filter((k) => {
-        if (!k) return false;
-        const kTokens = collectUserMatchTokens(k.owner, k);
-        for (const tk of userTokens) {
-          if (kTokens.has(tk)) return true;
-        }
-        return false;
-      });
-
-      if (userMatchedKeys.length === 0) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "❌ Sizin adınıza bağlı aktiv Key tapılmadı. Əvvəlcə **Reedem Key** ilə açarınızı aktivləşdirin və ya `/whitelist` ilə qeydiyyatdan keçin.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      for (const kItem of userMatchedKeys) {
-        kItem.hwid = "";
-        kItem.hwidResetCount = Number(kItem.hwidResetCount || 0) + 1;
-        kItem.lastHwidResetAt = new Date().toISOString();
-      }
-      commitCtxState();
-      appendAuditLog(
-        "HWID_RESET",
-        `${userDisplayLabel} tərəfindən HWID sıfırlandı (${userMatchedKeys.length} key)`,
-        userDisplayLabel,
-        interactionGuildId
-      );
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `🔄 **HWID Uğurla Sıfırlandı!**\n🔑 **Yenilənən Key sayı:** ${userMatchedKeys.length} ədəd\n📱 İndi scripti yeni cihazınızda işlətdikdə həmin cihaza avtomatik bağlanacaq.`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (btnId === "btn_get_script") {
-      const userTokens = collectUserMatchTokens(userId, senderObj);
-
-      const userInBlacklist = ctxBlacklist.some((item) => {
-        if (!item) return false;
-        const itemTokens = collectUserMatchTokens(item.value, {
-          owner: item.value,
-          ownerId: item.userId || ""
-        });
-        for (const tk of userTokens) {
-          if (itemTokens.has(tk)) return true;
-        }
-        return false;
-      });
-
-      const userInWhitelist = ctxWhitelist.some((item) => {
-        if (!item) return false;
-        const itemScriptLower = sanitizeText(item.scriptName, "").toLowerCase();
-        if (
-          matchedScript &&
-          itemScriptLower &&
-          itemScriptLower !== "ümumi" &&
-          itemScriptLower !== "hamısı" &&
-          itemScriptLower !== sanitizeText(matchedScript.name, "").toLowerCase()
-        ) {
-          return false;
-        }
-        const itemTokens = collectUserMatchTokens(item.value, {
-          owner: item.value,
-          ownerId: item.userId || "",
-          key: item.generatedKey || ""
-        });
-        for (const tk of userTokens) {
-          if (itemTokens.has(tk)) return true;
-        }
-        return false;
-      });
-
-      if (userInBlacklist) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "⛔ Siz **Blacklist** siyahısındasınız. Scriptə girişiniz qadağandır.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      if (!userInWhitelist) {
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: matchedScript
-              ? `🚫 **${matchedScript.name}** scripti üçün **Whitelist** icazəniz yoxdur. Əgər açarınız varsa **Reedem Key** düyməsi ilə aktiv edin.`
-              : "🚫 **Whitelist** icazəniz yoxdur. Əgər açarınız varsa **Reedem Key** düyməsi ilə aktiv edin.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      const userKeyRecord =
-        ctxKeys.find((k) => {
-          if (!k || k.active === false) return false;
-          const kScriptLower = sanitizeText(k.scriptName, "").toLowerCase();
-          if (
-            matchedScript &&
-            kScriptLower &&
-            kScriptLower !== "ümumi" &&
-            kScriptLower !== "hamısı" &&
-            kScriptLower !== sanitizeText(matchedScript.name, "").toLowerCase()
-          ) {
-            return false;
-          }
-          const kTokens = collectUserMatchTokens(k.owner, k);
-          for (const tk of userTokens) {
-            if (kTokens.has(tk)) return true;
-          }
-          return false;
-        }) || null;
-
-      if (!userKeyRecord) {
-        const updatedWl = ctxWhitelist.filter((item) => {
-          if (!item) return false;
-          const itemScriptLower = sanitizeText(item.scriptName, "").toLowerCase();
-          if (
-            matchedScript &&
-            itemScriptLower &&
-            itemScriptLower !== "ümumi" &&
-            itemScriptLower !== "hamısı" &&
-            itemScriptLower !== sanitizeText(matchedScript.name, "").toLowerCase()
-          ) {
-            return true;
-          }
-          const itemTokens = collectUserMatchTokens(item.value, {
-            owner: item.value,
-            ownerId: item.userId || "",
-            key: item.generatedKey || ""
-          });
-          for (const tk of userTokens) {
-            if (itemTokens.has(tk)) return false;
-          }
-          return true;
-        });
-        ctxWhitelist.splice(0, ctxWhitelist.length, ...updatedWl);
-        commitCtxState();
-
-        await respondToDiscordInteraction(interaction.id, interaction.token, {
-          type: 4,
-          data: {
-            content: "❌ Aktiv lisenziya açarınız silinib və ya mövcud deyil. Yeni açarınız varsa **Reedem Key** düyməsi ilə aktiv edin.",
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(
-        /\/+$/,
-        ""
-      );
-      const rawScriptLink = matchedScript
-        ? `${basePublicUrl}/raw/${matchedScript.id}?key=${encodeURIComponent(userKeyRecord.key)}`
-        : `${basePublicUrl}/raw/default?key=${encodeURIComponent(userKeyRecord.key)}`;
-      const loaderCode = buildShortLoaderString(rawScriptLink);
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          embeds: [
-            {
-              title: `📜 ${matchedScript ? matchedScript.name : "SADO PROTECT Script"}`,
-              color: 2278750,
-              description: [
-                `✅ **Whitelist təsdiqləndi!**`,
-                `🔑 **Sizin Key:** \`${userKeyRecord.key}\``,
-                `🔒 **Cihaz Kilidi:** İlk açılan cihaza avtomatik bağlanır`,
-                "",
-                "**Loader Kodu:**",
-                `\`\`\`lua\n${loaderCode}\n\`\`\``
-              ].join("\n"),
-              footer: { text: "SADO PROTECT • Şəxsi Loader (Başqa cihazda işləmir)" }
-            }
-          ],
-          components: [
-            {
-              type: 1,
-              components: [
-                {
-                  type: 2,
-                  style: 2,
-                  label: "Scripti Kopyala",
-                  emoji: { name: "📋" },
-                  custom_id: `sado_copy_script:${matchedScript ? matchedScript.id : "general"}:${userKeyRecord.key}`.slice(0, 100)
-                }
-              ]
-            }
-          ],
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (btnId === "sado_copy_script" || customId.startsWith("sado_copy_script:")) {
-      const copyParts = customId.split(":");
-      const copyScriptId = copyParts[1] || "";
-      const copyKeyVal = copyParts[2] || "";
-      const targetScript = ctxScripts.find((s) => s.id === copyScriptId) || matchedScript || ctxScripts[0] || null;
-      const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(
-        /\/+$/,
-        ""
-      );
-      const rawScriptLink = targetScript
-        ? `${basePublicUrl}/raw/${targetScript.id}?key=${encodeURIComponent(copyKeyVal)}`
-        : `${basePublicUrl}/raw/default?key=${encodeURIComponent(copyKeyVal)}`;
-      const cleanCopyLoader = buildShortLoaderString(rawScriptLink);
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: cleanCopyLoader,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (btnId === "btn_my_stats") {
-      const userTokens = collectUserMatchTokens(userId, senderObj);
-      const myKeys = ctxKeys.filter((k) => {
-        if (!k) return false;
-        const kTokens = collectUserMatchTokens(k.owner, k);
-        for (const tk of userTokens) {
-          if (kTokens.has(tk)) return true;
-        }
-        return false;
-      });
-      const statsLines = myKeys.length
-        ? myKeys.map(
-            (k, i) =>
-              `**${i + 1}.** \`${k.key}\` • Script: **${k.scriptName || "Ümumi"}** • HWID: \`${k.hwid || "Bağlanmayıb"}\``
-          )
-        : ["Adınıza bağlı aktiv açar tapılmadı."];
-
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          embeds: [
-            {
-              title: "📊 SADO PROTECT • İstifadəçi Statistikası",
-              color: 5793266,
-              description: [`**İstifadəçi:** <@${userId}>`, `**Aktiv Key Sayı:** ${myKeys.length}`, "", ...statsLines].join(
-                "\n"
-              )
-            }
-          ],
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    const replyMessage = matchedBtn
-      ? matchedBtn.responseText
-      : `Salam ${username}, əməliyyat qeydə alındı.`;
-
-    await respondToDiscordInteraction(interaction.id, interaction.token, {
-      type: 4,
-      data: {
-        content: `✅ **${matchedBtn ? matchedBtn.label : "Panel"}** (${userId}): ${replyMessage}`,
-        flags: 64
-      }
-    });
-    return;
-  }
-
-  if (interactionType === 5) {
-    const modalCustomId = sanitizeText(interaction.data && interaction.data.custom_id, "");
-    if (!modalCustomId.startsWith("sado_redeem_modal")) return;
-
-    const modalParts = modalCustomId.split(":");
-    const targetScriptId = modalParts[1] || "";
-    const targetScript = ctxScripts.find((s) => s.id === targetScriptId) || ctxScripts[0] || null;
-    const senderObj = (interaction.member && interaction.member.user) || interaction.user || {};
-    const userId = sanitizeSnowflakeId(senderObj.id || "0");
-    const userDisplayLabel = formatDiscordUserDisplay(senderObj, userId);
-
-    const modalRows = Array.isArray(interaction.data && interaction.data.components)
-      ? interaction.data.components
-      : [];
-    let enteredKeyRaw = "";
-    for (const row of modalRows) {
-      const comps = Array.isArray(row && row.components) ? row.components : [];
-      for (const comp of comps) {
-        if (comp && comp.custom_id === "redeem_key_input") {
-          enteredKeyRaw = sanitizeText(comp.value, "");
-        }
-      }
-    }
-
-    if (!enteredKeyRaw) {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: "❌ Zəhmət olmasa etibarlı lisenziya açarı daxil edin.",
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    const foundKeyObj =
-      ctxKeys.find((k) => k && sanitizeText(k.key, "").toLowerCase() === enteredKeyRaw.toLowerCase()) || null;
-
-    if (!foundKeyObj) {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: `❌ \`${enteredKeyRaw}\` açarı tapılmadı. Düzgün yazdığınızdan əmin olun.`,
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    if (foundKeyObj.active === false) {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: "⛔ Bu açar deaktiv edilib və ya bloklanıb.",
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    const existingOwnerId = sanitizeSnowflakeId(foundKeyObj.ownerId || "");
-    if (existingOwnerId && existingOwnerId !== userId) {
-      await respondToDiscordInteraction(interaction.id, interaction.token, {
-        type: 4,
-        data: {
-          content: "⚠️ Bu lisenziya açarı artıq başqa istifadəçi tərəfindən aktivləşdirilib.",
-          flags: 64
-        }
-      });
-      return;
-    }
-
-    const resolvedScriptName =
-      sanitizeText(foundKeyObj.scriptName, "") || (targetScript ? targetScript.name : "Ümumi");
-
-    foundKeyObj.owner = userDisplayLabel;
-    foundKeyObj.ownerId = userId;
-    foundKeyObj.scriptName = resolvedScriptName;
-    foundKeyObj.redeemedAt = new Date().toISOString();
-
-    const existingWl = ctxWhitelist.find(
-      (w) =>
-        w &&
-        normalizeAccessValue(w.userId || w.value) === normalizeAccessValue(userId) &&
-        normalizeAccessValue(w.scriptName) === normalizeAccessValue(resolvedScriptName)
-    );
-
-    if (!existingWl) {
-      ctxWhitelist.unshift({
-        id: generateUniqueId("acc"),
-        value: userDisplayLabel,
-        userId,
-        scriptName: resolvedScriptName,
-        generatedKey: foundKeyObj.key,
-        createdAt: new Date().toISOString()
-      });
-    } else {
-      existingWl.value = userDisplayLabel;
-      existingWl.userId = userId;
-      existingWl.generatedKey = foundKeyObj.key;
-    }
-
-    commitCtxState();
-    appendAuditLog(
-      "KEY_REDEEMED",
-      `${userDisplayLabel} açar aktiv etdi: ${foundKeyObj.key} (${resolvedScriptName})`,
-      userDisplayLabel,
-      interactionGuildId
-    );
-
-    await respondToDiscordInteraction(interaction.id, interaction.token, {
-      type: 4,
-      data: {
-        embeds: [
-          {
-            title: "✅ Lisenziya Açarı Uğurla Aktiv Edildi!",
-            color: 2278750,
-            description: [
-              `**İstifadəçi:** <@${userId}>`,
-              `**Aktiv Edilən Key:** \`${foundKeyObj.key}\``,
-              `**Script:** \`${resolvedScriptName}\``,
-              "",
-              "İndi **Get Script** düyməsinə basaraq scriptinizi əldə edə bilərsiniz."
-            ].join("\n"),
-            footer: { text: "SADO PROTECT • Lisenziya Sistemi" },
-            timestamp: new Date().toISOString()
-          }
-        ],
-        flags: 64
-      }
-    });
-    return;
-  }
+const sendInteractionResponse = async (interactionId, interactionToken, payload) => {
+  await discordRestRequest("POST", `/interactions/${interactionId}/${interactionToken}/callback`, payload);
 };
 
-const clearBotTimers = () => {
+const sendChannelMessage = async (channelId, payload) => {
+  const cleanChId = sanitizeSnowflakeId(channelId);
+  if (!cleanChId) {
+    throw new Error("Kanal ID-si düzgün deyil");
+  }
+  return discordRestRequest("POST", `/channels/${cleanChId}/messages`, payload);
+};
+
+const handleDiscordInteraction = async (interaction, baseUrl = "") => {
+  if (!interaction || !interaction.id || !interaction.token) return;
+  const interactionId = interaction.id;
+  const interactionToken = interaction.token;
+  const interactionType = Number(interaction.type);
+  const guildId = sanitizeSnowflakeId(interaction.guild_id || "");
+  const memberUser =
+    (interaction.member && interaction.member.user) || interaction.user || {};
+  const actorUserId = extractDiscordUserId(memberUser.id || "");
+  const actorTag = memberUser.username || actorUserId || "DiscordUser";
+
+  if (guildId) {
+    const tenant = getTenantRecordByGuildId(guildId);
+    if (tenant) {
+      if (interaction.channel_id && !tenant.panelChannelId) {
+        tenant.panelChannelId = sanitizeSnowflakeId(interaction.channel_id);
+      }
+      if (!APP_STATE.guildId) {
+        APP_STATE.guildId = guildId;
+      }
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
+    }
+  }
+
+  try {
+    if (interactionType === 1) {
+      await sendInteractionResponse(interactionId, interactionToken, { type: 1 });
+      return;
+    }
+
+    if (interactionType === 4) {
+      const data = interaction.data || {};
+      const options = Array.isArray(data.options) ? data.options : [];
+      const focusedOpt = options.find((o) => o && o.focused) || {};
+      const typedQuery = String(focusedOpt.value || "").trim().toLowerCase();
+      const guildScripts = getScriptsForGuild(guildId);
+      const filtered = guildScripts
+        .filter((sc) => !typedQuery || String(sc.name || "").toLowerCase().includes(typedQuery))
+        .slice(0, 25)
+        .map((sc) => ({
+          name: String(sc.name || "Script").slice(0, 100),
+          value: String(sc.id)
+        }));
+
+      await sendInteractionResponse(interactionId, interactionToken, {
+        type: 8,
+        data: { choices: filtered }
+      });
+      return;
+    }
+
+    if (interactionType === 2) {
+      const data = interaction.data || {};
+      const cmdName = String(data.name || "").toLowerCase();
+      const opts = Array.isArray(data.options) ? data.options : [];
+      const getOptVal = (optName) => {
+        const found = opts.find((o) => o && o.name === optName);
+        return found ? found.value : "";
+      };
+
+      if (cmdName === "panel") {
+        const chosenScriptArg = sanitizeText(String(getOptVal("script") || ""), "");
+        const panelPayload = await buildDiscordPanelMessagePayload(guildId, chosenScriptArg);
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: panelPayload
+        });
+        return;
+      }
+
+      if (cmdName === "whitelist") {
+        const targetUid = extractDiscordUserId(getOptVal("user"));
+        const chosenScriptArg = sanitizeText(String(getOptVal("script") || ""), "");
+        if (!targetUid) {
+          await sendInteractionResponse(interactionId, interactionToken, {
+            type: 4,
+            data: { content: "❌ Düzgün Discord İstifadəçi ID və ya @mention daxil edin.", flags: 64 }
+          });
+          return;
+        }
+        if (!guildId) {
+          await sendInteractionResponse(interactionId, interactionToken, {
+            type: 4,
+            data: { content: "❌ Bu əmr yalnız sunucu daxilində işləyir.", flags: 64 }
+          });
+          return;
+        }
+        const matchedScript = findScriptByIdentifier(chosenScriptArg, guildId);
+        if (!matchedScript) {
+          await sendInteractionResponse(interactionId, interactionToken, {
+            type: 4,
+            data: { content: "❌ Zəhmət olmasa mövcud script seçin.", flags: 64 }
+          });
+          return;
+        }
+        addUserToWhitelist(targetUid, guildId, matchedScript.id, matchedScript.name, actorTag);
+        appendAuditLog(
+          "WHITELIST_ADD",
+          `Whitelist əlavə edildi: ${targetUid} → ${matchedScript.name}`,
+          actorTag,
+          guildId
+        );
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `✅ <@${targetUid}> (\`${targetUid}\`) istifadəçisi yalnız **${matchedScript.name}** scriptinin Whitelist siyahısına əlavə edildi.`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "unwhitelist") {
+        const targetUid = extractDiscordUserId(getOptVal("user"));
+        const chosenScriptArg = sanitizeText(String(getOptVal("script") || ""), "");
+        if (!targetUid) {
+          await sendInteractionResponse(interactionId, interactionToken, {
+            type: 4,
+            data: { content: "❌ Düzgün Discord İstifadəçi ID və ya @mention daxil edin.", flags: 64 }
+          });
+          return;
+        }
+        if (!guildId) {
+          await sendInteractionResponse(interactionId, interactionToken, {
+            type: 4,
+            data: { content: "❌ Bu əmr yalnız sunucu daxilində işləyir.", flags: 64 }
+          });
+          return;
+        }
+        const matchedScript = chosenScriptArg ? findScriptByIdentifier(chosenScriptArg, guildId) : null;
+        const removed = removeUserFromWhitelist(
+          targetUid,
+          guildId,
+          matchedScript ? matchedScript.id : chosenScriptArg
+        );
+        appendAuditLog(
+          "WHITELIST_REMOVE",
+          `Whitelist silindi: ${targetUid} (${matchedScript ? matchedScript.name : "Bütün scriptlər"})`,
+          actorTag,
+          guildId
+        );
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content:
+              removed > 0
+                ? `🗑️ <@${targetUid}> istifadəçisi ${
+                    matchedScript ? `**${matchedScript.name}** scriptinin` : "bütün scriptlərin"
+                  } Whitelist siyahısından çıxarıldı.`
+                : `ℹ️ <@${targetUid}> həmin siyahıda tapılmadı.`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "key") {
+        const keyInput = sanitizeText(String(getOptVal("key") || ""), "");
+        const hwidInput = sanitizeText(String(getOptVal("hwid") || ""), "");
+        const result = redeemKeyForDiscordUser(keyInput, actorUserId, hwidInput, guildId);
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: { content: result.message, flags: 64 }
+        });
+        return;
+      }
+
+      if (cmdName === "scripts") {
+        const guildScripts = getScriptsForGuild(guildId);
+        const text = guildScripts.length
+          ? "📜 **Bu sunucudakı scriptlər:**\n" +
+            guildScripts
+              .map((s, idx) => `${idx + 1}. **${s.name}** — ${resolveScriptSourceLabel(s)}`)
+              .join("\n")
+          : "ℹ️ Bu sunucuda hələ script yaradılmayıb.";
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: { content: text, flags: 64 }
+        });
+        return;
+      }
+
+      if (cmdName === "status") {
+        const tenant = guildId ? getTenantRecordByGuildId(guildId) : null;
+        const planInfo = resolveTenantEffectivePlan(tenant);
+        const scriptsCount = getScriptsForGuild(guildId).length;
+        const keysCount = getKeysForGuild(guildId).length;
+        const wlCount = getWhitelistForGuild(guildId).length;
+        const statusText =
+          "🛡️ **SADO PROTECT Status**\n" +
+          `• **Bot:** ${BOT_RUNTIME.connected ? "Aktiv ✅" : "Gözləmədə ⚠️"}\n` +
+          `• **Plan:** ${planInfo.label}\n` +
+          `• **Sunucu ID:** \`${guildId || "Yoxdur"}\`\n` +
+          `• **Scriptlər:** ${scriptsCount}\n` +
+          `• **Keylər:** ${keysCount}\n` +
+          `• **Whitelist:** ${wlCount}`;
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: { content: statusText, flags: 64 }
+        });
+        return;
+      }
+    }
+
+    if (interactionType === 3) {
+      const customId = (interaction.data && interaction.data.custom_id) || "";
+      const { actionId, scriptId } = parseCustomIdParts(customId);
+
+      if (actionId === "btn_redeem_key") {
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 9,
+          data: {
+            custom_id: `modal_redeem_key::${scriptId || ""}`,
+            title: "Lisenziya Açarını Aktivləşdir",
+            components: [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 4,
+                    custom_id: "input_license_key",
+                    label: "Açarınız (SADO-XXXX-XXXX-XXXX)",
+                    style: 1,
+                    min_length: 4,
+                    max_length: 80,
+                    placeholder: "SADO-XXXX-XXXX-XXXX",
+                    required: true
+                  }
+                ]
+              }
+            ]
+          }
+        });
+        return;
+      }
+
+      if (actionId === "btn_get_script") {
+        const scriptRes = getScriptForDiscordUser(actorUserId, guildId, scriptId, baseUrl);
+        if (!scriptRes.ok) {
+          await sendInteractionResponse(interactionId, interactionToken, {
+            type: 4,
+            data: { content: scriptRes.message, flags: 64 }
+          });
+          return;
+        }
+
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: scriptRes.message,
+            flags: 64,
+            components: [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    style: 2,
+                    label: "Scripti Kopyala",
+                    emoji: { name: "📋" },
+                    custom_id: `btn_copy_script::${scriptRes.script.id}`
+                  }
+                ]
+              }
+            ]
+          }
+        });
+        return;
+      }
+
+      if (actionId === "btn_copy_script") {
+        const scriptRes = getScriptForDiscordUser(actorUserId, guildId, scriptId, baseUrl);
+        const textToCopy = scriptRes.ok
+          ? scriptRes.copyScriptText
+          : buildLoaderScriptForRawId(scriptId || "script", baseUrl);
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `📋 **Kopyalanacaq Script:**\n\`\`\`lua\n${textToCopy}\n\`\`\``,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (actionId === "btn_reset_hwid") {
+        const resetRes = resetHwidForDiscordUser(actorUserId, guildId);
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: { content: resetRes.message, flags: 64 }
+        });
+        return;
+      }
+
+      if (actionId === "btn_stats") {
+        const statsText = getStatsForDiscordUser(actorUserId, guildId);
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: { content: statsText, flags: 64 }
+        });
+        return;
+      }
+    }
+
+    if (interactionType === 5) {
+      const modalData = interaction.data || {};
+      const customId = String(modalData.custom_id || "");
+      const { actionId } = parseCustomIdParts(customId);
+
+      if (actionId === "modal_redeem_key") {
+        let submittedKey = "";
+        const rows = Array.isArray(modalData.components) ? modalData.components : [];
+        for (const row of rows) {
+          const comps = Array.isArray(row.components) ? row.components : [];
+          for (const c of comps) {
+            if (c && c.custom_id === "input_license_key") {
+              submittedKey = String(c.value || "").trim();
+            }
+          }
+        }
+        const redeemRes = redeemKeyForDiscordUser(submittedKey, actorUserId, "", guildId);
+        await sendInteractionResponse(interactionId, interactionToken, {
+          type: 4,
+          data: { content: redeemRes.message, flags: 64 }
+        });
+        return;
+      }
+    }
+  } catch (_err) {}
+};
+
+const cleanupGatewayTimers = () => {
   if (BOT_RUNTIME.heartbeatTimer) {
     clearInterval(BOT_RUNTIME.heartbeatTimer);
     BOT_RUNTIME.heartbeatTimer = null;
@@ -1695,199 +1379,190 @@ const clearBotTimers = () => {
   }
 };
 
-const scheduleBotReconnect = () => {
+const scheduleGatewayReconnect = (delayMs = 3000) => {
   if (BOT_RUNTIME.reconnectTimer) return;
   BOT_RUNTIME.reconnectTimer = setTimeout(() => {
     BOT_RUNTIME.reconnectTimer = null;
-    startDiscordBotRuntime();
-  }, 3000);
+    connectDiscordGateway();
+  }, delayMs);
 };
 
-const startSelfKeepAliveLoop = () => {
-  if (BOT_RUNTIME.keepAliveTimer) return;
-  const externalUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, "");
-  if (!externalUrl) return;
-  const pingTarget = `${externalUrl.replace(/\/+$/, "")}/health`;
-  BOT_RUNTIME.keepAliveTimer = setInterval(() => {
-    try {
-      const clientMod = pingTarget.startsWith("https://") ? https : http;
-      const req = clientMod.get(pingTarget, (res) => {
-        res.resume();
-      });
-      req.on("error", () => {});
-    } catch (_err) {}
-  }, 4 * 60 * 1000);
-};
-
-const startDiscordBotRuntime = async () => {
+const connectDiscordGateway = () => {
   const token = resolveDiscordBotToken();
   if (!token) {
     BOT_RUNTIME.connected = false;
-    BOT_RUNTIME.connecting = false;
-    BOT_RUNTIME.lastError = "Render Environment-də DISCORD_BOT_TOKEN tapılmadı";
+    BOT_RUNTIME.lastError = "DISCORD_BOT_TOKEN təyin edilməyib";
+    return;
+  }
+  if (!WebSocketClient) {
+    BOT_RUNTIME.connected = false;
+    BOT_RUNTIME.lastError = "'ws' paketi quraşdırılmayıb";
     return;
   }
 
-  if (BOT_RUNTIME.connecting || BOT_RUNTIME.connected) return;
-  BOT_RUNTIME.connecting = true;
-  BOT_RUNTIME.lastError = "";
+  cleanupGatewayTimers();
+  if (BOT_RUNTIME.socket) {
+    try {
+      BOT_RUNTIME.socket.terminate();
+    } catch (_e) {}
+    BOT_RUNTIME.socket = null;
+  }
 
-  const gatewayRes = await callDiscordRestApi("/gateway/bot", "GET", null, token);
-  const gatewayBaseUrl =
-    gatewayRes.ok && gatewayRes.data && gatewayRes.data.url
-      ? gatewayRes.data.url
-      : "wss://gateway.discord.gg";
+  const gatewayEndpoint = BOT_RUNTIME.resumeGatewayUrl || DISCORD_GATEWAY_URL;
+  const ws = new WebSocketClient(gatewayEndpoint);
+  BOT_RUNTIME.socket = ws;
 
-  try {
-    if (BOT_RUNTIME.ws) {
-      try {
-        BOT_RUNTIME.ws.terminate();
-      } catch (_err) {}
+  ws.on("open", () => {
+    BOT_RUNTIME.lastError = "";
+  });
+
+  ws.on("message", async (rawData) => {
+    let payload = null;
+    try {
+      payload = JSON.parse(rawData.toString("utf8"));
+    } catch (_e) {
+      return;
+    }
+    if (!payload || typeof payload !== "object") return;
+
+    if (typeof payload.s === "number") {
+      BOT_RUNTIME.seq = payload.s;
     }
 
-    const wsUrl = `${gatewayBaseUrl.replace(/\/+$/, "")}/?v=10&encoding=json`;
-    const ws = new WebSocket(wsUrl);
-    BOT_RUNTIME.ws = ws;
+    const op = Number(payload.op);
+    if (op === 10) {
+      const intervalMs =
+        payload.d && typeof payload.d.heartbeat_interval === "number"
+          ? payload.d.heartbeat_interval
+          : 41250;
 
-    ws.on("open", () => {
-      BOT_RUNTIME.lastError = "";
-    });
+      BOT_RUNTIME.heartbeatTimer = setInterval(() => {
+        if (ws.readyState === WebSocketClient.OPEN) {
+          ws.send(JSON.stringify({ op: 1, d: BOT_RUNTIME.seq }));
+        }
+      }, intervalMs);
 
-    ws.on("message", async (rawData) => {
-      let packet = null;
-      try {
-        packet = JSON.parse(String(rawData));
-      } catch (_err) {
-        return;
-      }
-
-      if (packet.s !== null && packet.s !== undefined) {
-        BOT_RUNTIME.seq = packet.s;
-      }
-
-      if (packet.op === 10 && packet.d && packet.d.heartbeat_interval) {
-        const intervalMs = Number(packet.d.heartbeat_interval) || 41250;
-        if (BOT_RUNTIME.heartbeatTimer) clearInterval(BOT_RUNTIME.heartbeatTimer);
-        BOT_RUNTIME.heartbeatTimer = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ op: 1, d: BOT_RUNTIME.seq }));
-          }
-        }, intervalMs);
-
+      if (BOT_RUNTIME.sessionId && BOT_RUNTIME.resumeGatewayUrl) {
+        ws.send(
+          JSON.stringify({
+            op: 6,
+            d: {
+              token,
+              session_id: BOT_RUNTIME.sessionId,
+              seq: BOT_RUNTIME.seq
+            }
+          })
+        );
+      } else {
         ws.send(
           JSON.stringify({
             op: 2,
             d: {
               token,
-              intents: 513,
+              intents: 1,
               properties: {
                 os: "linux",
                 browser: "sado-protect",
                 device: "sado-protect"
               },
               presence: {
+                activities: [{ name: "SADO PROTECT • License Guard", type: 0 }],
                 status: "online",
-                activities: [
-                  {
-                    name: "SADO PROTECT • /panel",
-                    type: 3
-                  }
-                ]
+                afk: false
               }
             }
           })
         );
+      }
+      return;
+    }
+
+    if (op === 7 || op === 9) {
+      if (op === 9 && !payload.d) {
+        BOT_RUNTIME.sessionId = "";
+        BOT_RUNTIME.resumeGatewayUrl = "";
+      }
+      BOT_RUNTIME.connected = false;
+      scheduleGatewayReconnect(1500);
+      return;
+    }
+
+    if (op === 0) {
+      const eventName = payload.t;
+      const eventData = payload.d || {};
+
+      if (eventName === "READY") {
+        BOT_RUNTIME.connected = true;
+        BOT_RUNTIME.lastConnectedAt = new Date().toISOString();
+        BOT_RUNTIME.lastError = "";
+        BOT_RUNTIME.sessionId = eventData.session_id || "";
+        BOT_RUNTIME.resumeGatewayUrl = eventData.resume_gateway_url || DISCORD_GATEWAY_URL;
+        if (eventData.user) {
+          BOT_RUNTIME.botUserId = String(eventData.user.id || "");
+          BOT_RUNTIME.botUsername = String(eventData.user.username || "SADO PROTECT");
+        }
+        await syncSlashCommandsWithDiscord("");
+        if (APP_STATE.guildId) {
+          await syncSlashCommandsWithDiscord(APP_STATE.guildId);
+          await fetchGuildInfoFromDiscord(APP_STATE.guildId);
+        }
+        const tenantIds = Object.keys(ensureTenantStore());
+        for (const tid of tenantIds) {
+          await syncSlashCommandsWithDiscord(tid);
+          await fetchGuildInfoFromDiscord(tid);
+        }
         return;
       }
 
-      if (packet.op === 0) {
-        if (packet.t === "READY" && packet.d) {
-          BOT_RUNTIME.connected = true;
-          BOT_RUNTIME.connecting = false;
-          BOT_RUNTIME.lastError = "";
-          BOT_RUNTIME.lastConnectedAt = new Date().toISOString();
-          BOT_RUNTIME.sessionId = sanitizeText(packet.d.session_id, "");
-          if (packet.d.user) {
-            BOT_RUNTIME.botUserId = sanitizeSnowflakeId(packet.d.user.id);
-            BOT_RUNTIME.botUsername = sanitizeText(packet.d.user.username, "SADO PROTECT");
+      if (eventName === "GUILD_CREATE") {
+        const gid = sanitizeSnowflakeId(eventData.id);
+        if (gid) {
+          if (eventData.name) {
+            BOT_RUNTIME.guildNames[gid] = String(eventData.name);
           }
-
-          await syncSlashCommandsWithDiscord();
-
-          if (APP_STATE.guildId) {
-            const gName = await resolveGuildDisplayName(APP_STATE.guildId, APP_STATE.guildName);
-            if (gName) {
-              APP_STATE.guildName = gName;
-              const pTenant = getTenantRecordByGuildId(APP_STATE.guildId);
-              if (pTenant) pTenant.guildName = gName;
-              saveAppStateToDisk();
-            }
+          const tenant = getTenantRecordByGuildId(gid);
+          if (tenant && eventData.name) {
+            tenant.guildName = String(eventData.name);
+            syncTenantIntoGlobalIfPrimary(tenant);
+            saveAppStateToDisk();
           }
-          return;
+          await syncSlashCommandsWithDiscord(gid);
         }
-
-        if (packet.t === "INTERACTION_CREATE") {
-          handleDiscordInteractionCreate(packet.d).catch(() => {});
-        }
-      }
-    });
-
-    ws.on("close", (code) => {
-      clearBotTimers();
-      BOT_RUNTIME.connected = false;
-      BOT_RUNTIME.connecting = false;
-      if (code === 4004) {
-        BOT_RUNTIME.lastError = "Bot Token yanlışdır (Discord 4004 Authentication Failed)";
         return;
       }
-      scheduleBotReconnect();
-    });
 
-    ws.on("error", (err) => {
-      BOT_RUNTIME.connected = false;
-      BOT_RUNTIME.connecting = false;
-      BOT_RUNTIME.lastError = err.message || "Gateway bağlantı xətası";
-    });
-  } catch (err) {
+      if (eventName === "INTERACTION_CREATE") {
+        await handleDiscordInteraction(eventData, "");
+      }
+    }
+  });
+
+  ws.on("close", () => {
     BOT_RUNTIME.connected = false;
-    BOT_RUNTIME.connecting = false;
-    BOT_RUNTIME.lastError = err.message || "Bot başladılarkən xəta baş verdi";
-    scheduleBotReconnect();
-  }
-};
-
-const parseRequestJsonBody = (req) =>
-  new Promise((resolve) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > 5 * 1024 * 1024) {
-        raw = raw.slice(0, 5 * 1024 * 1024);
-      }
-    });
-    req.on("end", () => {
-      if (!raw) {
-        resolve({});
-        return;
-      }
-      try {
-        resolve(JSON.parse(raw));
-      } catch (_err) {
-        resolve({});
-      }
-    });
+    cleanupGatewayTimers();
+    scheduleGatewayReconnect(3000);
   });
 
-const sendJsonResponse = (res, statusCode, payload) => {
-  const jsonText = JSON.stringify(payload);
-  res.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
+  ws.on("error", (err) => {
+    BOT_RUNTIME.connected = false;
+    BOT_RUNTIME.lastError = err && err.message ? err.message : "Gateway bağlantı xətası";
   });
-  res.end(jsonText);
 };
 
-const buildPublicSnapshotPayload = async (requestedGuildId = "") => {
+const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
+  const fromQuery = sanitizeSnowflakeId(reqUrl.searchParams.get("guildId") || "");
+  if (fromQuery) return fromQuery;
+
+  const fromHeader = sanitizeSnowflakeId(req.headers["x-guild-id"] || "");
+  if (fromHeader) return fromHeader;
+
+  const fromBody = bodyObj ? sanitizeSnowflakeId(bodyObj.guildId || "") : "";
+  if (fromBody) return fromBody;
+
+  return "";
+};
+
+const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = false) => {
   const tokenPresent = Boolean(resolveDiscordBotToken());
   const cleanGuildId = sanitizeSnowflakeId(requestedGuildId);
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId) : null;
@@ -1912,8 +1587,9 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "") => {
   const blacklistList = tenant ? tenant.blacklist || [] : [];
   const designObj = tenant
     ? normalizePanelDesign(tenant.panelDesign)
-    : normalizePanelDesign(APP_STATE.panelDesign);
+    : normalizePanelDesign(DEFAULT_PANEL_DESIGN);
   const logsList = tenant ? tenant.auditLogs || [] : [];
+  const activePlan = resolveTenantEffectivePlan(tenant);
 
   return {
     bot: {
@@ -1932,6 +1608,17 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "") => {
       displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
       panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : ""
     },
+    plan: {
+      tier: activePlan.id,
+      label: activePlan.label,
+      priceLabel: activePlan.priceLabel,
+      scriptLimit: activePlan.scriptLimit,
+      scriptsUsed: scriptsList.length,
+      boundApiKey: tenant ? sanitizeText(tenant.boundApiKey, "") : "",
+      plansCatalog: [PLAN_CONFIGS.free, PLAN_CONFIGS.premium_1, PLAN_CONFIGS.premium_2]
+    },
+    isAdminView: Boolean(isAdminView),
+    adminApiKeys: isAdminView && Array.isArray(APP_STATE.apiKeys) ? APP_STATE.apiKeys : [],
     stats: {
       scriptsCount: scriptsList.length,
       keysCount: keysList.length,
@@ -1948,7 +1635,8 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "") => {
   };
 };
 
-const renderDashboardHtmlPage = () => `<!DOCTYPE html>
+const renderDashboardHtml = () => {
+  return `<!DOCTYPE html>
 <html lang="az">
 <head>
   <meta charset="UTF-8" />
@@ -1956,86 +1644,62 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
   <title>SADO PROTECT • İdarəetmə Paneli</title>
   <style>
     :root {
-      --bg-main: #070b14;
-      --bg-sidebar: #0b1120;
-      --bg-card: #0f172a;
-      --bg-input: #141e33;
-      --border: #1e293b;
-      --text-main: #f1f5f9;
+      --bg-main: #090d16;
+      --bg-card: #111827;
+      --bg-soft: #1e293b;
+      --border: rgba(148, 163, 184, 0.16);
+      --text-main: #f8fafc;
       --text-muted: #94a3b8;
-      --accent: #5865F2;
-      --accent-hover: #4752c4;
-      --success: #22c55e;
-      --warning: #f59e0b;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --success: #10b981;
       --danger: #ef4444;
+      --warning: #f59e0b;
     }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
-    }
-
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: var(--bg-main);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.14), transparent 45%), var(--bg-main);
       color: var(--text-main);
       min-height: 100vh;
       display: flex;
     }
-
     .sidebar {
-      width: 265px;
-      background: var(--bg-sidebar);
+      width: 255px;
+      background: rgba(15, 23, 42, 0.92);
       border-right: 1px solid var(--border);
+      padding: 20px 14px;
       display: flex;
       flex-direction: column;
-      padding: 20px 14px;
       gap: 18px;
       position: sticky;
       top: 0;
       height: 100vh;
     }
-
-    .brand {
+    .brand-box {
       display: flex;
       align-items: center;
       gap: 12px;
       padding: 8px 10px;
+      border-radius: 14px;
+      background: rgba(99, 102, 241, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.28);
     }
-
-    .brand-logo {
+    .brand-icon {
       width: 38px;
       height: 38px;
       border-radius: 10px;
-      background: linear-gradient(135deg, #5865F2, #38bdf8);
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
       display: flex;
       align-items: center;
       justify-content: center;
       font-weight: 800;
       font-size: 16px;
       color: #fff;
-      box-shadow: 0 8px 20px rgba(88, 101, 242, 0.35);
     }
-
-    .brand-title {
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: 0.4px;
-    }
-
-    .brand-sub {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
-    .nav-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      flex: 1;
-    }
-
+    .brand-title { font-weight: 700; font-size: 15px; letter-spacing: 0.4px; }
+    .brand-sub { font-size: 11px; color: var(--text-muted); }
+    .nav-list { display: flex; flex-direction: column; gap: 6px; }
     .nav-item {
       display: flex;
       align-items: center;
@@ -2046,53 +1710,37 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       background: transparent;
       color: var(--text-muted);
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 500;
       cursor: pointer;
       text-align: left;
-      transition: all 0.16s ease;
+      transition: all 0.18s ease;
     }
-
-    .nav-item:hover {
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--text-main);
-    }
-
+    .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--text-main); }
     .nav-item.active {
-      background: rgba(88, 101, 242, 0.16);
-      border-color: rgba(88, 101, 242, 0.4);
+      background: rgba(99, 102, 241, 0.18);
+      border-color: rgba(99, 102, 241, 0.45);
       color: #fff;
     }
-
     .main-area {
       flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
+      padding: 24px 28px 48px;
+      max-width: 1320px;
+      margin: 0 auto;
+      width: 100%;
     }
-
     .topbar {
-      background: rgba(11, 17, 32, 0.9);
-      backdrop-filter: blur(8px);
-      border-bottom: 1px solid var(--border);
-      padding: 14px 24px;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      position: sticky;
-      top: 0;
-      z-index: 20;
+      gap: 14px;
+      margin-bottom: 24px;
+      padding: 14px 18px;
+      border-radius: 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
     }
-
-    .status-pills {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    .pill {
+    .status-pill {
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -2100,331 +1748,175 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       border-radius: 999px;
       font-size: 13px;
       font-weight: 600;
-      background: var(--bg-card);
+      background: rgba(16, 185, 129, 0.14);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .status-pill.offline {
+      background: rgba(245, 158, 11, 0.14);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.3);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .guild-chip {
+      padding: 7px 12px;
+      border-radius: 10px;
+      background: var(--bg-soft);
       border: 1px solid var(--border);
+      font-size: 13px;
+      color: #e2e8f0;
     }
-
-    .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: var(--warning);
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 9px 15px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.16s ease;
+      color: #fff;
     }
-
-    .dot.active {
-      background: var(--success);
-      box-shadow: 0 0 10px rgba(34, 197, 94, 0.7);
-    }
-
-    .content {
-      padding: 24px;
-      max-width: 1320px;
-      width: 100%;
-      margin: 0 auto;
-    }
-
-    .tab-section {
-      display: none;
-    }
-
-    .tab-section.active {
-      display: block;
-    }
-
+    .btn-primary { background: var(--accent); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-success { background: var(--success); color: #04130d; }
+    .btn-danger { background: var(--danger); }
+    .btn-ghost { background: var(--bg-soft); border-color: var(--border); color: var(--text-main); }
+    .btn-sm { padding: 6px 11px; font-size: 12px; border-radius: 8px; }
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
       gap: 16px;
       margin-bottom: 22px;
     }
-
     .stat-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: 16px;
       padding: 18px;
     }
-
-    .stat-label {
-      font-size: 12px;
-      color: var(--text-muted);
-      margin-bottom: 8px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .stat-value {
-      font-size: 26px;
-      font-weight: 800;
-    }
-
-    .grid-2 {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-      gap: 18px;
-    }
-
+    .stat-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+    .stat-value { font-size: 24px; font-weight: 700; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
     .card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: 16px;
       padding: 20px;
       margin-bottom: 18px;
     }
-
-    .card-title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-
-    .card-sub {
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-bottom: 16px;
-      line-height: 1.45;
-    }
-
-    .form-group {
-      margin-bottom: 14px;
-    }
-
-    label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
-      margin-bottom: 6px;
-    }
-
-    input[type="text"],
-    input[type="number"],
-    select,
-    textarea {
+    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .card-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+    .form-group { margin-bottom: 14px; }
+    label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+    input, select, textarea {
       width: 100%;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      color: var(--text-main);
       padding: 10px 12px;
-      font-size: 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0b1120;
+      color: var(--text-main);
+      font-size: 13px;
       outline: none;
     }
-
-    input:focus,
-    select:focus,
-    textarea:focus {
-      border-color: var(--accent);
-    }
-
-    textarea {
-      min-height: 92px;
-      resize: vertical;
-    }
-
-    .row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .btn {
-      padding: 10px 16px;
-      border-radius: 10px;
-      border: 1px solid transparent;
-      font-size: 13px;
-      font-weight: 700;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      text-decoration: none;
-      transition: all 0.15s ease;
-    }
-
-    .btn-primary {
-      background: var(--accent);
-      color: #fff;
-    }
-
-    .btn-primary:hover {
-      background: var(--accent-hover);
-    }
-
-    .btn-success {
-      background: #16a34a;
-      color: #fff;
-    }
-
-    .btn-secondary {
-      background: #1e293b;
-      color: var(--text-main);
-      border-color: #334155;
-    }
-
-    .btn-danger {
-      background: rgba(239, 68, 68, 0.16);
-      color: #fca5a5;
-      border-color: rgba(239, 68, 68, 0.35);
-    }
-
-    .btn-sm {
-      padding: 6px 11px;
-      font-size: 12px;
-      border-radius: 8px;
-    }
-
-    .table-wrap {
-      overflow-x: auto;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-
-    th,
-    td {
-      text-align: left;
-      padding: 11px 10px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    th {
-      color: var(--text-muted);
-      font-size: 12px;
-      text-transform: uppercase;
-    }
-
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    textarea { min-height: 90px; resize: vertical; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+    th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
     .badge {
       display: inline-block;
       padding: 3px 9px;
       border-radius: 999px;
       font-size: 11px;
-      font-weight: 700;
-      background: rgba(88, 101, 242, 0.2);
-      color: #c7d2fe;
+      font-weight: 600;
+      background: rgba(99, 102, 241, 0.16);
+      color: #a5b4fc;
     }
-
-    .badge-green {
-      background: rgba(34, 197, 94, 0.2);
-      color: #86efac;
-    }
-
-    .discord-preview {
-      background: #2b2d31;
-      border-radius: 10px;
-      padding: 14px;
-      border-left: 4px solid #5865F2;
-    }
-
-    .discord-preview-title {
-      font-weight: 700;
-      font-size: 15px;
-      color: #fff;
-      margin-bottom: 6px;
-    }
-
-    .discord-preview-desc {
-      font-size: 13px;
-      color: #dbdee1;
-      line-height: 1.45;
-      margin-bottom: 10px;
-      white-space: pre-wrap;
-    }
-
-    .discord-preview-footer {
-      font-size: 11px;
-      color: #949ba4;
-      margin-top: 8px;
-    }
-
-    .preview-buttons {
+    .badge-green { background: rgba(16, 185, 129, 0.16); color: #34d399; }
+    .badge-red { background: rgba(239, 68, 68, 0.16); color: #f87171; }
+    .tab-section { display: none; }
+    .tab-section.active { display: block; }
+    .btn-designer-row {
       display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #0b1120;
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
     }
-
-    .preview-btn {
-      padding: 7px 12px;
-      border-radius: 6px;
+    .preview-embed {
+      border-left: 4px solid #6366f1;
+      background: #0b1120;
+      border-radius: 12px;
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .preview-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .mock-btn {
+      padding: 7px 13px;
+      border-radius: 8px;
       font-size: 12px;
       font-weight: 600;
       color: #fff;
-      background: #5865F2;
+      border: none;
     }
-
-    .preview-btn.style-2 { background: #4e5058; }
-    .preview-btn.style-3 { background: #248046; }
-    .preview-btn.style-4 { background: #da373c; }
-
-    .btn-editor-row {
-      display: grid;
-      grid-template-columns: 70px 1fr 120px 1.3fr auto;
-      gap: 8px;
-      margin-bottom: 8px;
-      align-items: center;
-    }
-
-    .btn-order-actions {
-      display: flex;
-      gap: 4px;
-      align-items: center;
-    }
-
-    .toast-container {
-      position: fixed;
-      right: 18px;
-      bottom: 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      z-index: 9999;
-    }
-
+    .mock-Primary { background: #5865f2; }
+    .mock-Secondary { background: #4e5058; }
+    .mock-Success { background: #248046; }
+    .mock-Danger { background: #da373c; }
     .toast {
-      background: #0f172a;
-      border: 1px solid #334155;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #1e293b;
       color: #fff;
-      padding: 11px 15px;
-      border-radius: 10px;
+      border: 1px solid rgba(99, 102, 241, 0.45);
+      padding: 12px 16px;
+      border-radius: 12px;
       font-size: 13px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+      box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+      z-index: 9999;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.2s ease;
+      pointer-events: none;
     }
-
+    .toast.show { opacity: 1; transform: translateY(0); }
     @media (max-width: 860px) {
       body { flex-direction: column; }
-      .sidebar {
-        width: 100%;
-        height: auto;
-        position: static;
-      }
-      .nav-list {
-        flex-direction: row;
-        flex-wrap: wrap;
-      }
-      .btn-editor-row {
-        grid-template-columns: 1fr;
-      }
+      .sidebar { width: 100%; height: auto; position: static; flex-direction: row; flex-wrap: wrap; }
+      .nav-list { flex-direction: row; flex-wrap: wrap; }
+      .main-area { padding: 16px; }
     }
   </style>
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-logo">SP</div>
+    <div class="brand-box">
+      <div class="brand-icon">SP</div>
       <div>
         <div class="brand-title">SADO PROTECT</div>
-        <div class="brand-sub">Tam İdarəetmə Paneli</div>
+        <div class="brand-sub">License & Script Guard</div>
       </div>
     </div>
 
     <nav class="nav-list">
       <button class="nav-item active" data-tab="overview">📊 İdarəetmə</button>
+      <button class="nav-item" data-tab="plans">💎 Planlar & API</button>
       <button class="nav-item" data-tab="scripts">📜 Scriptlər</button>
       <button class="nav-item" data-tab="keys">🔑 Keylər</button>
       <button class="nav-item" data-tab="designer">🎨 Panel Dizaynı</button>
@@ -2434,309 +1926,354 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
 
   <main class="main-area">
     <header class="topbar">
-      <div class="status-pills">
-        <div class="pill">
-          <span id="botStatusDot" class="dot"></span>
-          <span id="botStatusLabel">Bot: Aktiv deyil — Gözləmədədir</span>
-        </div>
-        <div class="pill">
-          <span>🏰 Sunucu:</span>
-          <strong id="guildNameLabel">Bağlı Sunucu Yoxdur</strong>
-        </div>
-      </div>
       <div class="row">
-        <a
-          id="joinDiscordTopBtn"
-          href="${DISCORD_INVITE_URL}"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="btn btn-primary btn-sm"
-        >➕ Join Discord</a>
-        <button id="refreshSnapshotBtn" class="btn btn-secondary btn-sm">🔄 Yenilə</button>
+        <div id="botStatusPill" class="status-pill offline">
+          <span class="dot"></span>
+          <span id="botStatusText">Bot: Aktiv deyil — Gözləmədədir</span>
+        </div>
+        <div class="guild-chip">🏰 Sunucu: <strong id="headerGuildName">Bağlı Sunucu Yoxdur</strong></div>
+        <div class="guild-chip">💎 Plan: <strong id="headerPlanLabel">Free</strong></div>
+      </div>
+
+      <div class="topbar-right">
+        <a id="topJoinDiscordLink" class="btn btn-primary btn-sm" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener noreferrer">
+          ➕ Join Discord
+        </a>
+        <button id="refreshSnapshotBtn" class="btn btn-ghost btn-sm">🔄 Yenilə</button>
       </div>
     </header>
 
-    <div class="content">
-      <section id="tab-overview" class="tab-section active">
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-label">Aktiv Scriptlər</div>
-            <div id="statScriptsCount" class="stat-value">0</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Yaradılmış Keylər</div>
-            <div id="statKeysCount" class="stat-value">0</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Whitelist</div>
-            <div id="statWhitelistCount" class="stat-value">0</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Blacklist</div>
-            <div id="statBlacklistCount" class="stat-value">0</div>
-          </div>
+    <section id="tab-overview" class="tab-section active">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Scriptlər</div>
+          <div id="statScriptsCount" class="stat-value">0</div>
         </div>
-
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-title">🤖 Sunucu Bağlantısı (Bu Cihaz Üçün)</div>
-            <div class="card-sub">
-              Əvvəlcə <strong>Join Discord</strong> düyməsi ilə botu serverinizə əlavə edin, sonra aşağıya öz <strong>Sunucu ID</strong>-nizi yazın.
-            </div>
-            <div class="form-group">
-              <label>Sunucu ID (Guild ID)</label>
-              <input id="guildIdInput" type="text" placeholder="Sunucu ID-ni buraya yazın (Məs: 123456789012345678)" />
-            </div>
-            <div class="form-group">
-              <label>Panel Kanal ID (İstəyə bağlı)</label>
-              <input id="panelChannelIdInput" type="text" placeholder="Məs: 123456789012345678" />
-            </div>
-            <div class="row">
-              <a
-                id="joinDiscordCardBtn"
-                href="${DISCORD_INVITE_URL}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="btn btn-primary"
-              >➕ Join Discord</a>
-              <button id="connectBotBtn" class="btn btn-success">🔗 Sunucunu Bağla</button>
-              <button id="sendPanelQuickBtn" class="btn btn-secondary">📨 Paneli Kanala Göndər</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-title">📋 Son Əməliyyatlar</div>
-            <div class="card-sub">Bu sunucuda edilən son dəyişikliklər</div>
-            <div id="auditLogList" style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow:auto;"></div>
-          </div>
+        <div class="stat-card">
+          <div class="stat-label">Lisenziya Keyləri</div>
+          <div id="statKeysCount" class="stat-value">0</div>
         </div>
-      </section>
-
-      <section id="tab-scripts" class="tab-section">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-title">➕ Yeni Script Əlavə Et</div>
-            <div class="card-sub">
-              Burada yaratdığınız hər script öz sunucunuzun <code>/panel</code>, <code>/whitelist</code> və <code>/unwhitelist</code> siyahısına düşür.
-            </div>
-            <div class="form-group">
-              <label>Script Adı</label>
-              <input id="newScriptName" type="text" placeholder="Məs: Blox Fruits VIP" />
-            </div>
-            <div class="form-group">
-              <label>Mənbə Növü</label>
-              <select id="newScriptSourceType">
-                <option value="url">URL (Link ilə)</option>
-                <option value="file">Fayl (.lua / .txt yüklə)</option>
-              </select>
-            </div>
-            <div id="newScriptUrlGroup" class="form-group">
-              <label>Script URL</label>
-              <input id="newScriptUrl" type="text" placeholder="https://raw.githubusercontent.com/..." />
-            </div>
-            <div id="newScriptFileGroup" class="form-group" style="display:none;">
-              <label>Lua / TXT Fayl Seçin</label>
-              <input id="newScriptFileInput" type="file" accept=".lua,.txt,text/plain" />
-              <div id="newScriptFileInfo" style="font-size:12px;color:#94a3b8;margin-top:6px;">Hələ fayl seçilməyib</div>
-            </div>
-            <div class="form-group">
-              <label>Açıqlama</label>
-              <textarea id="newScriptDesc" placeholder="Script haqqında qısa məlumat..."></textarea>
-            </div>
-            <button id="createScriptBtn" class="btn btn-primary">💾 Scripti Yarat</button>
-          </div>
-
-          <div class="card">
-            <div class="card-title">✏️ Mövcud Scriptə Düzəliş Et</div>
-            <div class="card-sub">
-              Cədvəldən "Düzəliş Et" düyməsini seçərək həm URL, həm də Fayl (.lua/.txt) ilə yeniləyə bilərsiniz.
-            </div>
-            <input id="editScriptId" type="hidden" />
-            <div class="form-group">
-              <label>Script Adı</label>
-              <input id="editScriptName" type="text" placeholder="Seçilmiş script adı" />
-            </div>
-            <div class="form-group">
-              <label>Mənbə Növü</label>
-              <select id="editScriptSourceType">
-                <option value="url">URL (Link ilə)</option>
-                <option value="file">Fayl (.lua / .txt ilə yenilə)</option>
-              </select>
-            </div>
-            <div id="editScriptUrlGroup" class="form-group">
-              <label>Script URL</label>
-              <input id="editScriptUrl" type="text" placeholder="https://..." />
-            </div>
-            <div id="editScriptFileGroup" class="form-group" style="display:none;">
-              <label>Yeni Lua / TXT Fayl Seçin (Faylı yeniləmək üçün)</label>
-              <input id="editScriptFileInput" type="file" accept=".lua,.txt,text/plain" />
-              <div id="editScriptFileInfo" style="font-size:12px;color:#94a3b8;margin-top:6px;">Mövcud fayl saxlanılacaq</div>
-            </div>
-            <div class="form-group">
-              <label>Açıqlama</label>
-              <textarea id="editScriptDesc" placeholder="Açıqlama..."></textarea>
-            </div>
-            <button id="updateScriptBtn" class="btn btn-success">✅ Dəyişiklikləri Saxla</button>
-          </div>
+        <div class="stat-card">
+          <div class="stat-label">Whitelist</div>
+          <div id="statWhitelistCount" class="stat-value">0</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-label">Blacklist</div>
+          <div id="statBlacklistCount" class="stat-value">0</div>
+        </div>
+      </div>
 
+      <div class="grid-2">
         <div class="card">
-          <div class="card-title">📜 Mövcud Scriptlər</div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ad</th>
-                  <th>Mənbə</th>
-                  <th>Açıqlama</th>
-                  <th>Əməliyyat</th>
-                </tr>
-              </thead>
-              <tbody id="scriptsTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section id="tab-keys" class="tab-section">
-        <div class="card">
-          <div class="card-title">🔑 Yeni Lisenziya Key Yarat</div>
+          <div class="card-title">🔗 Sunucu Bağlantısı & Panel Göndərimi</div>
           <div class="card-sub">
-            Yaradılan key avtomatik olaraq öz sunucunuzun siyahısına düşür.
+            Hər cihaz öz Sunucu ID-sini bağlaya bilər. Botu sunucuya əlavə etmək üçün Join Discord düyməsindən istifadə edin.
           </div>
+
+          <div class="form-group">
+            <label>Discord Sunucu ID (Guild ID)</label>
+            <input id="guildIdInput" type="text" placeholder="Məs: 123456789012345678" />
+          </div>
+
+          <div class="form-group">
+            <label>Panel Göndəriləcək Kanal ID (İstəyə bağlı)</label>
+            <input id="panelChannelIdInput" type="text" placeholder="Boş buraxılsa aktiv kanal seçilir" />
+          </div>
+
+          <div class="form-group">
+            <label>Panel Scripti</label>
+            <select id="quickPanelScriptSelect"></select>
+          </div>
+
           <div class="row">
-            <div style="flex:1;min-width:200px;">
-              <label>Script Seçimi</label>
-              <select id="keyScriptSelect"></select>
-            </div>
-            <div style="width:160px;">
-              <label>Müddət (Gün)</label>
-              <input id="keyDaysInput" type="number" min="0" value="30" />
-            </div>
-            <div style="flex:1;min-width:200px;">
-              <label>HWID (İstəyə bağlı)</label>
-              <input id="keyHwidInput" type="text" placeholder="Boş buraxıla bilər" />
-            </div>
-            <div style="align-self:flex-end;">
-              <button id="createKeyBtn" class="btn btn-primary">➕ Key Yarat</button>
-            </div>
+            <button id="saveGuildSettingsBtn" class="btn btn-primary">💾 Sunucunu Bağla</button>
+            <button id="sendPanelQuickBtn" class="btn btn-success">📨 Paneli Göndər</button>
+            <a class="btn btn-ghost" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener noreferrer">
+              🤖 Join Discord
+            </a>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-title">📋 Aktiv Key Siyahısı</div>
+          <div class="card-title">📋 Son Əməliyyatlar</div>
+          <div class="card-sub">Bu sunucuda edilən son dəyişikliklər</div>
+          <div id="auditLogList" style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow:auto;"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-plans" class="tab-section">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Free (Pulsuz)</div>
+          <div class="stat-value">1 Script</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:6px;">Başlanğıc plan</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Premium (1$)</div>
+          <div class="stat-value">5 Script</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:6px;">API açarla aktivləşir</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Premium (2$)</div>
+          <div class="stat-value">Sonsuz</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:6px;">Limitsiz script • API açarla aktivləşir</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Aktiv Planınız</div>
+          <div id="currentPlanBadgeText" class="stat-value">Free</div>
+          <div id="currentPlanUsageText" style="font-size:12px;color:#94a3b8;margin-top:6px;">0 / 1 script</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">🔑 API Açar İlə Plan Aktiv Et</div>
+          <div class="card-sub">
+            Yönetici tərəfindən verilən API açarı daxil edin. Aktivləşdirildikdə planınız həmişəlik bu sunucuya bağlanır.
+          </div>
+          <div class="form-group">
+            <label>API Açarınız</label>
+            <input id="redeemApiKeyInput" type="text" placeholder="Məs: SADO-API-XXXXXX-XXXXXX" />
+          </div>
+          <button id="activateApiKeyBtn" class="btn btn-primary">✅ API Açarı Bağla</button>
+        </div>
+
+        <div id="adminApiManagerCard" class="card" style="display:none;">
+          <div class="card-title">👑 Yönetici API Açar Yaradıcısı</div>
+          <div class="card-sub">
+            Bu bölmə yalnız sizdə görünür. İstifadəçi plan aldıqda buradan API açar yaradıb verin.
+          </div>
+          <div class="row" style="margin-bottom:12px;">
+            <select id="adminNewApiPlanSelect" style="flex:1;min-width:160px;">
+              <option value="free">Free (1 Script)</option>
+              <option value="premium_1" selected>Premium 1$ (5 Script)</option>
+              <option value="premium_2">Premium 2$ (Sonsuz Script)</option>
+            </select>
+            <input id="adminNewApiNoteInput" type="text" placeholder="Qeyd / Alıcı adı (istəyə bağlı)" style="flex:1;min-width:170px;" />
+            <button id="adminGenerateApiKeyBtn" class="btn btn-success">➕ API Açar Yarat</button>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Key</th>
-                  <th>Sahibi</th>
-                  <th>Script</th>
-                  <th>Müddət</th>
-                  <th>HWID</th>
+                  <th>API Açar</th>
+                  <th>Plan</th>
+                  <th>Qeyd</th>
                   <th>Əməliyyat</th>
                 </tr>
               </thead>
-              <tbody id="keysTableBody"></tbody>
+              <tbody id="adminApiKeysTableBody"></tbody>
             </table>
           </div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section id="tab-designer" class="tab-section">
+    <section id="tab-scripts" class="tab-section">
+      <div class="card">
+        <div class="card-title">➕ Yeni Script Yarat</div>
+        <div class="card-sub">Script adını daxil edin və mənbə kimi URL və ya .lua/.txt fayl seçin.</div>
         <div class="grid-2">
-          <div class="card">
-            <div class="card-title">🎨 Discord Panel Dizaynı</div>
-            <div class="card-sub">
-              Embed rəngi, başlığı, açıqlaması və düymələri bu sunucu üçün yadda saxlanılır.
-            </div>
-            <div class="form-group">
-              <label>Embed Başlığı</label>
-              <input id="designTitleInput" type="text" />
-            </div>
-            <div class="form-group">
-              <label>Embed Açıqlaması</label>
-              <textarea id="designDescInput"></textarea>
-            </div>
-            <div class="row">
-              <div class="form-group" style="flex:1;">
-                <label>Embed Rəngi (Hex)</label>
-                <input id="designColorInput" type="text" placeholder="#5865F2" />
-              </div>
-              <div class="form-group" style="flex:1;">
-                <label>Footer Mətni</label>
-                <input id="designFooterInput" type="text" />
-              </div>
-            </div>
-            <div class="row">
-              <div class="form-group" style="flex:1;">
-                <label>Thumbnail URL</label>
-                <input id="designThumbInput" type="text" placeholder="https://..." />
-              </div>
-              <div class="form-group" style="flex:1;">
-                <label>Böyük Şəkil URL</label>
-                <input id="designImageInput" type="text" placeholder="https://..." />
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label>Panel Düymələri (Maksimum 5 ədəd)</label>
-              <div id="designButtonsEditor"></div>
-              <button id="addDesignButtonBtn" class="btn btn-secondary btn-sm" type="button">➕ Düymə Əlavə Et</button>
-            </div>
-
-            <div class="row">
-              <button id="saveDesignBtn" class="btn btn-primary">💾 Dizaynı Saxla</button>
-              <button id="sendDesignedPanelBtn" class="btn btn-success">📨 Kanala Göndər</button>
-            </div>
+          <div class="form-group">
+            <label>Script Adı</label>
+            <input id="newScriptNameInput" type="text" placeholder="Məs: SADO HUB" />
           </div>
-
-          <div class="card">
-            <div class="card-title">👁️ Canlı Discord Panel Önizləməsi</div>
-            <div class="card-sub">Discord kanalında görünəcək real görünüş</div>
-            <div id="discordLivePreview" class="discord-preview">
-              <div id="previewTitle" class="discord-preview-title"></div>
-              <div id="previewDesc" class="discord-preview-desc"></div>
-              <div id="previewButtons" class="preview-buttons"></div>
-              <div id="previewFooter" class="discord-preview-footer"></div>
-            </div>
+          <div class="form-group">
+            <label>Mənbə Növü</label>
+            <select id="newScriptSourceType">
+              <option value="url">URL (Raw Link)</option>
+              <option value="file">Fayl (.lua / .txt)</option>
+            </select>
           </div>
         </div>
-      </section>
+        <div id="newScriptUrlGroup" class="form-group">
+          <label>Script URL</label>
+          <input id="newScriptUrlInput" type="text" placeholder="https://..." />
+        </div>
+        <div id="newScriptFileGroup" class="form-group" style="display:none;">
+          <label>Script Faylı (.lua / .txt)</label>
+          <input id="newScriptFileInput" type="file" accept=".lua,.txt" />
+        </div>
+        <button id="createScriptBtn" class="btn btn-primary">➕ Script Əlavə Et</button>
+      </div>
 
-      <section id="tab-access" class="tab-section">
+      <div id="editScriptCard" class="card" style="display:none;">
+        <div class="card-title">✏️ Scriptə Düzəliş Et</div>
+        <div class="card-sub">Mövcud scripti URL və ya yeni fayl (.lua / .txt) ilə yeniləyin.</div>
         <div class="grid-2">
-          <div class="card">
-            <div class="card-title">✅ Whitelist (İcazəli İstifadəçilər)</div>
-            <div class="card-sub">
-              Whitelist-ə əlavə edilən istifadəçi yalnız seçilmiş script üçün avtomatik lisenziya açarı qazanır.
-            </div>
-            <div class="row" style="margin-bottom:12px;">
-              <input id="whitelistValueInput" type="text" placeholder="Discord ID və ya istifadəçi adı" style="flex:1;min-width:170px;" />
-              <select id="whitelistScriptSelect" style="min-width:165px;"></select>
-              <button id="addWhitelistBtn" class="btn btn-success">Əlavə Et + Avto Key</button>
-            </div>
-            <div id="whitelistContainer"></div>
+          <div class="form-group">
+            <label>Script Adı</label>
+            <input id="editScriptNameInput" type="text" />
           </div>
-
-          <div class="card">
-            <div class="card-title">⛔ Blacklist (Qadağan Edilənlər)</div>
-            <div class="card-sub">Bloklanmış istifadəçi və ya HWID siyahısı</div>
-            <div class="row" style="margin-bottom:12px;">
-              <input id="blacklistValueInput" type="text" placeholder="Discord ID və ya HWID" style="flex:1;" />
-              <button id="addBlacklistBtn" class="btn btn-danger">Blokla</button>
-            </div>
-            <div id="blacklistContainer"></div>
+          <div class="form-group">
+            <label>Yeniləmə Mənbəyi</label>
+            <select id="editScriptSourceType">
+              <option value="url">URL (Raw Link)</option>
+              <option value="file">Fayl (.lua / .txt)</option>
+            </select>
           </div>
         </div>
-      </section>
-    </div>
+        <div id="editScriptUrlGroup" class="form-group">
+          <label>Yeni Script URL</label>
+          <input id="editScriptUrlInput" type="text" />
+        </div>
+        <div id="editScriptFileGroup" class="form-group" style="display:none;">
+          <label>Yeni Script Faylı (.lua / .txt)</label>
+          <input id="editScriptFileInput" type="file" accept=".lua,.txt" />
+        </div>
+        <div class="row">
+          <button id="saveEditScriptBtn" class="btn btn-success">💾 Yadda Saxla</button>
+          <button id="cancelEditScriptBtn" class="btn btn-ghost">Ləğv Et</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📜 Yaradılmış Scriptlər</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Ad</th>
+                <th>Mənbə</th>
+                <th>Loader</th>
+                <th>Əməliyyatlar</th>
+              </tr>
+            </thead>
+            <tbody id="scriptsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-keys" class="tab-section">
+      <div class="card">
+        <div class="card-title">🔑 Yeni Lisenziya Key Yarat</div>
+        <div class="row">
+          <select id="newKeyScriptSelect" style="flex:1;min-width:180px;"></select>
+          <input id="newKeyDaysInput" type="number" min="0" placeholder="Müddət (gün, 0 = limitsiz)" style="width:190px;" />
+          <input id="newKeyNoteInput" type="text" placeholder="Qeyd (istəyə bağlı)" style="flex:1;min-width:180px;" />
+          <button id="createKeyBtn" class="btn btn-primary">➕ Key Yarat</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🗝️ Aktiv Keylər</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Script</th>
+                <th>Discord User</th>
+                <th>HWID</th>
+                <th>Əməliyyat</th>
+              </tr>
+            </thead>
+            <tbody id="keysTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-designer" class="tab-section">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">🎨 Panel Mətni və Görünüşü</div>
+          <div class="form-group">
+            <label>Panel Başlığı</label>
+            <input id="designTitleInput" type="text" />
+          </div>
+          <div class="form-group">
+            <label>Panel Təsviri</label>
+            <textarea id="designDescInput"></textarea>
+          </div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label>Embed Rəngi</label>
+              <input id="designColorInput" type="color" />
+            </div>
+            <div class="form-group">
+              <label>Footer Mətni</label>
+              <input id="designFooterInput" type="text" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Şəkil URL (İstəyə bağlı)</label>
+            <input id="designImageInput" type="text" placeholder="https://..." />
+          </div>
+
+          <div class="card-title" style="margin-top:14px;">🔘 Düymə Sıralaması və Parametrləri</div>
+          <div id="designerButtonsList"></div>
+
+          <div class="row" style="margin-top:14px;">
+            <button id="saveDesignBtn" class="btn btn-primary">💾 Dizaynı Saxla</button>
+            <button id="sendDesignedPanelBtn" class="btn btn-success">📨 Paneli Kanala Göndər</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">👁️ Canlı Önizləmə</div>
+          <div id="previewEmbedBox" class="preview-embed">
+            <div id="previewTitleText" style="font-weight:700;font-size:16px;margin-bottom:8px;"></div>
+            <div id="previewDescText" style="font-size:13px;color:#cbd5e1;white-space:pre-line;"></div>
+            <div id="previewButtonsBox" class="preview-buttons"></div>
+            <div id="previewFooterText" style="font-size:11px;color:#94a3b8;margin-top:14px;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-access" class="tab-section">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">✅ Whitelist (Seçilən Scriptə Özəl)</div>
+          <div class="row" style="margin-bottom:12px;">
+            <input id="whitelistUserInput" type="text" placeholder="Discord User ID" style="flex:1;min-width:150px;" />
+            <select id="whitelistScriptSelect" style="flex:1;min-width:150px;"></select>
+            <button id="addWhitelistBtn" class="btn btn-success">Əlavə Et</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Script</th>
+                  <th>Sil</th>
+                </tr>
+              </thead>
+              <tbody id="whitelistTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">⛔ Blacklist</div>
+          <div class="row" style="margin-bottom:12px;">
+            <input id="blacklistUserInput" type="text" placeholder="Discord User ID" style="flex:1;min-width:170px;" />
+            <button id="addBlacklistBtn" class="btn btn-danger">Blokla</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Sil</th>
+                </tr>
+              </thead>
+              <tbody id="blacklistTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
-  <div id="toastContainer" class="toast-container"></div>
+  <div id="toastBanner" class="toast"></div>
 
   <script>
     const CLIENT_GUILD_STORAGE_KEY = "sado_protect_device_guild_id";
+    const CLIENT_ADMIN_FLAG = new URLSearchParams(window.location.search).get("admin") === "1";
     const clientState = {
       snapshot: null,
       designerButtons: [],
@@ -2746,371 +2283,523 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       editScriptFilePayload: { fileName: "", content: "" }
     };
 
-    const showToast = (messageText) => {
-      const container = document.getElementById("toastContainer");
-      if (!container) return;
-      const toastEl = document.createElement("div");
-      toastEl.className = "toast";
-      toastEl.textContent = String(messageText || "");
-      container.appendChild(toastEl);
-      setTimeout(() => {
-        if (toastEl.parentNode) toastEl.parentNode.removeChild(toastEl);
-      }, 3200);
-    };
-
-    const apiRequest = async (urlPath, methodName = "GET", bodyObj = null) => {
-      const fetchOptions = { method: methodName, headers: {} };
-      if (clientState.deviceGuildId) {
-        fetchOptions.headers["x-guild-id"] = clientState.deviceGuildId;
-      }
-      if (bodyObj !== null) {
-        fetchOptions.headers["Content-Type"] = "application/json";
-        fetchOptions.body = JSON.stringify({
-          guildId: clientState.deviceGuildId || undefined,
-          ...bodyObj
-        });
-      }
-      const res = await fetch(urlPath, fetchOptions);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Sorğu uğursuz oldu");
-      return data;
-    };
-
-    const escapeHtml = (unsafe) =>
-      String(unsafe || "")
+    const escapeHtml = (str) => {
+      return String(str || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-
-    const renderLivePreview = () => {
-      const title = (document.getElementById("designTitleInput") || {}).value || "SADO PROTECT";
-      const desc = (document.getElementById("designDescInput") || {}).value || "";
-      const color = (document.getElementById("designColorInput") || {}).value || "#5865F2";
-      const footer = (document.getElementById("designFooterInput") || {}).value || "";
-
-      const box = document.getElementById("discordLivePreview");
-      if (box) {
-        box.style.borderLeftColor = /^#[0-9a-fA-F]{6}$/.test(color.trim()) ? color.trim() : "#5865F2";
-      }
-      document.getElementById("previewTitle").textContent = title;
-      document.getElementById("previewDesc").textContent = desc;
-      document.getElementById("previewFooter").textContent = footer;
-
-      const btnWrap = document.getElementById("previewButtons");
-      btnWrap.innerHTML = clientState.designerButtons
-        .map((b) => {
-          const emojiPart = b.emoji ? escapeHtml(b.emoji) + " " : "";
-          return '<span class="preview-btn style-' + Number(b.style || 1) + '">' + emojiPart + escapeHtml(b.label || "Düymə") + "</span>";
-        })
-        .join("");
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     };
 
-    const renderDesignButtonsEditor = () => {
-      const container = document.getElementById("designButtonsEditor");
-      if (!container) return;
-      container.innerHTML = clientState.designerButtons
+    const showToast = (msg) => {
+      const el = document.getElementById("toastBanner");
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(window.__sadoToastTimer);
+      window.__sadoToastTimer = setTimeout(() => {
+        el.classList.remove("show");
+      }, 2800);
+    };
+
+    const apiRequest = async (urlPath, method = "GET", bodyPayload = null) => {
+      const headers = {};
+      if (clientState.deviceGuildId) {
+        headers["X-Guild-Id"] = clientState.deviceGuildId;
+      }
+      const opts = { method, headers };
+      if (bodyPayload !== null) {
+        headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(bodyPayload);
+      }
+      const res = await fetch(urlPath, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Sorğu xətası");
+      }
+      return data;
+    };
+
+    const renderDesignerPreview = () => {
+      const titleVal = (document.getElementById("designTitleInput") || {}).value || "";
+      const descVal = (document.getElementById("designDescInput") || {}).value || "";
+      const colorVal = (document.getElementById("designColorInput") || {}).value || "#6366f1";
+      const footerVal = (document.getElementById("designFooterInput") || {}).value || "";
+
+      const embedBox = document.getElementById("previewEmbedBox");
+      if (embedBox) embedBox.style.borderLeftColor = colorVal;
+      if (document.getElementById("previewTitleText")) {
+        document.getElementById("previewTitleText").textContent = titleVal;
+      }
+      if (document.getElementById("previewDescText")) {
+        document.getElementById("previewDescText").textContent = descVal;
+      }
+      if (document.getElementById("previewFooterText")) {
+        document.getElementById("previewFooterText").textContent = footerVal;
+      }
+
+      const btnBox = document.getElementById("previewButtonsBox");
+      if (btnBox) {
+        btnBox.innerHTML = (clientState.designerButtons || [])
+          .filter((b) => b.enabled !== false)
+          .map((b) => {
+            return (
+              "<button type='button' class='mock-btn mock-" +
+              escapeHtml(b.style || "Primary") +
+              "'>" +
+              (b.emoji ? escapeHtml(b.emoji) + " " : "") +
+              escapeHtml(b.label) +
+              "</button>"
+            );
+          })
+          .join("");
+      }
+    };
+
+    const renderDesignerButtonsEditor = () => {
+      const listEl = document.getElementById("designerButtonsList");
+      if (!listEl) return;
+      const btns = clientState.designerButtons || [];
+      listEl.innerHTML = btns
         .map((btn, idx) => {
           return (
-            '<div class="btn-editor-row" data-idx="' + idx + '">' +
-            '<input type="text" class="btn-emoji-inp" placeholder="Emoji" value="' + escapeHtml(btn.emoji || "") + '" />' +
-            '<input type="text" class="btn-label-inp" placeholder="Düymə adı" value="' + escapeHtml(btn.label || "") + '" />' +
-            '<select class="btn-style-inp">' +
-            '<option value="1"' + (Number(btn.style) === 1 ? " selected" : "") + '>Mavi</option>' +
-            '<option value="2"' + (Number(btn.style) === 2 ? " selected" : "") + '>Boz</option>' +
-            '<option value="3"' + (Number(btn.style) === 3 ? " selected" : "") + '>Yaşıl</option>' +
-            '<option value="4"' + (Number(btn.style) === 4 ? " selected" : "") + '>Qırmızı</option>' +
-            "</select>" +
-            '<input type="text" class="btn-resp-inp" placeholder="Cavab mesajı" value="' + escapeHtml(btn.responseText || "") + '" />' +
-            '<div class="btn-order-actions">' +
-            '<button type="button" class="btn btn-secondary btn-sm btn-move-up" title="Yuxarı daşı"' + (idx === 0 ? " disabled" : "") + ">▲</button>" +
-            '<button type="button" class="btn btn-secondary btn-sm btn-move-down" title="Aşağı daşı"' + (idx === clientState.designerButtons.length - 1 ? " disabled" : "") + ">▼</button>" +
-            '<button type="button" class="btn btn-danger btn-sm btn-remove-design">Sil</button>' +
+            "<div class='btn-designer-row'>" +
+            "<div style='font-weight:600;font-size:13px;'>" +
+            (btn.emoji ? escapeHtml(btn.emoji) + " " : "") +
+            escapeHtml(btn.label) +
+            "</div>" +
+            "<div class='row'>" +
+            "<button type='button' class='btn btn-ghost btn-sm btn-move-up' data-idx='" +
+            idx +
+            "'>▲</button>" +
+            "<button type='button' class='btn btn-ghost btn-sm btn-move-down' data-idx='" +
+            idx +
+            "'>▼</button>" +
+            "<button type='button' class='btn btn-ghost btn-sm btn-toggle-btn' data-idx='" +
+            idx +
+            "'>" +
+            (btn.enabled !== false ? "Aktiv" : "Gizli") +
+            "</button>" +
             "</div>" +
             "</div>"
           );
         })
         .join("");
 
-      container.querySelectorAll(".btn-editor-row").forEach((rowEl) => {
-        const idx = Number(rowEl.getAttribute("data-idx"));
-        const syncRow = () => {
-          if (!clientState.designerButtons[idx]) return;
-          clientState.designerButtons[idx].emoji = rowEl.querySelector(".btn-emoji-inp").value;
-          clientState.designerButtons[idx].label = rowEl.querySelector(".btn-label-inp").value;
-          clientState.designerButtons[idx].style = Number(rowEl.querySelector(".btn-style-inp").value);
-          clientState.designerButtons[idx].responseText = rowEl.querySelector(".btn-resp-inp").value;
-          renderLivePreview();
-        };
-        rowEl.querySelectorAll("input, select").forEach((el) => el.addEventListener("input", syncRow));
-
-        const moveUpBtn = rowEl.querySelector(".btn-move-up");
-        if (moveUpBtn) {
-          moveUpBtn.addEventListener("click", () => {
-            if (idx <= 0) return;
-            const tempItem = clientState.designerButtons[idx - 1];
-            clientState.designerButtons[idx - 1] = clientState.designerButtons[idx];
-            clientState.designerButtons[idx] = tempItem;
-            renderDesignButtonsEditor();
-          });
-        }
-
-        const moveDownBtn = rowEl.querySelector(".btn-move-down");
-        if (moveDownBtn) {
-          moveDownBtn.addEventListener("click", () => {
-            if (idx >= clientState.designerButtons.length - 1) return;
-            const tempItem = clientState.designerButtons[idx + 1];
-            clientState.designerButtons[idx + 1] = clientState.designerButtons[idx];
-            clientState.designerButtons[idx] = tempItem;
-            renderDesignButtonsEditor();
-          });
-        }
-
-        rowEl.querySelector(".btn-remove-design").addEventListener("click", () => {
-          if (clientState.designerButtons.length <= 1) {
-            showToast("Ən azı 1 düymə qalmalıdır");
-            return;
+      listEl.querySelectorAll(".btn-move-up").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.getAttribute("data-idx"));
+          if (i > 0) {
+            const temp = clientState.designerButtons[i - 1];
+            clientState.designerButtons[i - 1] = clientState.designerButtons[i];
+            clientState.designerButtons[i] = temp;
+            renderDesignerButtonsEditor();
+            renderDesignerPreview();
           }
-          clientState.designerButtons.splice(idx, 1);
-          renderDesignButtonsEditor();
-          renderLivePreview();
         });
       });
 
-      renderLivePreview();
-    };
+      listEl.querySelectorAll(".btn-move-down").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.getAttribute("data-idx"));
+          if (i < clientState.designerButtons.length - 1) {
+            const temp = clientState.designerButtons[i + 1];
+            clientState.designerButtons[i + 1] = clientState.designerButtons[i];
+            clientState.designerButtons[i] = temp;
+            renderDesignerButtonsEditor();
+            renderDesignerPreview();
+          }
+        });
+      });
 
-    const populateEditScriptForm = (scriptObj) => {
-      if (!scriptObj) return;
-      clientState.editingScriptId = scriptObj.id;
-      clientState.editScriptFilePayload = {
-        fileName: scriptObj.fileName || "",
-        content: scriptObj.scriptContent || ""
-      };
-      document.getElementById("editScriptId").value = scriptObj.id;
-      document.getElementById("editScriptName").value = scriptObj.name || "";
-      const srcTypeEl = document.getElementById("editScriptSourceType");
-      if (srcTypeEl) {
-        srcTypeEl.value = scriptObj.sourceType === "file" ? "file" : "url";
-        toggleEditScriptSourceInputs();
-      }
-      document.getElementById("editScriptUrl").value = scriptObj.scriptUrl || "";
-      const editFileInfo = document.getElementById("editScriptFileInfo");
-      if (editFileInfo) {
-        editFileInfo.textContent = scriptObj.fileName
-          ? "Mövcud fayl: " + scriptObj.fileName
-          : "Mövcud fayl saxlanılacaq";
-      }
-      document.getElementById("editScriptDesc").value = scriptObj.description || "";
+      listEl.querySelectorAll(".btn-toggle-btn").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.getAttribute("data-idx"));
+          if (clientState.designerButtons[i]) {
+            clientState.designerButtons[i].enabled = clientState.designerButtons[i].enabled === false;
+            renderDesignerButtonsEditor();
+            renderDesignerPreview();
+          }
+        });
+      });
     };
 
     const applySnapshotToUi = (snap) => {
       clientState.snapshot = snap;
 
-      const inviteHref = (snap.bot && snap.bot.inviteUrl) || "${DISCORD_INVITE_URL}";
-      const topJoinBtn = document.getElementById("joinDiscordTopBtn");
-      const cardJoinBtn = document.getElementById("joinDiscordCardBtn");
-      if (topJoinBtn) topJoinBtn.href = inviteHref;
-      if (cardJoinBtn) cardJoinBtn.href = inviteHref;
-
-      const dotEl = document.getElementById("botStatusDot");
-      const labelEl = document.getElementById("botStatusLabel");
-      if (snap.bot && snap.bot.active) {
-        dotEl.classList.add("active");
-        labelEl.textContent = "Bot: Aktivdir";
-      } else {
-        dotEl.classList.remove("active");
-        labelEl.textContent = "Bot: Aktiv deyil — Gözləmədədir";
+      const planInfo = snap.plan || { label: "Free", scriptLimit: 1, scriptsUsed: 0, boundApiKey: "" };
+      if (document.getElementById("headerPlanLabel")) {
+        document.getElementById("headerPlanLabel").textContent = planInfo.label || "Free";
+      }
+      if (document.getElementById("currentPlanBadgeText")) {
+        document.getElementById("currentPlanBadgeText").textContent = planInfo.label || "Free";
+      }
+      if (document.getElementById("currentPlanUsageText")) {
+        const limitText =
+          planInfo.scriptLimit === null || planInfo.scriptLimit === undefined
+            ? "∞"
+            : String(planInfo.scriptLimit);
+        document.getElementById("currentPlanUsageText").textContent =
+          String(planInfo.scriptsUsed || 0) + " / " + limitText + " script";
       }
 
-      document.getElementById("guildNameLabel").textContent =
-        (snap.guild && (snap.guild.guildName || snap.guild.displayName)) || "Bağlı Sunucu Yoxdur";
-
-      const guildIdInput = document.getElementById("guildIdInput");
-      if (guildIdInput && document.activeElement !== guildIdInput) {
-        guildIdInput.value = clientState.deviceGuildId || (snap.guild && snap.guild.guildId) || "";
+      const redeemApiInp = document.getElementById("redeemApiKeyInput");
+      if (redeemApiInp && document.activeElement !== redeemApiInp && planInfo.boundApiKey) {
+        redeemApiInp.value = planInfo.boundApiKey;
       }
 
-      const channelIdInput = document.getElementById("panelChannelIdInput");
-      if (channelIdInput && !channelIdInput.value && snap.guild && snap.guild.panelChannelId) {
-        channelIdInput.value = snap.guild.panelChannelId;
+      const adminCard = document.getElementById("adminApiManagerCard");
+      if (adminCard) {
+        const showAdmin = Boolean(CLIENT_ADMIN_FLAG && snap.isAdminView);
+        adminCard.style.display = showAdmin ? "block" : "none";
+        if (showAdmin) {
+          const adminKeys = Array.isArray(snap.adminApiKeys) ? snap.adminApiKeys : [];
+          const adminBody = document.getElementById("adminApiKeysTableBody");
+          if (adminBody) {
+            adminBody.innerHTML = adminKeys.length
+              ? adminKeys
+                  .map((ak) => {
+                    return (
+                      "<tr>" +
+                      "<td><code>" +
+                      escapeHtml(ak.key) +
+                      "</code></td>" +
+                      "<td><span class='badge badge-green'>" +
+                      escapeHtml(ak.planLabel || ak.planTier) +
+                      "</span></td>" +
+                      "<td>" +
+                      escapeHtml(ak.note || "-") +
+                      "</td>" +
+                      "<td><button class='btn btn-danger btn-sm btn-del-api' data-id='" +
+                      escapeHtml(ak.id) +
+                      "'>Sil</button></td>" +
+                      "</tr>"
+                    );
+                  })
+                  .join("")
+              : "<tr><td colspan='4' style='color:#94a3b8;'>Hələ API açar yaradılmayıb.</td></tr>";
+
+            adminBody.querySelectorAll(".btn-del-api").forEach((btn) => {
+              btn.addEventListener("click", async () => {
+                const apiId = btn.getAttribute("data-id");
+                try {
+                  await apiRequest("/api/admin/api-keys/" + encodeURIComponent(apiId), "DELETE");
+                  showToast("API açar silindi");
+                  await refreshDashboardSnapshot();
+                } catch (err) {
+                  showToast(err.message);
+                }
+              });
+            });
+          }
+        }
       }
 
-      document.getElementById("statScriptsCount").textContent = String((snap.stats && snap.stats.scriptsCount) || 0);
-      document.getElementById("statKeysCount").textContent = String((snap.stats && snap.stats.keysCount) || 0);
-      document.getElementById("statWhitelistCount").textContent = String((snap.stats && snap.stats.whitelistCount) || 0);
-      document.getElementById("statBlacklistCount").textContent = String((snap.stats && snap.stats.blacklistCount) || 0);
+      const bot = snap.bot || {};
+      const pillEl = document.getElementById("botStatusPill");
+      const statusTextEl = document.getElementById("botStatusText");
+      if (pillEl && statusTextEl) {
+        statusTextEl.textContent = bot.statusText || "Bot: Aktiv deyil — Gözləmədədir";
+        pillEl.classList.toggle("offline", !bot.active);
+      }
 
-      const scripts = Array.isArray(snap.scripts) ? snap.scripts : [];
+      const guild = snap.guild || {};
+      if (document.getElementById("headerGuildName")) {
+        document.getElementById("headerGuildName").textContent = guild.displayName || "Bağlı Sunucu Yoxdur";
+      }
+      const guildInp = document.getElementById("guildIdInput");
+      if (guildInp && document.activeElement !== guildInp) {
+        guildInp.value = clientState.deviceGuildId || guild.guildId || "";
+      }
+      const chInp = document.getElementById("panelChannelIdInput");
+      if (chInp && document.activeElement !== chInp) {
+        chInp.value = guild.panelChannelId || "";
+      }
+
+      const stats = snap.stats || {};
+      if (document.getElementById("statScriptsCount")) {
+        document.getElementById("statScriptsCount").textContent = String(stats.scriptsCount || 0);
+      }
+      if (document.getElementById("statKeysCount")) {
+        document.getElementById("statKeysCount").textContent = String(stats.keysCount || 0);
+      }
+      if (document.getElementById("statWhitelistCount")) {
+        document.getElementById("statWhitelistCount").textContent = String(stats.whitelistCount || 0);
+      }
+      if (document.getElementById("statBlacklistCount")) {
+        document.getElementById("statBlacklistCount").textContent = String(stats.blacklistCount || 0);
+      }
+
+      const scriptsList = Array.isArray(snap.scripts) ? snap.scripts : [];
+      const scriptSelectOptions =
+        "<option value=''>Script seçin</option>" +
+        scriptsList
+          .map((s) => "<option value='" + escapeHtml(s.id) + "'>" + escapeHtml(s.name) + "</option>")
+          .join("");
+
+      if (document.getElementById("quickPanelScriptSelect")) {
+        document.getElementById("quickPanelScriptSelect").innerHTML = scriptSelectOptions;
+      }
+      if (document.getElementById("newKeyScriptSelect")) {
+        document.getElementById("newKeyScriptSelect").innerHTML = scriptSelectOptions;
+      }
+      if (document.getElementById("whitelistScriptSelect")) {
+        document.getElementById("whitelistScriptSelect").innerHTML = scriptSelectOptions;
+      }
+
       const scriptsBody = document.getElementById("scriptsTableBody");
-      scriptsBody.innerHTML = scripts.length
-        ? scripts
-            .map((sc) => {
-              const sourceLabel = sc.sourceType === "file"
-                ? "Fayl: " + escapeHtml(sc.fileName || "script.lua")
-                : escapeHtml(sc.scriptUrl || "Daxili");
-              return (
-                "<tr>" +
-                "<td><strong>" + escapeHtml(sc.name) + "</strong></td>" +
-                "<td><span class='badge'>" + sourceLabel + "</span></td>" +
-                "<td>" + escapeHtml(sc.description || "-") + "</td>" +
-                "<td class='row'>" +
-                "<button class='btn btn-secondary btn-sm btn-edit-sc' data-id='" + escapeHtml(sc.id) + "'>✏️ Düzəliş Et</button>" +
-                "<button class='btn btn-danger btn-sm btn-del-sc' data-id='" + escapeHtml(sc.id) + "'>🗑️ Sil</button>" +
-                "</td>" +
-                "</tr>"
-              );
-            })
-            .join("")
-        : "<tr><td colspan='4' style='color:#94a3b8;'>Hələ script əlavə edilməyib.</td></tr>";
-
-      scriptsBody.querySelectorAll(".btn-edit-sc").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const targetId = btn.getAttribute("data-id");
-          const found = scripts.find((item) => item.id === targetId);
-          populateEditScriptForm(found);
-          showToast("Script redaktə formuna yükləndi");
-        });
-      });
-
-      scriptsBody.querySelectorAll(".btn-del-sc").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const targetId = btn.getAttribute("data-id");
-          try {
-            await apiRequest("/api/scripts/" + encodeURIComponent(targetId), "DELETE");
-            showToast("Script silindi");
-            await refreshDashboardSnapshot();
-          } catch (err) {
-            showToast(err.message);
-          }
-        });
-      });
-
-      const keySelect = document.getElementById("keyScriptSelect");
-      if (keySelect) {
-        const prevVal = keySelect.value;
-        const optionsHtml = scripts.length
-          ? scripts.map((s) => "<option value='" + escapeHtml(s.name) + "'>" + escapeHtml(s.name) + "</option>").join("")
-          : "<option value='Ümumi'>Ümumi</option>";
-        keySelect.innerHTML = optionsHtml;
-        if (prevVal) keySelect.value = prevVal;
-      }
-
-      const wlScriptSelect = document.getElementById("whitelistScriptSelect");
-      if (wlScriptSelect) {
-        const prevWlVal = wlScriptSelect.value;
-        const wlOptionsHtml = scripts.length
-          ? scripts.map((s) => "<option value='" + escapeHtml(s.name) + "'>" + escapeHtml(s.name) + "</option>").join("")
-          : "<option value='Ümumi'>Ümumi</option>";
-        wlScriptSelect.innerHTML = wlOptionsHtml;
-        if (prevWlVal) wlScriptSelect.value = prevWlVal;
-      }
-
-      const keys = Array.isArray(snap.keys) ? snap.keys : [];
-      const keysBody = document.getElementById("keysTableBody");
-      keysBody.innerHTML = keys.length
-        ? keys
-            .map((k) => {
-              return (
-                "<tr>" +
-                "<td><code>" + escapeHtml(k.key) + "</code></td>" +
-                "<td>" + escapeHtml(k.owner || "Ümumi") + "</td>" +
-                "<td>" + escapeHtml(k.scriptName || "Ümumi") + "</td>" +
-                "<td>" + (Number(k.days) > 0 ? escapeHtml(k.days) + " gün" : "Limitsiz") + "</td>" +
-                "<td>" + escapeHtml(k.hwid || "Boş") + "</td>" +
-                "<td><button class='btn btn-danger btn-sm btn-del-key' data-id='" + escapeHtml(k.id) + "'>Sil</button></td>" +
-                "</tr>"
-              );
-            })
-            .join("")
-        : "<tr><td colspan='6' style='color:#94a3b8;'>Hələ key yaradılmayıb.</td></tr>";
-
-      keysBody.querySelectorAll(".btn-del-key").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const targetId = btn.getAttribute("data-id");
-          try {
-            await apiRequest("/api/keys/" + encodeURIComponent(targetId), "DELETE");
-            showToast("Key silindi");
-            await refreshDashboardSnapshot();
-          } catch (err) {
-            showToast(err.message);
-          }
-        });
-      });
-
-      const renderAccessRows = (items, typeName, containerId) => {
-        const box = document.getElementById(containerId);
-        if (!box) return;
-        box.innerHTML = items.length
-          ? items
-              .map((it) => {
-                const keyBadge = it.generatedKey ? " <span class='badge badge-green'>Key: " + escapeHtml(it.generatedKey) + "</span>" : "";
-                const scriptBadge = it.scriptName ? " <span class='badge'>Script: " + escapeHtml(it.scriptName) + "</span>" : "";
+      if (scriptsBody) {
+        scriptsBody.innerHTML = scriptsList.length
+          ? scriptsList
+              .map((sc) => {
+                const sourceText =
+                  sc.sourceType === "file"
+                    ? "Fayl (" + (sc.fileName || "script.lua") + ")"
+                    : sc.scriptUrl || "URL";
+                const loaderStr =
+                  'loadstring(game:HttpGet("' +
+                  window.location.origin +
+                  "/raw/" +
+                  encodeURIComponent(sc.id) +
+                  '", true))()';
                 return (
-                  "<div class='row' style='justify-content:space-between;padding:8px 10px;border:1px solid #1e293b;border-radius:9px;margin-bottom:7px;'>" +
-                  "<span>" + escapeHtml(it.value) + scriptBadge + keyBadge + "</span>" +
-                  "<button class='btn btn-danger btn-sm btn-del-acc' data-type='" + typeName + "' data-id='" + escapeHtml(it.id) + "'>Sil</button>" +
-                  "</div>"
+                  "<tr>" +
+                  "<td><strong>" +
+                  escapeHtml(sc.name) +
+                  "</strong></td>" +
+                  "<td>" +
+                  escapeHtml(sourceText) +
+                  "</td>" +
+                  "<td><code style='font-size:11px;'>" +
+                  escapeHtml(loaderStr) +
+                  "</code></td>" +
+                  "<td class='row'>" +
+                  "<button class='btn btn-ghost btn-sm btn-edit-script' data-id='" +
+                  escapeHtml(sc.id) +
+                  "'>Düzəliş Et</button>" +
+                  "<button class='btn btn-danger btn-sm btn-del-script' data-id='" +
+                  escapeHtml(sc.id) +
+                  "'>Sil</button>" +
+                  "</td>" +
+                  "</tr>"
                 );
               })
               .join("")
-          : "<div style='color:#94a3b8;font-size:13px;'>Siyahı boşdur.</div>";
+          : "<tr><td colspan='4' style='color:#94a3b8;'>Bu sunucuda hələ script yoxdur.</td></tr>";
 
-        box.querySelectorAll(".btn-del-acc").forEach((btn) => {
+        scriptsBody.querySelectorAll(".btn-edit-script").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const sid = btn.getAttribute("data-id");
+            const found = scriptsList.find((x) => x.id === sid);
+            if (!found) return;
+            clientState.editingScriptId = found.id;
+            clientState.editScriptFilePayload = { fileName: "", content: "" };
+            document.getElementById("editScriptNameInput").value = found.name || "";
+            document.getElementById("editScriptSourceType").value = found.sourceType || "url";
+            document.getElementById("editScriptUrlInput").value = found.scriptUrl || "";
+            const isFileMode = (found.sourceType || "url") === "file";
+            document.getElementById("editScriptUrlGroup").style.display = isFileMode ? "none" : "block";
+            document.getElementById("editScriptFileGroup").style.display = isFileMode ? "block" : "none";
+            document.getElementById("editScriptCard").style.display = "block";
+          });
+        });
+
+        scriptsBody.querySelectorAll(".btn-del-script").forEach((btn) => {
           btn.addEventListener("click", async () => {
-            const t = btn.getAttribute("data-type");
-            const id = btn.getAttribute("data-id");
+            const sid = btn.getAttribute("data-id");
             try {
-              await apiRequest("/api/access/" + encodeURIComponent(t) + "/" + encodeURIComponent(id), "DELETE");
-              showToast("Qeyd silindi");
+              await apiRequest("/api/scripts/" + encodeURIComponent(sid), "DELETE");
+              showToast("Script silindi");
               await refreshDashboardSnapshot();
             } catch (err) {
               showToast(err.message);
             }
           });
         });
-      };
+      }
 
-      renderAccessRows(Array.isArray(snap.whitelist) ? snap.whitelist : [], "whitelist", "whitelistContainer");
-      renderAccessRows(Array.isArray(snap.blacklist) ? snap.blacklist : [], "blacklist", "blacklistContainer");
+      const keysList = Array.isArray(snap.keys) ? snap.keys : [];
+      const keysBody = document.getElementById("keysTableBody");
+      if (keysBody) {
+        keysBody.innerHTML = keysList.length
+          ? keysList
+              .map((k) => {
+                return (
+                  "<tr>" +
+                  "<td><code>" +
+                  escapeHtml(k.key) +
+                  "</code></td>" +
+                  "<td>" +
+                  escapeHtml(k.scriptName || "Hamısı") +
+                  "</td>" +
+                  "<td>" +
+                  escapeHtml(k.discordUserId || "-") +
+                  "</td>" +
+                  "<td>" +
+                  escapeHtml(k.hwid || "-") +
+                  "</td>" +
+                  "<td class='row'>" +
+                  "<button class='btn btn-ghost btn-sm btn-reset-key-hwid' data-id='" +
+                  escapeHtml(k.id) +
+                  "'>Reset HWID</button>" +
+                  "<button class='btn btn-danger btn-sm btn-del-key' data-id='" +
+                  escapeHtml(k.id) +
+                  "'>Sil</button>" +
+                  "</td>" +
+                  "</tr>"
+                );
+              })
+              .join("")
+          : "<tr><td colspan='5' style='color:#94a3b8;'>Key yaradılmayıb.</td></tr>";
 
-      const logs = Array.isArray(snap.auditLogs) ? snap.auditLogs : [];
-      const logBox = document.getElementById("auditLogList");
-      logBox.innerHTML = logs.length
-        ? logs
-            .slice(0, 15)
-            .map(
-              (lg) =>
-                "<div style='padding:8px 10px;border:1px solid #1e293b;border-radius:9px;font-size:12px;'>" +
-                "<strong>" + escapeHtml(lg.summary) + "</strong>" +
-                "<div style='color:#94a3b8;margin-top:3px;'>" + escapeHtml(lg.actor) + " • " + escapeHtml(lg.createdAt) + "</div>" +
-                "</div>"
-            )
-            .join("")
-        : "<div style='color:#94a3b8;font-size:13px;'>Hələ əməliyyat qeydi yoxdur.</div>";
+        keysBody.querySelectorAll(".btn-reset-key-hwid").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const kid = btn.getAttribute("data-id");
+            try {
+              await apiRequest("/api/keys/" + encodeURIComponent(kid) + "/reset-hwid", "POST");
+              showToast("HWID sıfırlandı");
+              await refreshDashboardSnapshot();
+            } catch (err) {
+              showToast(err.message);
+            }
+          });
+        });
 
-      if (snap.panelDesign) {
-        const d = snap.panelDesign;
-        const activeId = document.activeElement && document.activeElement.id;
-        if (activeId !== "designTitleInput") document.getElementById("designTitleInput").value = d.title || "";
-        if (activeId !== "designDescInput") document.getElementById("designDescInput").value = d.description || "";
-        if (activeId !== "designColorInput") document.getElementById("designColorInput").value = d.colorHex || "#5865F2";
-        if (activeId !== "designFooterInput") document.getElementById("designFooterInput").value = d.footerText || "";
-        if (activeId !== "designThumbInput") document.getElementById("designThumbInput").value = d.thumbnailUrl || "";
-        if (activeId !== "designImageInput") document.getElementById("designImageInput").value = d.imageUrl || "";
+        keysBody.querySelectorAll(".btn-del-key").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const kid = btn.getAttribute("data-id");
+            try {
+              await apiRequest("/api/keys/" + encodeURIComponent(kid), "DELETE");
+              showToast("Key silindi");
+              await refreshDashboardSnapshot();
+            } catch (err) {
+              showToast(err.message);
+            }
+          });
+        });
+      }
 
-        if (!document.getElementById("designButtonsEditor").contains(document.activeElement)) {
-          clientState.designerButtons = Array.isArray(d.buttons) ? JSON.parse(JSON.stringify(d.buttons)) : [];
-          renderDesignButtonsEditor();
-        }
+      const wlList = Array.isArray(snap.whitelist) ? snap.whitelist : [];
+      const wlBody = document.getElementById("whitelistTableBody");
+      if (wlBody) {
+        wlBody.innerHTML = wlList.length
+          ? wlList
+              .map((w) => {
+                return (
+                  "<tr>" +
+                  "<td><code>" +
+                  escapeHtml(w.userId) +
+                  "</code></td>" +
+                  "<td>" +
+                  escapeHtml(w.scriptName || "Seçilən Script") +
+                  "</td>" +
+                  "<td><button class='btn btn-danger btn-sm btn-del-wl' data-id='" +
+                  escapeHtml(w.id) +
+                  "'>Sil</button></td>" +
+                  "</tr>"
+                );
+              })
+              .join("")
+          : "<tr><td colspan='3' style='color:#94a3b8;'>Whitelist boşdur.</td></tr>";
+
+        wlBody.querySelectorAll(".btn-del-wl").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const wid = btn.getAttribute("data-id");
+            try {
+              await apiRequest("/api/whitelist/" + encodeURIComponent(wid), "DELETE");
+              showToast("Whitelist-dən silindi");
+              await refreshDashboardSnapshot();
+            } catch (err) {
+              showToast(err.message);
+            }
+          });
+        });
+      }
+
+      const blList = Array.isArray(snap.blacklist) ? snap.blacklist : [];
+      const blBody = document.getElementById("blacklistTableBody");
+      if (blBody) {
+        blBody.innerHTML = blList.length
+          ? blList
+              .map((b) => {
+                return (
+                  "<tr>" +
+                  "<td><code>" +
+                  escapeHtml(b.userId) +
+                  "</code></td>" +
+                  "<td><button class='btn btn-danger btn-sm btn-del-bl' data-id='" +
+                  escapeHtml(b.id) +
+                  "'>Sil</button></td>" +
+                  "</tr>"
+                );
+              })
+              .join("")
+          : "<tr><td colspan='2' style='color:#94a3b8;'>Blacklist boşdur.</td></tr>";
+
+        blBody.querySelectorAll(".btn-del-bl").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const bid = btn.getAttribute("data-id");
+            try {
+              await apiRequest("/api/blacklist/" + encodeURIComponent(bid), "DELETE");
+              showToast("Blacklist-dən silindi");
+              await refreshDashboardSnapshot();
+            } catch (err) {
+              showToast(err.message);
+            }
+          });
+        });
+      }
+
+      const design = snap.panelDesign || {};
+      if (document.activeElement !== document.getElementById("designTitleInput")) {
+        document.getElementById("designTitleInput").value = design.title || "";
+      }
+      if (document.activeElement !== document.getElementById("designDescInput")) {
+        document.getElementById("designDescInput").value = design.description || "";
+      }
+      if (document.activeElement !== document.getElementById("designColorInput")) {
+        document.getElementById("designColorInput").value = design.colorHex || "#6366f1";
+      }
+      if (document.activeElement !== document.getElementById("designFooterInput")) {
+        document.getElementById("designFooterInput").value = design.footerText || "";
+      }
+      if (document.activeElement !== document.getElementById("designImageInput")) {
+        document.getElementById("designImageInput").value = design.imageUrl || "";
+      }
+      if (Array.isArray(design.buttons)) {
+        clientState.designerButtons = design.buttons.map((b) => ({ ...b }));
+      }
+      renderDesignerButtonsEditor();
+      renderDesignerPreview();
+
+      const logsList = Array.isArray(snap.auditLogs) ? snap.auditLogs : [];
+      const logsEl = document.getElementById("auditLogList");
+      if (logsEl) {
+        logsEl.innerHTML = logsList.length
+          ? logsList
+              .slice(0, 20)
+              .map((lg) => {
+                return (
+                  "<div style='padding:8px 10px;border-radius:10px;background:#0b1120;border:1px solid rgba(148,163,184,0.14);font-size:12px;'>" +
+                  "<strong>" +
+                  escapeHtml(lg.action) +
+                  "</strong>: " +
+                  escapeHtml(lg.detail) +
+                  "</div>"
+                );
+              })
+              .join("")
+          : "<div style='color:#94a3b8;font-size:12px;'>Hələ qeyd yoxdur.</div>";
       }
     };
 
     const refreshDashboardSnapshot = async () => {
       try {
-        const querySuffix = clientState.deviceGuildId
-          ? "?guildId=" + encodeURIComponent(clientState.deviceGuildId)
-          : "";
+        const params = new URLSearchParams();
+        if (clientState.deviceGuildId) params.set("guildId", clientState.deviceGuildId);
+        if (CLIENT_ADMIN_FLAG) params.set("admin", "1");
+        const querySuffix = params.toString() ? "?" + params.toString() : "";
         const snap = await apiRequest("/api/snapshot" + querySuffix, "GET");
         applySnapshotToUi(snap);
       } catch (err) {
@@ -3118,190 +2807,163 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       }
     };
 
-    const toggleNewScriptSourceInputs = () => {
-      const mode = (document.getElementById("newScriptSourceType") || {}).value || "url";
-      const urlGrp = document.getElementById("newScriptUrlGroup");
-      const fileGrp = document.getElementById("newScriptFileGroup");
-      if (urlGrp) urlGrp.style.display = mode === "file" ? "none" : "block";
-      if (fileGrp) fileGrp.style.display = mode === "file" ? "block" : "none";
-    };
-
-    const toggleEditScriptSourceInputs = () => {
-      const mode = (document.getElementById("editScriptSourceType") || {}).value || "url";
-      const urlGrp = document.getElementById("editScriptUrlGroup");
-      const fileGrp = document.getElementById("editScriptFileGroup");
-      if (urlGrp) urlGrp.style.display = mode === "file" ? "none" : "block";
-      if (fileGrp) fileGrp.style.display = mode === "file" ? "block" : "none";
+    const sendQuickPanel = async () => {
+      try {
+        const gid = (document.getElementById("guildIdInput") || {}).value || clientState.deviceGuildId;
+        const chId = (document.getElementById("panelChannelIdInput") || {}).value || "";
+        const scriptId = (document.getElementById("quickPanelScriptSelect") || {}).value || "";
+        await apiRequest("/api/panel/send", "POST", {
+          guildId: gid,
+          channelId: chId,
+          scriptId
+        });
+        showToast("Panel Discord kanalına göndərildi");
+      } catch (err) {
+        showToast(err.message);
+      }
     };
 
     document.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll(".nav-item").forEach((navBtn) => {
         navBtn.addEventListener("click", () => {
+          const targetTab = navBtn.getAttribute("data-tab");
           document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
           document.querySelectorAll(".tab-section").forEach((sec) => sec.classList.remove("active"));
           navBtn.classList.add("active");
-          const tabName = navBtn.getAttribute("data-tab");
-          const targetSec = document.getElementById("tab-" + tabName);
-          if (targetSec) targetSec.classList.add("active");
+          const activeSec = document.getElementById("tab-" + targetTab);
+          if (activeSec) activeSec.classList.add("active");
         });
       });
 
-      const newSrcSel = document.getElementById("newScriptSourceType");
-      if (newSrcSel) {
-        newSrcSel.addEventListener("change", toggleNewScriptSourceInputs);
-      }
-
-      const editSrcSel = document.getElementById("editScriptSourceType");
-      if (editSrcSel) {
-        editSrcSel.addEventListener("change", toggleEditScriptSourceInputs);
-      }
-
-      const newFileInp = document.getElementById("newScriptFileInput");
-      if (newFileInp) {
-        newFileInp.addEventListener("change", () => {
-          const f = newFileInp.files && newFileInp.files[0];
-          const infoEl = document.getElementById("newScriptFileInfo");
-          if (!f) {
-            clientState.newScriptFilePayload = { fileName: "", content: "" };
-            if (infoEl) infoEl.textContent = "Hələ fayl seçilməyib";
-            return;
-          }
-          const reader = new FileReader();
-          reader.onload = () => {
-            clientState.newScriptFilePayload = {
-              fileName: f.name,
-              content: String(reader.result || "")
-            };
-            if (infoEl) infoEl.textContent = "Seçildi: " + f.name;
-          };
-          reader.readAsText(f);
-        });
-      }
-
-      const editFileInp = document.getElementById("editScriptFileInput");
-      if (editFileInp) {
-        editFileInp.addEventListener("change", () => {
-          const f = editFileInp.files && editFileInp.files[0];
-          const infoEl = document.getElementById("editScriptFileInfo");
-          if (!f) return;
-          const reader = new FileReader();
-          reader.onload = () => {
-            clientState.editScriptFilePayload = {
-              fileName: f.name,
-              content: String(reader.result || "")
-            };
-            if (infoEl) infoEl.textContent = "Yeni fayl seçildi: " + f.name;
-          };
-          reader.readAsText(f);
-        });
-      }
-
       document.getElementById("refreshSnapshotBtn").addEventListener("click", refreshDashboardSnapshot);
+      document.getElementById("sendPanelQuickBtn").addEventListener("click", sendQuickPanel);
+      document.getElementById("sendDesignedPanelBtn").addEventListener("click", sendQuickPanel);
 
-      const connectBtn = document.getElementById("connectBotBtn");
-      if (connectBtn) {
-        connectBtn.addEventListener("click", async () => {
-          const guildIdVal = ((document.getElementById("guildIdInput") || {}).value || "").trim();
-          const channelIdVal = ((document.getElementById("panelChannelIdInput") || {}).value || "").trim();
-          try {
-            const res = await apiRequest("/api/bot/connect", "POST", {
-              guildId: guildIdVal,
-              panelChannelId: channelIdVal
-            });
-            if (res && res.guild && res.guild.guildId) {
-              clientState.deviceGuildId = res.guild.guildId;
-              localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, res.guild.guildId);
-            }
-            showToast("Bağlandı: " + ((res.guild && (res.guild.guildName || res.guild.displayName)) || "Sunucu"));
-            await refreshDashboardSnapshot();
-          } catch (err) {
-            showToast(err.message);
-          }
-        });
-      }
-
-      const guildIdLiveInput = document.getElementById("guildIdInput");
-      if (guildIdLiveInput) {
-        guildIdLiveInput.addEventListener("change", async () => {
-          const typedId = (guildIdLiveInput.value || "").trim();
-          if (/^\d{15,22}$/.test(typedId)) {
-            try {
-              const res = await apiRequest("/api/bot/connect", "POST", { guildId: typedId });
-              if (res && res.guild && res.guild.guildId) {
-                clientState.deviceGuildId = res.guild.guildId;
-                localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, res.guild.guildId);
-              }
-              await refreshDashboardSnapshot();
-            } catch (_err) {}
-          }
-        });
-      }
-
-      const sendQuickPanel = async () => {
-        const channelIdVal = document.getElementById("panelChannelIdInput").value.trim();
+      document.getElementById("activateApiKeyBtn").addEventListener("click", async () => {
+        const apiKeyStr = ((document.getElementById("redeemApiKeyInput") || {}).value || "").trim();
         try {
-          await apiRequest("/api/panel/send", "POST", { channelId: channelIdVal });
-          showToast("Panel Discord kanalına göndərildi");
+          const res = await apiRequest("/api/plan/activate-api", "POST", { apiKey: apiKeyStr });
+          showToast("Plan aktivləşdirildi: " + ((res.plan && res.plan.label) || ""));
           await refreshDashboardSnapshot();
         } catch (err) {
           showToast(err.message);
         }
-      };
+      });
 
-      document.getElementById("sendPanelQuickBtn").addEventListener("click", sendQuickPanel);
-      document.getElementById("sendDesignedPanelBtn").addEventListener("click", sendQuickPanel);
+      document.getElementById("adminGenerateApiKeyBtn").addEventListener("click", async () => {
+        const planTier = ((document.getElementById("adminNewApiPlanSelect") || {}).value || "premium_1").trim();
+        const note = ((document.getElementById("adminNewApiNoteInput") || {}).value || "").trim();
+        try {
+          const res = await apiRequest("/api/admin/api-keys", "POST", { planTier, note });
+          if (document.getElementById("adminNewApiNoteInput")) {
+            document.getElementById("adminNewApiNoteInput").value = "";
+          }
+          showToast("Yeni API Açar yaradıldı: " + ((res.apiKey && res.apiKey.key) || ""));
+          await refreshDashboardSnapshot();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+
+      document.getElementById("saveGuildSettingsBtn").addEventListener("click", async () => {
+        const gid = ((document.getElementById("guildIdInput") || {}).value || "").replace(/\D/g, "");
+        const chId = ((document.getElementById("panelChannelIdInput") || {}).value || "").replace(/\D/g, "");
+        if (!/^\d{15,22}$/.test(gid)) {
+          showToast("Düzgün Sunucu ID daxil edin");
+          return;
+        }
+        clientState.deviceGuildId = gid;
+        localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, gid);
+        try {
+          await apiRequest("/api/settings/guild", "POST", { guildId: gid, panelChannelId: chId });
+          showToast("Sunucu bağlandı");
+          await refreshDashboardSnapshot();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+
+      document.getElementById("newScriptSourceType").addEventListener("change", (e) => {
+        const isFile = e.target.value === "file";
+        document.getElementById("newScriptUrlGroup").style.display = isFile ? "none" : "block";
+        document.getElementById("newScriptFileGroup").style.display = isFile ? "block" : "none";
+      });
+
+      document.getElementById("newScriptFileInput").addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          clientState.newScriptFilePayload = {
+            fileName: file.name,
+            content: String(reader.result || "")
+          };
+        };
+        reader.readAsText(file);
+      });
 
       document.getElementById("createScriptBtn").addEventListener("click", async () => {
-        const name = document.getElementById("newScriptName").value.trim();
-        const sourceType = (document.getElementById("newScriptSourceType") || {}).value || "url";
-        const scriptUrl = document.getElementById("newScriptUrl").value.trim();
-        const description = document.getElementById("newScriptDesc").value.trim();
+        const name = ((document.getElementById("newScriptNameInput") || {}).value || "").trim();
+        const sourceType = ((document.getElementById("newScriptSourceType") || {}).value || "url").trim();
+        const scriptUrl = ((document.getElementById("newScriptUrlInput") || {}).value || "").trim();
         try {
           await apiRequest("/api/scripts", "POST", {
             name,
             sourceType,
             scriptUrl,
             fileName: clientState.newScriptFilePayload.fileName,
-            scriptContent: clientState.newScriptFilePayload.content,
-            description
+            scriptContent: clientState.newScriptFilePayload.content
           });
-          document.getElementById("newScriptName").value = "";
-          document.getElementById("newScriptUrl").value = "";
-          document.getElementById("newScriptDesc").value = "";
+          document.getElementById("newScriptNameInput").value = "";
+          document.getElementById("newScriptUrlInput").value = "";
+          document.getElementById("newScriptFileInput").value = "";
           clientState.newScriptFilePayload = { fileName: "", content: "" };
-          const fInp = document.getElementById("newScriptFileInput");
-          if (fInp) fInp.value = "";
-          const fInfo = document.getElementById("newScriptFileInfo");
-          if (fInfo) fInfo.textContent = "Hələ fayl seçilməyib";
-          showToast("Yeni script yaradıldı");
+          showToast("Script yaradıldı");
           await refreshDashboardSnapshot();
         } catch (err) {
           showToast(err.message);
         }
       });
 
-      document.getElementById("updateScriptBtn").addEventListener("click", async () => {
-        const id = document.getElementById("editScriptId").value.trim();
-        if (!id) {
-          showToast("Əvvəlcə cədvəldən Düzəliş Et seçin");
-          return;
-        }
-        const name = document.getElementById("editScriptName").value.trim();
-        const sourceType = (document.getElementById("editScriptSourceType") || {}).value || "url";
-        const scriptUrl = document.getElementById("editScriptUrl").value.trim();
-        const description = document.getElementById("editScriptDesc").value.trim();
-        const payload = {
-          name,
-          sourceType,
-          scriptUrl,
-          description
+      document.getElementById("editScriptSourceType").addEventListener("change", (e) => {
+        const isFile = e.target.value === "file";
+        document.getElementById("editScriptUrlGroup").style.display = isFile ? "none" : "block";
+        document.getElementById("editScriptFileGroup").style.display = isFile ? "block" : "none";
+      });
+
+      document.getElementById("editScriptFileInput").addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          clientState.editScriptFilePayload = {
+            fileName: file.name,
+            content: String(reader.result || "")
+          };
         };
-        if (sourceType === "file" && clientState.editScriptFilePayload.content) {
-          payload.fileName = clientState.editScriptFilePayload.fileName;
-          payload.scriptContent = clientState.editScriptFilePayload.content;
-        }
+        reader.readAsText(file);
+      });
+
+      document.getElementById("cancelEditScriptBtn").addEventListener("click", () => {
+        clientState.editingScriptId = "";
+        document.getElementById("editScriptCard").style.display = "none";
+      });
+
+      document.getElementById("saveEditScriptBtn").addEventListener("click", async () => {
+        if (!clientState.editingScriptId) return;
+        const name = ((document.getElementById("editScriptNameInput") || {}).value || "").trim();
+        const sourceType = ((document.getElementById("editScriptSourceType") || {}).value || "url").trim();
+        const scriptUrl = ((document.getElementById("editScriptUrlInput") || {}).value || "").trim();
         try {
-          await apiRequest("/api/scripts/" + encodeURIComponent(id), "PUT", payload);
+          await apiRequest("/api/scripts/" + encodeURIComponent(clientState.editingScriptId), "PUT", {
+            name,
+            sourceType,
+            scriptUrl,
+            fileName: clientState.editScriptFilePayload.fileName,
+            scriptContent: clientState.editScriptFilePayload.content
+          });
+          clientState.editingScriptId = "";
+          document.getElementById("editScriptCard").style.display = "none";
           showToast("Script yeniləndi");
           await refreshDashboardSnapshot();
         } catch (err) {
@@ -3310,52 +2972,36 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       });
 
       document.getElementById("createKeyBtn").addEventListener("click", async () => {
-        const scriptName = document.getElementById("keyScriptSelect").value;
-        const days = Number(document.getElementById("keyDaysInput").value || 0);
-        const hwid = document.getElementById("keyHwidInput").value.trim();
+        const scriptId = ((document.getElementById("newKeyScriptSelect") || {}).value || "").trim();
+        const days = Number(((document.getElementById("newKeyDaysInput") || {}).value || "0").trim());
+        const note = ((document.getElementById("newKeyNoteInput") || {}).value || "").trim();
         try {
-          const res = await apiRequest("/api/keys", "POST", { scriptName, days, hwid });
-          showToast("Yeni Key yaradıldı: " + (res.key && res.key.key ? res.key.key : ""));
+          await apiRequest("/api/keys", "POST", { scriptId, days, note });
+          document.getElementById("newKeyNoteInput").value = "";
+          showToast("Yeni Key yaradıldı");
           await refreshDashboardSnapshot();
         } catch (err) {
           showToast(err.message);
         }
       });
 
-      ["designTitleInput", "designDescInput", "designColorInput", "designFooterInput", "designThumbInput", "designImageInput"].forEach(
-        (inpId) => {
-          const el = document.getElementById(inpId);
-          if (el) el.addEventListener("input", renderLivePreview);
-        }
-      );
-
-      document.getElementById("addDesignButtonBtn").addEventListener("click", () => {
-        if (clientState.designerButtons.length >= 5) {
-          showToast("Maksimum 5 düymə əlavə edilə bilər");
-          return;
-        }
-        clientState.designerButtons.push({
-          id: "custom_btn_" + (clientState.designerButtons.length + 1),
-          label: "Yeni Düymə",
-          style: 1,
-          emoji: "✨",
-          responseText: "Əməliyyat icra edildi."
-        });
-        renderDesignButtonsEditor();
+      ["designTitleInput", "designDescInput", "designColorInput", "designFooterInput"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("input", renderDesignerPreview);
       });
 
       document.getElementById("saveDesignBtn").addEventListener("click", async () => {
+        const payload = {
+          title: ((document.getElementById("designTitleInput") || {}).value || "").trim(),
+          description: ((document.getElementById("designDescInput") || {}).value || "").trim(),
+          colorHex: ((document.getElementById("designColorInput") || {}).value || "#6366f1").trim(),
+          footerText: ((document.getElementById("designFooterInput") || {}).value || "").trim(),
+          imageUrl: ((document.getElementById("designImageInput") || {}).value || "").trim(),
+          buttons: clientState.designerButtons
+        };
         try {
-          await apiRequest("/api/design", "PUT", {
-            title: document.getElementById("designTitleInput").value,
-            description: document.getElementById("designDescInput").value,
-            colorHex: document.getElementById("designColorInput").value,
-            footerText: document.getElementById("designFooterInput").value,
-            thumbnailUrl: document.getElementById("designThumbInput").value,
-            imageUrl: document.getElementById("designImageInput").value,
-            buttons: clientState.designerButtons
-          });
-          showToast("Panel dizaynı yadda saxlanıldı");
+          await apiRequest("/api/design", "POST", payload);
+          showToast("Panel dizaynı yadda saxlandı");
           await refreshDashboardSnapshot();
         } catch (err) {
           showToast(err.message);
@@ -3363,12 +3009,12 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       });
 
       document.getElementById("addWhitelistBtn").addEventListener("click", async () => {
-        const val = document.getElementById("whitelistValueInput").value.trim();
-        const scriptName = (document.getElementById("whitelistScriptSelect") || {}).value || "Ümumi";
+        const userId = ((document.getElementById("whitelistUserInput") || {}).value || "").trim();
+        const scriptId = ((document.getElementById("whitelistScriptSelect") || {}).value || "").trim();
         try {
-          const res = await apiRequest("/api/access", "POST", { listType: "whitelist", value: val, scriptName });
-          document.getElementById("whitelistValueInput").value = "";
-          showToast("Whitelist + Key yaradıldı (" + scriptName + "): " + (res.generatedKey || ""));
+          await apiRequest("/api/whitelist", "POST", { userId, scriptId });
+          document.getElementById("whitelistUserInput").value = "";
+          showToast("Whitelist-ə əlavə edildi");
           await refreshDashboardSnapshot();
         } catch (err) {
           showToast(err.message);
@@ -3376,10 +3022,10 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       });
 
       document.getElementById("addBlacklistBtn").addEventListener("click", async () => {
-        const val = document.getElementById("blacklistValueInput").value.trim();
+        const userId = ((document.getElementById("blacklistUserInput") || {}).value || "").trim();
         try {
-          await apiRequest("/api/access", "POST", { listType: "blacklist", value: val });
-          document.getElementById("blacklistValueInput").value = "";
+          await apiRequest("/api/blacklist", "POST", { userId });
+          document.getElementById("blacklistUserInput").value = "";
           showToast("Blacklist-ə əlavə edildi");
           await refreshDashboardSnapshot();
         } catch (err) {
@@ -3388,98 +3034,198 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       });
 
       refreshDashboardSnapshot();
-      setInterval(refreshDashboardSnapshot, 8000);
     });
   </script>
 </body>
 </html>`;
+};
+
+const parseRequestJsonBody = (req) => {
+  return new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk.toString("utf8");
+    });
+    req.on("end", () => {
+      if (!raw) {
+        resolve({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        resolve(parsed && typeof parsed === "object" ? parsed : {});
+      } catch (_e) {
+        resolve({});
+      }
+    });
+  });
+};
+
+const sendJsonResponse = (res, statusCode, dataObj) => {
+  const bodyStr = JSON.stringify(dataObj);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(bodyStr)
+  });
+  res.end(bodyStr);
+};
+
+const sendTextResponse = (res, statusCode, textStr, contentType = "text/plain; charset=utf-8") => {
+  res.writeHead(statusCode, {
+    "Content-Type": contentType,
+    "Content-Length": Buffer.byteLength(textStr)
+  });
+  res.end(textStr);
+};
 
 const server = http.createServer(async (req, res) => {
-  try {
-    const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-    const pathname = reqUrl.pathname;
-    const method = (req.method || "GET").toUpperCase();
+  const method = (req.method || "GET").toUpperCase();
+  const baseUrl = getBasePublicUrl(req);
+  const reqUrl = new URL(req.url || "/", baseUrl);
+  const pathname = reqUrl.pathname;
 
-    if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
-      res.writeHead(200, {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store"
-      });
-      res.end(renderDashboardHtmlPage());
+  try {
+    if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+      sendTextResponse(res, 200, renderDashboardHtml(), "text/html; charset=utf-8");
       return;
     }
 
     if (method === "GET" && pathname === "/health") {
-      sendJsonResponse(res, 200, {
-        ok: true,
-        botConnected: BOT_RUNTIME.connected,
-        guildId: APP_STATE.guildId,
-        guildName: APP_STATE.guildName
-      });
+      sendJsonResponse(res, 200, { ok: true, botConnected: BOT_RUNTIME.connected });
       return;
     }
 
     if (method === "GET" && pathname === "/api/snapshot") {
       const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
-      const snapshot = await buildPublicSnapshotPayload(targetGuildId);
+      const isAdminReq = reqUrl.searchParams.get("admin") === "1";
+      const snapshot = await buildPublicSnapshotPayload(targetGuildId, isAdminReq);
       sendJsonResponse(res, 200, snapshot);
       return;
     }
 
-    if (method === "POST" && pathname === "/api/bot/connect") {
+    if (method === "POST" && pathname === "/api/plan/activate-api") {
       const body = await parseRequestJsonBody(req);
-      const cleanGuildId = sanitizeSnowflakeId(body.guildId);
-      const cleanChannelId = sanitizeSnowflakeId(body.panelChannelId);
-
-      if (!cleanGuildId) {
-        sendJsonResponse(res, 400, { error: "Zəhmət olmasa düzgün Sunucu ID (15-22 rəqəm) daxil edin" });
+      const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
+      const tenant = getTenantRecordByGuildId(reqGuildId);
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Əvvəlcə İdarəetmə bölməsindən öz Sunucu ID-nizi bağlayın" });
         return;
       }
 
-      if (!BOT_RUNTIME.connected && resolveDiscordBotToken()) {
-        await startDiscordBotRuntime();
+      const inputApiKey = sanitizeText(body.apiKey, "").toUpperCase();
+      if (!inputApiKey) {
+        sendJsonResponse(res, 400, { error: "Zəhmət olmasa API açar daxil edin" });
+        return;
       }
 
-      const resolvedName = await resolveGuildDisplayName(cleanGuildId, body.guildName || "");
-      const tenant = getTenantRecordByGuildId(cleanGuildId);
-      tenant.guildName = resolvedName || sanitizeText(body.guildName, "") || "Bağlı Sunucu";
-      if (cleanChannelId) {
-        tenant.panelChannelId = cleanChannelId;
+      const apiKeysList = Array.isArray(APP_STATE.apiKeys) ? APP_STATE.apiKeys : [];
+      const foundApiKey = apiKeysList.find(
+        (ak) => ak && ak.active !== false && sanitizeText(ak.key, "").toUpperCase() === inputApiKey
+      );
+      if (!foundApiKey) {
+        sendJsonResponse(res, 404, { error: "Yanlış və ya aktiv olmayan API açar" });
+        return;
       }
 
-      if (!sanitizeSnowflakeId(APP_STATE.guildId)) {
-        APP_STATE.guildId = cleanGuildId;
-      }
+      const planCfg = getPlanConfigByTier(foundApiKey.planTier);
+      tenant.planTier = planCfg.id;
+      tenant.boundApiKey = foundApiKey.key;
+      foundApiKey.boundGuildId = tenant.guildId;
+      foundApiKey.boundAt = new Date().toISOString();
+
       syncTenantIntoGlobalIfPrimary(tenant);
-
       saveAppStateToDisk();
-      await syncSlashCommandsWithDiscord(cleanGuildId);
       appendAuditLog(
-        "GUILD_CONNECTED",
-        `Sunucu bağlandı: ${tenant.guildName} (${cleanGuildId})`,
+        "PLAN_ACTIVATED",
+        `API açar ilə plan bağlandı: ${planCfg.label} (${foundApiKey.key})`,
         "Dashboard",
-        cleanGuildId
+        tenant.guildId
       );
 
-      const snapshot = await buildPublicSnapshotPayload(cleanGuildId);
       sendJsonResponse(res, 200, {
         ok: true,
-        guild: snapshot.guild,
-        bot: snapshot.bot,
-        snapshot
+        plan: {
+          tier: planCfg.id,
+          label: planCfg.label,
+          scriptLimit: planCfg.scriptLimit,
+          boundApiKey: foundApiKey.key
+        }
       });
       return;
     }
 
-    if (method === "POST" && pathname === "/api/panel/send") {
+    if (method === "POST" && pathname === "/api/admin/api-keys") {
       const body = await parseRequestJsonBody(req);
-      const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
-      const result = await publishPanelToDiscordChannel(body.channelId, body.scriptName, reqGuildId);
-      if (!result.ok) {
-        sendJsonResponse(res, 400, { error: result.error });
+      const planCfg = getPlanConfigByTier(body.planTier);
+      const note = sanitizeText(body.note, "");
+      const createdKey = {
+        id: generateUniqueId("apikey"),
+        key: generateApiKeyString(),
+        planTier: planCfg.id,
+        planLabel: planCfg.label,
+        note,
+        active: true,
+        boundGuildId: "",
+        createdAt: new Date().toISOString()
+      };
+
+      APP_STATE.apiKeys = [createdKey, ...(Array.isArray(APP_STATE.apiKeys) ? APP_STATE.apiKeys : [])];
+      saveAppStateToDisk();
+      appendAuditLog("ADMIN_API_CREATED", `Yönetici API açar yaratdı (${planCfg.label}): ${createdKey.key}`, "Admin");
+
+      sendJsonResponse(res, 201, { ok: true, apiKey: createdKey });
+      return;
+    }
+
+    if (method === "DELETE" && pathname.startsWith("/api/admin/api-keys/")) {
+      const apiKeyId = sanitizeText(pathname.replace("/api/admin/api-keys/", ""), "");
+      const currentKeys = Array.isArray(APP_STATE.apiKeys) ? APP_STATE.apiKeys : [];
+      const targetAk = currentKeys.find((ak) => ak && ak.id === apiKeyId) || null;
+      APP_STATE.apiKeys = currentKeys.filter((ak) => ak && ak.id !== apiKeyId);
+
+      if (targetAk && targetAk.key) {
+        const allTenants = Object.values(ensureTenantStore());
+        for (const tObj of allTenants) {
+          if (tObj && sanitizeText(tObj.boundApiKey, "") === sanitizeText(targetAk.key, "")) {
+            tObj.boundApiKey = "";
+            tObj.planTier = "free";
+            syncTenantIntoGlobalIfPrimary(tObj);
+          }
+        }
+      }
+
+      saveAppStateToDisk();
+      appendAuditLog("ADMIN_API_DELETED", `Yönetici API açar sildi: ${targetAk ? targetAk.key : apiKeyId}`, "Admin");
+      sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/settings/guild") {
+      const body = await parseRequestJsonBody(req);
+      const cleanGid = sanitizeSnowflakeId(body.guildId);
+      const cleanChId = sanitizeSnowflakeId(body.panelChannelId);
+      if (!cleanGid) {
+        sendJsonResponse(res, 400, { error: "Düzgün Sunucu ID daxil edin" });
         return;
       }
-      sendJsonResponse(res, 200, result);
+
+      const tenant = getTenantRecordByGuildId(cleanGid);
+      if (cleanChId) {
+        tenant.panelChannelId = cleanChId;
+      }
+      const freshName = await resolveGuildDisplayName(cleanGid, tenant.guildName);
+      if (freshName) {
+        tenant.guildName = freshName;
+      }
+      if (!APP_STATE.guildId) {
+        APP_STATE.guildId = cleanGid;
+      }
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
+      await syncSlashCommandsWithDiscord(cleanGid);
+      appendAuditLog("GUILD_BOUND", `Sunucu bağlandı: ${cleanGid}`, "Dashboard", cleanGid);
+
+      sendJsonResponse(res, 200, { ok: true, guildId: cleanGid });
       return;
     }
 
@@ -3492,132 +3238,111 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const scriptName = sanitizeText(body.name, "");
-      const sourceType = sanitizeText(body.sourceType, "url") === "file" ? "file" : "url";
-      const scriptUrl = sanitizeText(body.scriptUrl, "");
-      const fileName = sanitizeText(body.fileName, "");
-      const scriptContent = typeof body.scriptContent === "string" ? body.scriptContent : "";
-      const description = sanitizeText(body.description, "");
+      const activePlan = resolveTenantEffectivePlan(tenant);
+      const existingScriptsCount = Array.isArray(tenant.scripts) ? tenant.scripts.length : 0;
+      if (activePlan.scriptLimit !== null && existingScriptsCount >= activePlan.scriptLimit) {
+        sendJsonResponse(res, 403, {
+          error: `${activePlan.label} planında maksimum ${activePlan.scriptLimit} script yarada bilərsiniz. Daha çox script üçün planı yüksəldin.`
+        });
+        return;
+      }
 
+      const scriptName = sanitizeText(body.name, "");
       if (!scriptName) {
-        sendJsonResponse(res, 400, { error: "Script adı mütləqdir" });
+        sendJsonResponse(res, 400, { error: "Script adı boş ola bilməz" });
         return;
       }
+
+      const sourceType = body.sourceType === "file" ? "file" : "url";
+      const scriptUrl = sanitizeText(body.scriptUrl, "");
+      const fileName = sanitizeText(body.fileName, "script.lua");
+      const scriptContent = typeof body.scriptContent === "string" ? body.scriptContent : "";
+
       if (sourceType === "url" && !scriptUrl) {
-        sendJsonResponse(res, 400, { error: "URL növü seçildikdə Script URL daxil edilməlidir" });
+        sendJsonResponse(res, 400, { error: "Script URL daxil edin" });
         return;
       }
-      if (sourceType === "file" && !scriptContent.trim()) {
-        sendJsonResponse(res, 400, { error: "Fayl növü seçildikdə fayl məzmunu boş ola bilməz" });
+      if (sourceType === "file" && !scriptContent) {
+        sendJsonResponse(res, 400, { error: "Zəhmət olmasa .lua və ya .txt fayl seçin" });
         return;
       }
 
       const newScript = {
-        id: generateUniqueId("script"),
+        id: generateUniqueId("scr"),
         guildId: tenant.guildId,
         name: scriptName,
         sourceType,
-        scriptUrl,
-        fileName:
-          fileName || (sourceType === "file" ? `${scriptName.toLowerCase().replace(/\s+/g, "_")}.lua` : ""),
-        scriptContent,
-        description,
-        active: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        scriptUrl: sourceType === "url" ? scriptUrl : "",
+        fileName: sourceType === "file" ? fileName : "",
+        scriptContent: sourceType === "file" ? scriptContent : "",
+        createdAt: new Date().toISOString()
       };
 
       tenant.scripts = [newScript, ...(tenant.scripts || [])];
       syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
       await syncSlashCommandsWithDiscord(tenant.guildId);
-      appendAuditLog(
-        "SCRIPT_CREATED",
-        `Yeni script yaradıldı: ${scriptName} (${tenant.guildName})`,
-        "Dashboard",
-        tenant.guildId
-      );
+      appendAuditLog("SCRIPT_CREATED", `Script yaradıldı: ${newScript.name}`, "Dashboard", tenant.guildId);
 
       sendJsonResponse(res, 201, { ok: true, script: newScript });
       return;
     }
 
     if (method === "PUT" && pathname.startsWith("/api/scripts/")) {
-      const targetId = sanitizeText(pathname.replace("/api/scripts/", ""), "");
+      const scriptId = sanitizeText(pathname.replace("/api/scripts/", ""), "");
       const body = await parseRequestJsonBody(req);
       const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const scriptsTarget = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
-      const index = scriptsTarget.findIndex((s) => s && s.id === targetId);
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Sunucu tapılmadı" });
+        return;
+      }
 
-      if (index === -1) {
+      const targetScript = (tenant.scripts || []).find((s) => s.id === scriptId);
+      if (!targetScript) {
         sendJsonResponse(res, 404, { error: "Script tapılmadı" });
         return;
       }
 
-      const currentItem = scriptsTarget[index];
-      const nextSourceType =
-        body.sourceType === "file" ? "file" : body.sourceType === "url" ? "url" : currentItem.sourceType;
-      const updatedItem = {
-        ...currentItem,
-        name: sanitizeText(body.name, currentItem.name),
-        sourceType: nextSourceType,
-        fileName:
-          body.fileName !== undefined
-            ? sanitizeText(body.fileName, currentItem.fileName)
-            : nextSourceType === "file" && !currentItem.fileName
-            ? `${sanitizeText(body.name, currentItem.name).toLowerCase().replace(/\s+/g, "_")}.lua`
-            : currentItem.fileName,
-        scriptUrl: body.scriptUrl !== undefined ? sanitizeText(body.scriptUrl, "") : currentItem.scriptUrl,
-        scriptContent:
-          body.scriptContent !== undefined ? String(body.scriptContent) : currentItem.scriptContent,
-        description:
-          body.description !== undefined ? sanitizeText(body.description, "") : currentItem.description,
-        updatedAt: new Date().toISOString()
-      };
+      if (body.name) {
+        targetScript.name = sanitizeText(body.name, targetScript.name);
+      }
+      const nextSourceType = body.sourceType === "file" ? "file" : "url";
+      targetScript.sourceType = nextSourceType;
+      if (nextSourceType === "file") {
+        if (typeof body.scriptContent === "string" && body.scriptContent.length > 0) {
+          targetScript.scriptContent = body.scriptContent;
+        }
+        if (body.fileName) {
+          targetScript.fileName = sanitizeText(body.fileName, targetScript.fileName || "script.lua");
+        }
+      } else if (body.scriptUrl) {
+        targetScript.scriptUrl = sanitizeText(body.scriptUrl, targetScript.scriptUrl);
+      }
 
-      scriptsTarget[index] = updatedItem;
-      if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
+      syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
-      await syncSlashCommandsWithDiscord(tenant ? tenant.guildId : "");
-      appendAuditLog(
-        "SCRIPT_UPDATED",
-        `Script yeniləndi: ${updatedItem.name}`,
-        "Dashboard",
-        tenant ? tenant.guildId : ""
-      );
+      await syncSlashCommandsWithDiscord(tenant.guildId);
+      appendAuditLog("SCRIPT_UPDATED", `Script yeniləndi: ${targetScript.name}`, "Dashboard", tenant.guildId);
 
-      sendJsonResponse(res, 200, { ok: true, script: updatedItem });
+      sendJsonResponse(res, 200, { ok: true, script: targetScript });
       return;
     }
 
     if (method === "DELETE" && pathname.startsWith("/api/scripts/")) {
-      const targetId = sanitizeText(pathname.replace("/api/scripts/", ""), "");
+      const scriptId = sanitizeText(pathname.replace("/api/scripts/", ""), "");
       const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const scriptsTarget = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
-      const beforeCount = scriptsTarget.length;
-      const filteredScripts = scriptsTarget.filter((s) => s && s.id !== targetId);
-
-      if (filteredScripts.length === beforeCount) {
-        sendJsonResponse(res, 404, { error: "Script tapılmadı" });
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Sunucu tapılmadı" });
         return;
       }
 
-      if (tenant) {
-        tenant.scripts = filteredScripts;
-        syncTenantIntoGlobalIfPrimary(tenant);
-      } else {
-        APP_STATE.scripts = filteredScripts;
-      }
+      tenant.scripts = (tenant.scripts || []).filter((s) => s.id !== scriptId);
+      syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
-      await syncSlashCommandsWithDiscord(tenant ? tenant.guildId : "");
-      appendAuditLog(
-        "SCRIPT_DELETED",
-        `Script silindi (${targetId})`,
-        "Dashboard",
-        tenant ? tenant.guildId : ""
-      );
+      await syncSlashCommandsWithDiscord(tenant.guildId);
+      appendAuditLog("SCRIPT_DELETED", `Script silindi: ${scriptId}`, "Dashboard", tenant.guildId);
 
       sendJsonResponse(res, 200, { ok: true });
       return;
@@ -3628,31 +3353,59 @@ const server = http.createServer(async (req, res) => {
       const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
       const tenant = getTenantRecordByGuildId(reqGuildId);
       if (!tenant) {
-        sendJsonResponse(res, 400, { error: "Əvvəlcə İdarəetmə bölməsindən öz Sunucu ID-nizi bağlayın" });
+        sendJsonResponse(res, 400, { error: "Əvvəlcə Sunucu ID bağlayın" });
         return;
       }
 
-      const scriptName = sanitizeText(body.scriptName, "Ümumi");
+      const scriptId = sanitizeText(body.scriptId, "");
+      const matchedScript = scriptId ? (tenant.scripts || []).find((s) => s.id === scriptId) : null;
       const days = Math.max(0, Number(body.days || 0));
+      const expiresAt = days > 0 ? new Date(Date.now() + days * 86400000).toISOString() : "";
 
       const newKey = {
         id: generateUniqueId("key"),
-        guildId: tenant.guildId,
         key: generateLicenseKeyString(),
-        scriptName,
-        days,
-        hwid: sanitizeText(body.hwid, ""),
-        hwidResetCount: 0,
-        active: true,
+        scriptId: matchedScript ? matchedScript.id : "",
+        scriptName: matchedScript ? matchedScript.name : "Hamısı",
+        note: sanitizeText(body.note, ""),
+        discordUserId: "",
+        hwid: "",
+        status: "active",
+        expiresAt,
         createdAt: new Date().toISOString()
       };
 
       tenant.keys = [newKey, ...(tenant.keys || [])];
       syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
-      appendAuditLog("KEY_CREATED", `Key yaradıldı (${newKey.key})`, "Dashboard", tenant.guildId);
+      appendAuditLog("KEY_CREATED", `Yeni key yaradıldı: ${newKey.key}`, "Dashboard", tenant.guildId);
 
       sendJsonResponse(res, 201, { ok: true, key: newKey });
+      return;
+    }
+
+    if (method === "POST" && pathname.endsWith("/reset-hwid") && pathname.startsWith("/api/keys/")) {
+      const keyId = sanitizeText(pathname.replace("/api/keys/", "").replace("/reset-hwid", ""), "");
+      const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
+      const tenant = getTenantRecordByGuildId(reqGuildId);
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Sunucu tapılmadı" });
+        return;
+      }
+
+      const targetKey = (tenant.keys || []).find((k) => k.id === keyId);
+      if (!targetKey) {
+        sendJsonResponse(res, 404, { error: "Key tapılmadı" });
+        return;
+      }
+
+      targetKey.hwid = "";
+      targetKey.hwidResetAt = new Date().toISOString();
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
+      appendAuditLog("KEY_HWID_RESET", `Key HWID sıfırlandı: ${targetKey.key}`, "Dashboard", tenant.guildId);
+
+      sendJsonResponse(res, 200, { ok: true });
       return;
     }
 
@@ -3660,89 +3413,30 @@ const server = http.createServer(async (req, res) => {
       const keyId = sanitizeText(pathname.replace("/api/keys/", ""), "");
       const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const keysArr = tenant ? tenant.keys || [] : APP_STATE.keys || [];
-      const targetKeyObj = keysArr.find((k) => k && k.id === keyId) || null;
-      const filteredKeys = keysArr.filter((k) => k && k.id !== keyId);
-
-      if (tenant) {
-        tenant.keys = filteredKeys;
-      } else {
-        APP_STATE.keys = filteredKeys;
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Sunucu tapılmadı" });
+        return;
       }
 
-      if (targetKeyObj) {
-        const targetKeyCode = sanitizeText(targetKeyObj.key, "");
-        const targetOwnerTokens = collectUserMatchTokens(targetKeyObj.owner, targetKeyObj);
-        const targetScriptLower = sanitizeText(targetKeyObj.scriptName, "").toLowerCase();
-        const wlArr = tenant ? tenant.whitelist || [] : APP_STATE.whitelist || [];
-
-        const cleanedWl = wlArr.filter((w) => {
-          if (!w) return false;
-          if (targetKeyCode && sanitizeText(w.generatedKey, "") === targetKeyCode) {
-            return false;
-          }
-          const wScriptLower = sanitizeText(w.scriptName, "").toLowerCase();
-          const sameScript =
-            !targetScriptLower ||
-            targetScriptLower === "ümumi" ||
-            !wScriptLower ||
-            wScriptLower === "ümumi" ||
-            wScriptLower === targetScriptLower;
-          if (!sameScript) return true;
-
-          const wTokens = collectUserMatchTokens(w.value, {
-            owner: w.value,
-            ownerId: w.userId || "",
-            key: w.generatedKey || ""
-          });
-          for (const tk of targetOwnerTokens) {
-            if (wTokens.has(tk)) {
-              const hasAnotherActiveKey = filteredKeys.some((otherK) => {
-                if (!otherK || otherK.active === false) return false;
-                const otherScriptLower = sanitizeText(otherK.scriptName, "").toLowerCase();
-                if (
-                  wScriptLower &&
-                  wScriptLower !== "ümumi" &&
-                  otherScriptLower &&
-                  otherScriptLower !== "ümumi" &&
-                  otherScriptLower !== wScriptLower
-                ) {
-                  return false;
-                }
-                const otherTokens = collectUserMatchTokens(otherK.owner, otherK);
-                return otherTokens.has(tk);
-              });
-              if (!hasAnotherActiveKey) return false;
-            }
-          }
-          return true;
-        });
-
-        if (tenant) {
-          tenant.whitelist = cleanedWl;
-        } else {
-          APP_STATE.whitelist = cleanedWl;
-        }
+      const targetKey = (tenant.keys || []).find((k) => k.id === keyId) || null;
+      tenant.keys = (tenant.keys || []).filter((k) => k.id !== keyId);
+      if (targetKey && targetKey.discordUserId) {
+        removeUserFromWhitelist(targetKey.discordUserId, tenant.guildId, targetKey.scriptId || "");
       }
-
-      if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
+      syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
-      appendAuditLog(
-        "KEY_DELETED",
-        `Key silindi: ${targetKeyObj ? targetKeyObj.key : keyId}`,
-        "Dashboard",
-        tenant ? tenant.guildId : ""
-      );
+      appendAuditLog("KEY_DELETED", `Key silindi: ${targetKey ? targetKey.key : keyId}`, "Dashboard", tenant.guildId);
+
       sendJsonResponse(res, 200, { ok: true });
       return;
     }
 
-    if (method === "PUT" && pathname === "/api/design") {
+    if (method === "POST" && pathname === "/api/design") {
       const body = await parseRequestJsonBody(req);
       const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
       const tenant = getTenantRecordByGuildId(reqGuildId);
       if (!tenant) {
-        sendJsonResponse(res, 400, { error: "Əvvəlcə İdarəetmə bölməsindən öz Sunucu ID-nizi bağlayın" });
+        sendJsonResponse(res, 400, { error: "Əvvəlcə Sunucu ID bağlayın" });
         return;
       }
 
@@ -3755,279 +3449,184 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (method === "POST" && pathname === "/api/access") {
+    if (method === "POST" && pathname === "/api/panel/send") {
+      const body = await parseRequestJsonBody(req);
+      const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
+      if (!reqGuildId) {
+        sendJsonResponse(res, 400, { error: "Əvvəlcə Sunucu ID daxil edin" });
+        return;
+      }
+
+      const tenant = getTenantRecordByGuildId(reqGuildId);
+      const channelId = sanitizeSnowflakeId(body.channelId || (tenant && tenant.panelChannelId) || "");
+      if (!channelId) {
+        sendJsonResponse(res, 400, { error: "Panel göndəriləcək Kanal ID daxil edin" });
+        return;
+      }
+
+      if (tenant) {
+        tenant.panelChannelId = channelId;
+        syncTenantIntoGlobalIfPrimary(tenant);
+        saveAppStateToDisk();
+      }
+
+      const panelPayload = await buildDiscordPanelMessagePayload(reqGuildId, sanitizeText(body.scriptId, ""));
+      await sendChannelMessage(channelId, panelPayload);
+      appendAuditLog("PANEL_SENT", `Panel göndərildi → Kanal ${channelId}`, "Dashboard", reqGuildId);
+
+      sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/whitelist") {
       const body = await parseRequestJsonBody(req);
       const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
       const tenant = getTenantRecordByGuildId(reqGuildId);
       if (!tenant) {
-        sendJsonResponse(res, 400, { error: "Əvvəlcə İdarəetmə bölməsindən öz Sunucu ID-nizi bağlayın" });
+        sendJsonResponse(res, 400, { error: "Əvvəlcə Sunucu ID bağlayın" });
         return;
       }
 
-      const listType = sanitizeText(body.listType, "whitelist") === "blacklist" ? "blacklist" : "whitelist";
-      const val = sanitizeText(body.value, "");
-      const chosenScriptName = sanitizeText(body.scriptName, "Ümumi");
-
-      if (!val) {
-        sendJsonResponse(res, 400, { error: "Dəyər daxil edilməlidir" });
+      const uid = extractDiscordUserId(body.userId);
+      const scriptId = sanitizeText(body.scriptId, "");
+      if (!uid) {
+        sendJsonResponse(res, 400, { error: "Düzgün Discord User ID daxil edin" });
+        return;
+      }
+      if (!scriptId) {
+        sendJsonResponse(res, 400, { error: "Whitelist üçün script seçin" });
         return;
       }
 
-      let generatedKeyValue = "";
-      if (listType === "whitelist") {
-        generatedKeyValue = generateLicenseKeyString();
-        const autoKeyRecord = {
-          id: generateUniqueId("key"),
-          guildId: tenant.guildId,
-          key: generatedKeyValue,
-          owner: val,
-          scriptName: chosenScriptName,
-          days: 0,
-          hwid: "",
-          hwidResetCount: 0,
-          active: true,
-          createdAt: new Date().toISOString()
-        };
-        tenant.keys = [autoKeyRecord, ...(tenant.keys || [])];
-      } else {
-        tenant.whitelist = (tenant.whitelist || []).filter(
-          (item) => item && normalizeAccessValue(item.value) !== normalizeAccessValue(val)
-        );
-        tenant.keys = (tenant.keys || []).map((k) => {
-          if (k && normalizeAccessValue(k.owner) === normalizeAccessValue(val)) {
-            return { ...k, active: false };
-          }
-          return k;
-        });
+      const matchedScript = (tenant.scripts || []).find((s) => s.id === scriptId);
+      if (!matchedScript) {
+        sendJsonResponse(res, 404, { error: "Seçilən script tapılmadı" });
+        return;
       }
 
-      const entry = {
-        id: generateUniqueId("acc"),
-        value: val,
-        scriptName: listType === "whitelist" ? chosenScriptName : "",
-        generatedKey: generatedKeyValue,
-        createdAt: new Date().toISOString()
-      };
-
-      tenant[listType] = [entry, ...(tenant[listType] || [])];
-      syncTenantIntoGlobalIfPrimary(tenant);
-      saveAppStateToDisk();
-      appendAuditLog(
-        "ACCESS_ADDED",
-        `${listType.toUpperCase()} əlavə edildi: ${val}${
-          listType === "whitelist" ? ` | Script: ${chosenScriptName}` : ""
-        }${generatedKeyValue ? ` | Key: ${generatedKeyValue}` : ""}`,
-        "Dashboard",
-        tenant.guildId
-      );
-
-      sendJsonResponse(res, 201, { ok: true, entry, generatedKey: generatedKeyValue });
+      addUserToWhitelist(uid, tenant.guildId, matchedScript.id, matchedScript.name, "Dashboard");
+      appendAuditLog("WHITELIST_ADD", `Whitelist: ${uid} → ${matchedScript.name}`, "Dashboard", tenant.guildId);
+      sendJsonResponse(res, 201, { ok: true });
       return;
     }
 
-    if (method === "DELETE" && pathname.startsWith("/api/access/")) {
-      const parts = pathname.replace("/api/access/", "").split("/");
-      const listType = parts[0] === "blacklist" ? "blacklist" : "whitelist";
-      const entryId = sanitizeText(parts[1] || "", "");
+    if (method === "DELETE" && pathname.startsWith("/api/whitelist/")) {
+      const wid = sanitizeText(pathname.replace("/api/whitelist/", ""), "");
       const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const listArr = tenant ? tenant[listType] || [] : APP_STATE[listType] || [];
-      const targetEntry = listArr.find((item) => item && item.id === entryId);
-      const updatedListArr = listArr.filter((item) => item && item.id !== entryId);
-
-      if (tenant) {
-        tenant[listType] = updatedListArr;
-      } else {
-        APP_STATE[listType] = updatedListArr;
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Sunucu tapılmadı" });
+        return;
       }
 
-      if (listType === "whitelist" && targetEntry && targetEntry.value) {
-        const targetNorm = normalizeAccessValue(targetEntry.value);
-        const wlCheck = tenant ? tenant.whitelist : APP_STATE.whitelist;
-        const stillWhitelisted = (wlCheck || []).some((w) => w && normalizeAccessValue(w.value) === targetNorm);
-        if (!stillWhitelisted) {
-          const keysArr = tenant ? tenant.keys || [] : APP_STATE.keys || [];
-          const filteredKeys = keysArr.filter(
-            (k) =>
-              k &&
-              normalizeAccessValue(k.owner) !== targetNorm &&
-              sanitizeText(k.key, "") !== sanitizeText(targetEntry.generatedKey, "")
-          );
-          if (tenant) tenant.keys = filteredKeys;
-          else APP_STATE.keys = filteredKeys;
-        }
-      }
-
-      if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
+      tenant.whitelist = (tenant.whitelist || []).filter((w) => w.id !== wid);
+      syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
-      appendAuditLog(
-        "ACCESS_REMOVED",
-        `${listType.toUpperCase()} silindi: ${targetEntry ? targetEntry.value : entryId}`,
-        "Dashboard",
-        tenant ? tenant.guildId : ""
-      );
+      sendJsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/blacklist") {
+      const body = await parseRequestJsonBody(req);
+      const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
+      const tenant = getTenantRecordByGuildId(reqGuildId);
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Əvvəlcə Sunucu ID bağlayın" });
+        return;
+      }
+
+      const uid = extractDiscordUserId(body.userId);
+      if (!uid) {
+        sendJsonResponse(res, 400, { error: "Düzgün Discord User ID daxil edin" });
+        return;
+      }
+
+      tenant.blacklist = [
+        {
+          id: generateUniqueId("bl"),
+          userId: uid,
+          createdAt: new Date().toISOString()
+        },
+        ...(tenant.blacklist || [])
+      ];
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
+      appendAuditLog("BLACKLIST_ADD", `Blacklist: ${uid}`, "Dashboard", tenant.guildId);
+      sendJsonResponse(res, 201, { ok: true });
+      return;
+    }
+
+    if (method === "DELETE" && pathname.startsWith("/api/blacklist/")) {
+      const bid = sanitizeText(pathname.replace("/api/blacklist/", ""), "");
+      const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
+      const tenant = getTenantRecordByGuildId(reqGuildId);
+      if (!tenant) {
+        sendJsonResponse(res, 400, { error: "Sunucu tapılmadı" });
+        return;
+      }
+
+      tenant.blacklist = (tenant.blacklist || []).filter((b) => b.id !== bid);
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
       sendJsonResponse(res, 200, { ok: true });
       return;
     }
 
     if (method === "GET" && pathname.startsWith("/raw/")) {
-      if (!isRobloxExecutorRequest(req)) {
-        res.writeHead(403, {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff"
-        });
-        res.end(buildAntiLeakBlockedLua());
-        return;
-      }
+      const scriptId = sanitizeText(pathname.replace("/raw/", ""), "");
+      const queryGuildId = sanitizeSnowflakeId(reqUrl.searchParams.get("guildId") || "");
+      const allTenants = Object.values(ensureTenantStore());
 
-      const scId = sanitizeText(pathname.replace("/raw/", ""), "");
-      let ownerTenant = null;
-      let found = (APP_STATE.scripts || []).find((s) => s && s.id === scId) || null;
-      if (!found) {
-        for (const tRec of Object.values(ensureTenantStore())) {
-          const matchInTenant = (tRec.scripts || []).find((s) => s && s.id === scId);
-          if (matchInTenant) {
-            found = matchInTenant;
-            ownerTenant = tRec;
+      let foundScript = null;
+      if (queryGuildId) {
+        const tObj = getTenantRecordByGuildId(queryGuildId);
+        foundScript = (tObj && tObj.scripts ? tObj.scripts : []).find((s) => s.id === scriptId) || null;
+      }
+      if (!foundScript) {
+        for (const tObj of allTenants) {
+          const hit = (tObj && Array.isArray(tObj.scripts) ? tObj.scripts : []).find((s) => s.id === scriptId);
+          if (hit) {
+            foundScript = hit;
             break;
           }
         }
-      } else if (found.guildId) {
-        ownerTenant = getTenantRecordByGuildId(found.guildId);
       }
 
-      if (!found) {
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload("Script tapılmadı — Kick edildi"));
+      if (!foundScript) {
+        sendTextResponse(res, 404, "-- Script tapılmadı");
         return;
       }
 
-      const activeKeysPool = ownerTenant ? ownerTenant.keys || [] : APP_STATE.keys || [];
-      const activeWhitelistPool = ownerTenant ? ownerTenant.whitelist || [] : APP_STATE.whitelist || [];
-      const activeBlacklistPool = ownerTenant ? ownerTenant.blacklist || [] : APP_STATE.blacklist || [];
-
-      const providedKeyQuery = sanitizeText(reqUrl.searchParams.get("key") || req.headers["x-sado-key"], "");
-      const cleanLowerQuery = providedKeyQuery.toLowerCase();
-      const matchedKey = providedKeyQuery
-        ? activeKeysPool.find(
-            (k) =>
-              k &&
-              (sanitizeText(k.key, "").toLowerCase() === cleanLowerQuery ||
-                sanitizeText(k.owner, "").toLowerCase() === cleanLowerQuery ||
-                sanitizeText(k.ownerId, "").toLowerCase() === cleanLowerQuery)
-          ) || null
-        : null;
-      const identityCheck = (matchedKey && matchedKey.owner) || providedKeyQuery;
-
-      const isBlacklistedInPool = activeBlacklistPool.some((item) => {
-        if (!item) return false;
-        const tks = collectUserMatchTokens(item.value, { owner: item.value, ownerId: item.userId || "" });
-        return (
-          tks.has(normalizeAccessValue(identityCheck)) ||
-          (matchedKey && matchedKey.ownerId && tks.has(normalizeAccessValue(matchedKey.ownerId)))
-        );
-      });
-
-      if (!matchedKey || matchedKey.active === false || isBlacklistedInPool) {
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload("Etibarlı Key olmadan scriptə icazə verilmir — Kick edildi"));
+      if (foundScript.sourceType === "file" && foundScript.scriptContent) {
+        sendTextResponse(res, 200, foundScript.scriptContent, "text/plain; charset=utf-8");
         return;
       }
 
-      const rawKeyScriptLower = sanitizeText(matchedKey.scriptName, "").toLowerCase();
-      if (
-        rawKeyScriptLower &&
-        rawKeyScriptLower !== "ümumi" &&
-        rawKeyScriptLower !== "hamısı" &&
-        rawKeyScriptLower !== sanitizeText(found.name, "").toLowerCase()
-      ) {
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload(`Bu Key yalnız ${matchedKey.scriptName} scripti ucundur — Kick edildi`));
-        return;
-      }
-
-      const whitelisted = activeWhitelistPool.some((item) => {
-        if (!item) return false;
-        const itemScriptLower = sanitizeText(item.scriptName, "").toLowerCase();
-        if (
-          itemScriptLower &&
-          itemScriptLower !== "ümumi" &&
-          itemScriptLower !== "hamısı" &&
-          itemScriptLower !== sanitizeText(found.name, "").toLowerCase()
-        ) {
-          return false;
-        }
-        const tks = collectUserMatchTokens(item.value, {
-          owner: item.value,
-          ownerId: item.userId || "",
-          key: item.generatedKey || ""
-        });
-        return (
-          tks.has(normalizeAccessValue(identityCheck)) ||
-          (matchedKey.ownerId && tks.has(normalizeAccessValue(matchedKey.ownerId))) ||
-          tks.has(normalizeAccessValue(matchedKey.key))
-        );
-      });
-      if (!whitelisted && activeWhitelistPool.length > 0) {
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload(`${found.name} scripti ucun Whitelist-de deyilsiniz — Kick edildi`));
-        return;
-      }
-
-      const incomingDeviceHwid = sanitizeText(
-        reqUrl.searchParams.get("hwid") ||
-          req.headers["x-sado-hwid"] ||
-          req.headers["syn-fingerprint"] ||
-          req.headers["exploit-guid"],
-        ""
-      );
-
-      if (matchedKey.hwid && incomingDeviceHwid && matchedKey.hwid !== incomingDeviceHwid) {
-        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload("Bu açar başqa cihaza bağlıdır — Kick edildi"));
-        return;
-      }
-
-      if (!matchedKey.hwid && incomingDeviceHwid) {
-        matchedKey.hwid = incomingDeviceHwid;
-        matchedKey.boundAt = new Date().toISOString();
-        if (ownerTenant) syncTenantIntoGlobalIfPrimary(ownerTenant);
-        saveAppStateToDisk();
-      }
-
-      const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(
-        /\/+$/,
-        ""
-      );
-      const rawSelfUrl = `${basePublicUrl}/raw/${found.id}`;
-      const effectiveBoundHwid = matchedKey.hwid || incomingDeviceHwid || "";
-
-      res.writeHead(200, {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        Pragma: "no-cache"
-      });
-      if (found.sourceType === "file" && found.scriptContent) {
-        res.end(
-          wrapScriptWithAntiLeakProtection(found.scriptContent, effectiveBoundHwid, rawSelfUrl, matchedKey.key)
+      if (foundScript.scriptUrl) {
+        sendTextResponse(
+          res,
+          200,
+          `loadstring(game:HttpGet("${foundScript.scriptUrl}", true))()`,
+          "text/plain; charset=utf-8"
         );
         return;
       }
-      const remoteLoaderCode = `loadstring(game:HttpGet("${sanitizeText(found.scriptUrl, "")}"))()`;
-      res.end(
-        wrapScriptWithAntiLeakProtection(remoteLoaderCode, effectiveBoundHwid, rawSelfUrl, matchedKey.key)
-      );
+
+      sendTextResponse(res, 404, "-- Script məzmunu boşdur");
       return;
     }
 
-    sendJsonResponse(res, 404, { error: "Səhifə tapılmadı" });
+    sendJsonResponse(res, 404, { error: "Tapılmadı" });
   } catch (err) {
-    sendJsonResponse(res, 500, { error: err.message || "Server xətası" });
+    sendJsonResponse(res, 500, { error: err && err.message ? err.message : "Daxili server xətası" });
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  startDiscordBotRuntime();
-  startSelfKeepAliveLoop();
+server.listen(SERVER_PORT, () => {
+  connectDiscordGateway();
+  setInterval(() => {
+    try {
+      http.get(`http://127.0.0.1:${SERVER_PORT}/health`, () => {}).on("error", () => {});
+    } catch (_e) {}
+  }, 4 * 60 * 1000);
 });
