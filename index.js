@@ -620,11 +620,14 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     if (res && res.data && res.data.id) {
       return {
         id: String(res.data.id),
-        name: sanitizeText(res.data.name, `Guild ${cleanId}`)
+        name: sanitizeText(res.data.name, `Sunucu (${cleanId})`)
       };
     }
   } catch (_err) {}
-  return null;
+  return {
+    id: cleanId,
+    name: `Sunucu (${cleanId})`
+  };
 };
 
 const buildPanelComponents = (designObj) => {
@@ -663,7 +666,7 @@ const buildPanelEmbed = (guildId, designObj) => {
   const guildLabel =
     (tenant && tenant.guildName) ||
     APP_STATE.guildName ||
-    (cleanGuildId ? `Guild ${cleanGuildId}` : "SADO HUB");
+    (cleanGuildId ? `Sunucu (${cleanGuildId})` : "SADO HUB");
   const scriptsList = getScriptsForGuild(cleanGuildId);
   const keysList = getKeysForGuild(cleanGuildId);
   const wlList = getWhitelistForGuild(cleanGuildId);
@@ -1427,7 +1430,7 @@ const startDiscordGatewayListener = () => {
       if (eventName === "GUILD_CREATE") {
         const gid = sanitizeSnowflakeId(eventData.id);
         if (gid) {
-          const gName = sanitizeText(eventData.name, `Guild ${gid}`);
+          const gName = sanitizeText(eventData.name, `Sunucu (${gid})`);
           const tRec = getTenantRecordByGuildId(gid, true);
           if (tRec) {
             tRec.guildName = gName;
@@ -1528,7 +1531,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
-  if (cleanGuildId && tokenPresent) {
+  if (cleanGuildId) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
       resolvedGuildName = info.name;
@@ -1573,7 +1576,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     .filter((t) => t && t.guildId)
     .map((t) => ({
       guildId: t.guildId,
-      guildName: sanitizeText(t.guildName, `Guild ${t.guildId}`),
+      guildName: sanitizeText(t.guildName, `Sunucu (${t.guildId})`),
       planId: getEffectivePlanForGuild(t.guildId)
     }));
 
@@ -1601,7 +1604,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     guild: {
       guildId: cleanGuildId,
       guildName: resolvedGuildName,
-      displayName: resolvedGuildName || (cleanGuildId ? `Guild ${cleanGuildId}` : "Bağlı Sunucu Yoxdur"),
+      displayName: resolvedGuildName || (cleanGuildId ? `Sunucu (${cleanGuildId})` : "Bağlı Sunucu Yoxdur"),
       panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
       botAddedBy: botAddedByInfo
     },
@@ -1913,6 +1916,17 @@ const renderDashboardHtml = () => {
       gap: 10px;
     }
     .preview-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    .preview-btn-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+    }
     .toast {
       position: fixed;
       bottom: 20px;
@@ -2434,15 +2448,26 @@ const renderDashboardHtml = () => {
       const previewEl = document.getElementById("panelLivePreview");
       if (!previewEl || !clientState.draftDesign) return;
       const d = clientState.draftDesign;
+      const styleColorMap = {
+        1: "#5865f2",
+        2: "#4e5058",
+        3: "#248046",
+        4: "#da373c"
+      };
       const btnsHtml = (d.buttons || [])
-        .map(
-          (b) =>
-            "<span class='btn btn-ghost btn-sm'>" +
+        .map((b) => {
+          const stNum = Number(b.style || 1);
+          const bgVal = styleColorMap[stNum] || styleColorMap[1];
+          return (
+            "<span class='preview-btn-item' style='background:" +
+            bgVal +
+            ";'>" +
             escapeHtml(b.emoji || "") +
             " " +
             escapeHtml(b.label) +
             "</span>"
-        )
+          );
+        })
         .join("");
 
       previewEl.innerHTML =
@@ -2485,7 +2510,7 @@ const renderDashboardHtml = () => {
       if (document.getElementById("headerGuildName")) {
         const gText =
           guild.guildName ||
-          (guild.guildId ? "Sunucu #" + guild.guildId.slice(-6) : "Bağlı Sunucu Yoxdur");
+          (guild.guildId ? "Sunucu (" + guild.guildId + ")" : "Bağlı Sunucu Yoxdur");
         document.getElementById("headerGuildName").textContent = gText;
       }
       if (document.getElementById("headerPlanName")) {
@@ -3003,25 +3028,16 @@ const createHttpServer = () => {
 
       if (method === "GET" && pathname === "/auth/discord") {
         const callbackUrl = `${baseUrl}/auth/discord/callback`;
-        const hasSecret = Boolean(sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", ""));
-        if (!hasSecret) {
-          const fallbackName =
-            (APP_STATE.guildName && APP_STATE.guildName.trim()) ||
-            "Discord Hesabı";
-          APP_STATE.connectedDiscordUser = {
-            userId: APP_STATE.guildId || DEFAULT_CLIENT_ID,
-            username: fallbackName,
-            displayName: fallbackName,
-            avatarUrl: "",
-            connectedAt: new Date().toISOString()
-          };
-          saveAppStateToDisk();
-          res.writeHead(302, { Location: "/" });
+        const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
+        if (clientId) {
+          const authUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
+            clientId
+          )}&response_type=code&scope=identify&redirect_uri=${encodeURIComponent(callbackUrl)}`;
+          res.writeHead(302, { Location: authUrl });
           res.end();
           return;
         }
-        const authUrl = buildDiscordLoginUrl(callbackUrl);
-        res.writeHead(302, { Location: authUrl || "/" });
+        res.writeHead(302, { Location: "/" });
         res.end();
         return;
       }
