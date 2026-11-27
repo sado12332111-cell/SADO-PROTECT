@@ -67,6 +67,21 @@ const getPlanConfigByTier = (tierInput) => {
   return PLAN_CONFIGS[norm] || PLAN_CONFIGS.free;
 };
 
+const DEFAULT_PANEL_DESIGN = {
+  title: "SADO PROTECT • Lisenziya & Script Paneli",
+  description:
+    "Aşağıdakı düymələrdən istifadə edərək lisenziya açarınızı aktivləşdirə, HWID sıfırlaya və ya scriptinizi əldə edə bilərsiniz.",
+  colorHex: "#6366f1",
+  footerText: "SADO PROTECT • Premium Təhlükəsizlik Sistemi",
+  imageUrl: "",
+  buttons: [
+    { id: "btn_redeem_key", label: "Reedem Key", emoji: "🔑", style: "Primary", enabled: true },
+    { id: "btn_get_script", label: "Get Script", emoji: "📜", style: "Success", enabled: true },
+    { id: "btn_reset_hwid", label: "Reset HWID", emoji: "⚙️", style: "Danger", enabled: true },
+    { id: "btn_stats", label: "Statistikam", emoji: "📊", style: "Secondary", enabled: true }
+  ]
+};
+
 const ensureStorageDirectory = () => {
   try {
     if (!fs.existsSync(DATA_DIR_PATH)) {
