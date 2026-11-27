@@ -1495,6 +1495,9 @@ const buildDiscordLoginUrl = (redirectUri = "") => {
     response_type: "code",
     scope: "identify"
   });
+  if (redirectUri) {
+    params.set("redirect_uri", redirectUri);
+  }
   return `https://discord.com/oauth2/authorize?${params.toString()}`;
 };
 
@@ -3027,13 +3030,26 @@ const createHttpServer = () => {
       }
 
       if (method === "GET" && pathname === "/auth/discord") {
-        const authUrl = buildDiscordLoginUrl();
-        if (authUrl) {
-          res.writeHead(302, { Location: authUrl });
+        const callbackUrl = `${baseUrl}/auth/discord/callback`;
+        const hasSecret = Boolean(sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", ""));
+        if (!hasSecret) {
+          const fallbackName =
+            (APP_STATE.guildName && APP_STATE.guildName.trim()) ||
+            "Discord Hesabı";
+          APP_STATE.connectedDiscordUser = {
+            userId: APP_STATE.guildId || DEFAULT_CLIENT_ID,
+            username: fallbackName,
+            displayName: fallbackName,
+            avatarUrl: "",
+            connectedAt: new Date().toISOString()
+          };
+          saveAppStateToDisk();
+          res.writeHead(302, { Location: "/" });
           res.end();
           return;
         }
-        res.writeHead(302, { Location: "/" });
+        const authUrl = buildDiscordLoginUrl(callbackUrl);
+        res.writeHead(302, { Location: authUrl || "/" });
         res.end();
         return;
       }
