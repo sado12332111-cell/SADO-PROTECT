@@ -2853,7 +2853,8 @@ const renderDashboardHtml = () => {
         }
       });
     }
-      document.getElementById("refreshSnapshotBtn").addEventListener("click", refreshDashboardSnapshot);
+
+    document.getElementById("refreshSnapshotBtn").addEventListener("click", refreshDashboardSnapshot);
 
       document.getElementById("saveGuildSettingsBtn").addEventListener("click", async () => {
         try {
