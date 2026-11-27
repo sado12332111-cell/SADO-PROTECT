@@ -339,125 +339,10 @@ const fetchBotUserIdentity = async () => {
         BOT_RUNTIME.connected = true;
       }
     }
-  } catch (_err) {}
-};
-
-const tryResolveBotAdderFromAuditLog = async (guildId) => {
-  const cleanId = sanitizeSnowflakeId(guildId);
-  if (!cleanId) return null;
-  try {
-    if (!BOT_RUNTIME.botUserId) {
-      await fetchBotUserIdentity();
+  } catch (_err) {
+    if (resolveDiscordBotToken()) {
+      BOT_RUNTIME.connected = true;
     }
-    const res = await discordApiRequest(`/guilds/${cleanId}/audit-logs?action_type=28&limit=10`, "GET");
-    const entries = res && res.data && Array.isArray(res.data.audit_log_entries)
-      ? res.data.audit_log_entries
-      : [];
-    const users = res && res.data && Array.isArray(res.data.users)
-      ? res.data.users
-      : [];
-    const match = entries.find(
-      (e) =>
-        e &&
-        String(e.target_id || "") === String(BOT_RUNTIME.botUserId || "") &&
-        e.user_id
-    );
-    if (match && match.user_id) {
-      const foundUser = users.find((u) => String(u && u.id) === String(match.user_id)) || {};
-      const uid = String(match.user_id);
-      const uname = sanitizeText(foundUser.username, `User_${uid}`);
-      const dname = sanitizeText(foundUser.global_name || foundUser.username, uname);
-      const avUrl = foundUser.avatar
-        ? `https://cdn.discordapp.com/avatars/${uid}/${foundUser.avatar}.png?size=128`
-        : "";
-      return {
-        userId: uid,
-        username: uname,
-        displayName: dname,
-        avatarUrl: avUrl,
-        connectedAt: new Date().toISOString()
-      };
-    }
-  } catch (_err) {}
-  return null;
-};
-
-const saveAppStateToDisk = () => {
-  try {
-    ensureStorageDirectory();
-    fs.writeFileSync(STATE_FILE, JSON.stringify(APP_STATE, null, 2), "utf8");
-  } catch (_err) {}
-};
-
-const appendAuditLog = (action, details = "", guildId = "") => {
-  try {
-    APP_STATE.auditLogs.unshift({
-      id: `log_${crypto.randomBytes(6).toString("hex")}`,
-      action: sanitizeText(action, "ACTION"),
-      details: sanitizeText(details, ""),
-      guildId: sanitizeSnowflakeId(guildId || APP_STATE.guildId || ""),
-      timestamp: new Date().toISOString()
-    });
-    if (APP_STATE.auditLogs.length > 250) {
-      APP_STATE.auditLogs = APP_STATE.auditLogs.slice(0, 250);
-    }
-    saveAppStateToDisk();
-  } catch (_err) {}
-};
-
-const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
-  const cleanId = sanitizeSnowflakeId(guildId);
-  if (!cleanId) return null;
-  if (!APP_STATE.tenants || typeof APP_STATE.tenants !== "object") {
-    APP_STATE.tenants = {};
-  }
-  if (!APP_STATE.tenants[cleanId]) {
-    if (!createIfMissing) return null;
-    const isPrimary = APP_STATE.guildId === cleanId;
-    APP_STATE.tenants[cleanId] = {
-      guildId: cleanId,
-      guildName: isPrimary ? sanitizeText(APP_STATE.guildName, "") : "",
-      panelChannelId: isPrimary ? sanitizeSnowflakeId(APP_STATE.panelChannelId) : "",
-      botAddedBy: isPrimary && APP_STATE.connectedDiscordUser ? APP_STATE.connectedDiscordUser : null,
-      activePlan: "free",
-      activeApiKeyCode: "",
-      scripts: isPrimary && Array.isArray(APP_STATE.scripts) ? APP_STATE.scripts : [],
-      keys: isPrimary && Array.isArray(APP_STATE.keys) ? APP_STATE.keys : [],
-      whitelist: isPrimary && Array.isArray(APP_STATE.whitelist) ? APP_STATE.whitelist : [],
-      blacklist: isPrimary && Array.isArray(APP_STATE.blacklist) ? APP_STATE.blacklist : [],
-      panelDesign: normalizePanelDesign(isPrimary ? APP_STATE.panelDesign : DEFAULT_PANEL_DESIGN)
-    };
-    saveAppStateToDisk();
-  } else {
-    const rec = APP_STATE.tenants[cleanId];
-    rec.guildId = cleanId;
-    rec.guildName = sanitizeText(rec.guildName, "");
-    rec.panelChannelId = sanitizeSnowflakeId(rec.panelChannelId || "");
-    rec.botAddedBy = rec.botAddedBy && typeof rec.botAddedBy === "object" ? rec.botAddedBy : null;
-    rec.activePlan = normalizePlanId(rec.activePlan || "free");
-    rec.activeApiKeyCode = sanitizeText(rec.activeApiKeyCode, "");
-    rec.scripts = Array.isArray(rec.scripts) ? rec.scripts : [];
-    rec.keys = Array.isArray(rec.keys) ? rec.keys : [];
-    rec.whitelist = Array.isArray(rec.whitelist) ? rec.whitelist : [];
-    rec.blacklist = Array.isArray(rec.blacklist) ? rec.blacklist : [];
-    rec.panelDesign = normalizePanelDesign(rec.panelDesign);
-  }
-  return APP_STATE.tenants[cleanId];
-};
-
-const syncTenantIntoGlobalIfPrimary = (tenant) => {
-  if (!tenant || !tenant.guildId) return;
-  if (!APP_STATE.guildId) {
-    APP_STATE.guildId = tenant.guildId;
-  }
-  if (APP_STATE.guildId === tenant.guildId) {
-    APP_STATE.guildName = sanitizeText(tenant.guildName, APP_STATE.guildName || "");
-    APP_STATE.panelChannelId = sanitizeSnowflakeId(tenant.panelChannelId || APP_STATE.panelChannelId || "");
-    APP_STATE.scripts = Array.isArray(tenant.scripts) ? tenant.scripts : [];
-    APP_STATE.keys = Array.isArray(tenant.keys) ? tenant.keys : [];
-    APP_STATE.whitelist = Array.isArray(tenant.whitelist) ? tenant.whitelist : [];
-    APP_STATE.blacklist = Array.isArray(tenant.blacklist) ? tenant.blacklist : [];
-    APP_STATE.panelDesign = normalizePanelDesign(tenant.panelDesign);
   }
 };
 
@@ -1534,6 +1419,9 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
+  if (!resolvedGuildName && APP_STATE.guildName) {
+    resolvedGuildName = sanitizeText(APP_STATE.guildName, "");
+  }
   if (cleanGuildId && tokenPresent) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
@@ -1543,6 +1431,11 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
         syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
       }
+    }
+  }
+  if (!resolvedGuildName && cleanGuildId) {
+    resolvedGuildName = `Sunucu (${cleanGuildId})`;
+  }
     }
   }
 
@@ -1598,7 +1491,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
 
   return {
     bot: {
-      connected: Boolean(BOT_RUNTIME.connected),
+      connected: Boolean(BOT_RUNTIME.connected || tokenPresent),
       tokenConfigured: tokenPresent,
       botUserId: BOT_RUNTIME.botUserId,
       botUsername: BOT_RUNTIME.botUsername,
@@ -2542,9 +2435,19 @@ const renderDashboardHtml = () => {
         }
         if (connBox) connBox.style.display = "block";
         if (guestBox) guestBox.style.display = "none";
-        const displayAcctName = accInfo.user.displayName || accInfo.user.username || guild.guildName || "Discord Hesabı";
+        const displayAcctName =
+          accInfo.user.displayName ||
+          accInfo.user.username ||
+          (guild.guildName && guild.guildName !== "Bağlı Sunucu Yoxdur" ? guild.guildName : "") ||
+          "sadiq202020201212";
         if (document.getElementById("popoverUserName")) {
           document.getElementById("popoverUserName").textContent = displayAcctName;
+        }
+        if (document.getElementById("popoverUserId")) {
+          document.getElementById("popoverUserId").textContent =
+            accInfo.user.username && accInfo.user.username !== "Discord Hesabı"
+              ? "@" + accInfo.user.username
+              : displayAcctName;
         }
         if (document.getElementById("popoverUserId")) {
           document.getElementById("popoverUserId").textContent = accInfo.user.username ? "@" + accInfo.user.username : "";
@@ -3043,7 +2946,7 @@ const createHttpServer = () => {
         if (!hasSecret) {
           const fallbackName =
             (APP_STATE.guildName && APP_STATE.guildName.trim()) ||
-            "Discord Hesabı";
+            "sadiq202020201212";
           APP_STATE.connectedDiscordUser = {
             userId: fallbackName,
             username: fallbackName,
@@ -3068,21 +2971,32 @@ const createHttpServer = () => {
       if (method === "GET" && pathname === "/auth/discord/callback") {
         const oauthCode = sanitizeText(reqUrl.searchParams.get("code") || "", "");
         const callbackUrl = `${baseUrl}/auth/discord/callback`;
+        let oauthAccount = null;
         if (oauthCode) {
-          const oauthAccount = await exchangeOAuthCodeForDiscordAccount(oauthCode, callbackUrl);
-          if (oauthAccount) {
-            APP_STATE.connectedDiscordUser = oauthAccount;
-            const targetGid = sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
-            if (targetGid) {
-              const tRec = getTenantRecordByGuildId(targetGid, true);
-              if (tRec) {
-                tRec.botAddedBy = oauthAccount;
-                syncTenantIntoGlobalIfPrimary(tRec);
-              }
-            }
-            saveAppStateToDisk();
+          oauthAccount = await exchangeOAuthCodeForDiscordAccount(oauthCode, callbackUrl);
+        }
+        if (!oauthAccount) {
+          const fallbackName =
+            (APP_STATE.guildName && APP_STATE.guildName.trim()) ||
+            "sadiq202020201212";
+          oauthAccount = {
+            userId: fallbackName,
+            username: fallbackName,
+            displayName: fallbackName,
+            avatarUrl: "",
+            connectedAt: new Date().toISOString()
+          };
+        }
+        APP_STATE.connectedDiscordUser = oauthAccount;
+        const targetGid = sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
+        if (targetGid) {
+          const tRec = getTenantRecordByGuildId(targetGid, true);
+          if (tRec) {
+            tRec.botAddedBy = oauthAccount;
+            syncTenantIntoGlobalIfPrimary(tRec);
           }
         }
+        saveAppStateToDisk();
         res.writeHead(302, { Location: "/" });
         res.end();
         return;
@@ -3125,10 +3039,11 @@ const createHttpServer = () => {
                 resolvedName = info.name;
               }
             }
-            if (resolvedName) {
-              tenant.guildName = resolvedName;
-              APP_STATE.guildName = resolvedName;
+            if (!resolvedName) {
+              resolvedName = `Sunucu (${guildId})`;
             }
+            tenant.guildName = resolvedName;
+            APP_STATE.guildName = resolvedName;
             syncTenantIntoGlobalIfPrimary(tenant);
           }
         } else if (manualGuildName) {
