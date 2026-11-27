@@ -1436,8 +1436,6 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   if (!resolvedGuildName && cleanGuildId) {
     resolvedGuildName = `Sunucu (${cleanGuildId})`;
   }
-    }
-  }
 
   let botAddedByInfo = tenant && tenant.botAddedBy ? tenant.botAddedBy : null;
   if (cleanGuildId && !botAddedByInfo && tokenPresent) {
