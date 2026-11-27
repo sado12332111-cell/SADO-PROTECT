@@ -673,13 +673,11 @@ const getScriptContentForUser = (
   const rawBody =
     chosen && typeof chosen.code === "string" && chosen.code.trim()
       ? chosen.code.trim()
-      : `print("${scriptName.replace(/"/g, '\\"')} OK")`;
-
-  const shortLocalCode = `script_key="${safeKey}"\n${rawBody}`;
+      : `print("${scriptName.replace(/"/g, '\\"')} Loaded")`;
 
   return {
     scriptName,
-    code: shortLocalCode
+    code: `script_key="${safeKey}"\n${rawBody}`
   };
 };
 
