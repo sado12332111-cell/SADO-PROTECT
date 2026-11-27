@@ -533,7 +533,7 @@ const resolveGuildDisplayName = async (guildId, fallbackName = "") => {
 
 const buildSlashCommandsPayloadForGuild = (guildIdInput = "") => {
   const tenant = getTenantRecordByGuildId(guildIdInput);
-  const scriptsSource = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
+  const scriptsSource = tenant ? tenant.scripts || [] : [];
   const hasScripts = Array.isArray(scriptsSource) && scriptsSource.length > 0;
 
   const scriptOption = hasScripts
@@ -682,13 +682,14 @@ const syncSlashCommandsWithDiscord = async (specificGuildId = "") => {
 };
 
 const buildDiscordPanelMessagePayload = (selectedScriptName = "", guildIdInput = "") => {
-  const tenant = getTenantRecordByGuildId(guildIdInput);
-  const design = normalizePanelDesign(tenant ? tenant.panelDesign : APP_STATE.panelDesign);
-  const scriptsPool = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
-  const keysPool = tenant ? tenant.keys || [] : APP_STATE.keys || [];
-  const whitelistPool = tenant ? tenant.whitelist || [] : APP_STATE.whitelist || [];
-  const blacklistPool = tenant ? tenant.blacklist || [] : APP_STATE.blacklist || [];
-  const activeGuildName = tenant ? tenant.guildName : APP_STATE.guildName;
+  const cleanGuildId = sanitizeSnowflakeId(guildIdInput);
+  const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId) : null;
+  const design = normalizePanelDesign(tenant ? tenant.panelDesign : DEFAULT_PANEL_DESIGN);
+  const scriptsPool = tenant ? tenant.scripts || [] : [];
+  const keysPool = tenant ? tenant.keys || [] : [];
+  const whitelistPool = tenant ? tenant.whitelist || [] : [];
+  const blacklistPool = tenant ? tenant.blacklist || [] : [];
+  const activeGuildName = tenant ? tenant.guildName : "";
   const cleanQuery = sanitizeText(selectedScriptName, "");
 
   const matchedScript = cleanQuery
