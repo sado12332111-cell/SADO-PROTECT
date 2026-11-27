@@ -66,19 +66,6 @@ const sanitizeSnowflakeId = (value) => {
   return /^\d{15,22}$/.test(str) ? str : "";
 };
 
-const isPlaceholderGuildName = (name) => {
-  const clean = sanitizeText(name, "");
-  if (!clean) return true;
-  return (
-    /^Discord Sunucusu/i.test(clean) ||
-    /^Sunucu\s*\(/i.test(clean) ||
-    /^Sunucu\s*#/i.test(clean) ||
-    /^Sunucu$/i.test(clean) ||
-    /^Ad tapılmadı/i.test(clean) ||
-    /^Bağlı Sunucu Yoxdur$/i.test(clean)
-  );
-};
-
 const normalizePlanId = (planId) => {
   const key = String(planId || "").trim().toLowerCase();
   if (key === "premium_1" || key === "1$" || key === "pro_1" || key === "premium1") {
@@ -181,7 +168,7 @@ const loadInitialAppState = () => {
           ...baseState,
           ...parsed,
           guildId: sanitizeSnowflakeId(parsed.guildId || baseState.guildId),
-          guildName: isPlaceholderGuildName(parsed.guildName) ? "" : sanitizeText(parsed.guildName, ""),
+          guildName: sanitizeText(parsed.guildName, ""),
           panelChannelId: sanitizeSnowflakeId(parsed.panelChannelId || baseState.panelChannelId),
           latestJoinedGuildId: sanitizeSnowflakeId(parsed.latestJoinedGuildId || ""),
           connectedDiscordUser:
@@ -238,12 +225,9 @@ const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
   if (!APP_STATE.tenants[cleanId]) {
     if (!createIfMissing) return null;
     const isPrimary = APP_STATE.guildId === cleanId;
-    const initGuildName = isPrimary && !isPlaceholderGuildName(APP_STATE.guildName)
-      ? sanitizeText(APP_STATE.guildName, "")
-      : "";
     APP_STATE.tenants[cleanId] = {
       guildId: cleanId,
-      guildName: initGuildName,
+      guildName: isPrimary ? sanitizeText(APP_STATE.guildName, "") : "",
       panelChannelId: isPrimary ? sanitizeSnowflakeId(APP_STATE.panelChannelId) : "",
       botAddedBy: isPrimary && APP_STATE.connectedDiscordUser ? APP_STATE.connectedDiscordUser : null,
       activePlan: "free",
@@ -258,7 +242,7 @@ const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
   } else {
     const rec = APP_STATE.tenants[cleanId];
     rec.guildId = cleanId;
-    rec.guildName = isPlaceholderGuildName(rec.guildName) ? "" : sanitizeText(rec.guildName, "");
+    rec.guildName = sanitizeText(rec.guildName, "");
     rec.panelChannelId = sanitizeSnowflakeId(rec.panelChannelId || "");
     rec.botAddedBy = rec.botAddedBy && typeof rec.botAddedBy === "object" ? rec.botAddedBy : null;
     rec.activePlan = normalizePlanId(rec.activePlan || "free");
@@ -278,9 +262,7 @@ const syncTenantIntoGlobalIfPrimary = (tenant) => {
     APP_STATE.guildId = tenant.guildId;
   }
   if (APP_STATE.guildId === tenant.guildId) {
-    if (!isPlaceholderGuildName(tenant.guildName)) {
-      APP_STATE.guildName = sanitizeText(tenant.guildName, "");
-    }
+    APP_STATE.guildName = sanitizeText(tenant.guildName, APP_STATE.guildName || "");
     APP_STATE.panelChannelId = sanitizeSnowflakeId(tenant.panelChannelId || APP_STATE.panelChannelId || "");
     APP_STATE.scripts = Array.isArray(tenant.scripts) ? tenant.scripts : [];
     APP_STATE.keys = Array.isArray(tenant.keys) ? tenant.keys : [];
@@ -646,8 +628,7 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
       if (realName) {
         return {
           id: String(res.data.id),
-          name: realName,
-          found: true
+          name: realName
         };
       }
     }
@@ -660,34 +641,46 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     if (matched && sanitizeText(matched.name, "")) {
       return {
         id: cleanId,
-        name: sanitizeText(matched.name, ""),
-        found: true
+        name: sanitizeText(matched.name, "")
       };
     }
   } catch (_err2) {}
 
   const existingTenant =
     APP_STATE.tenants && typeof APP_STATE.tenants === "object" ? APP_STATE.tenants[cleanId] : null;
-  if (existingTenant && !isPlaceholderGuildName(existingTenant.guildName)) {
-    return {
-      id: cleanId,
-      name: sanitizeText(existingTenant.guildName, ""),
-      found: true
-    };
+  if (existingTenant && sanitizeText(existingTenant.guildName, "")) {
+    const cachedName = sanitizeText(existingTenant.guildName, "");
+    if (
+      !/^Discord Sunucusu/i.test(cachedName) &&
+      !/^Sunucu\s*\(/i.test(cachedName) &&
+      !/^Sunucu\s*#/i.test(cachedName) &&
+      !/^Sunucu$/i.test(cachedName)
+    ) {
+      return {
+        id: cleanId,
+        name: cachedName
+      };
+    }
   }
 
-  if (APP_STATE.guildId === cleanId && !isPlaceholderGuildName(APP_STATE.guildName)) {
+  const globalName = sanitizeText(APP_STATE.guildName, "");
+  if (
+    APP_STATE.guildId === cleanId &&
+    globalName &&
+    !/^Discord Sunucusu/i.test(globalName) &&
+    !/^Sunucu\s*\(/i.test(globalName) &&
+    !/^Sunucu\s*#/i.test(globalName) &&
+    !/^Sunucu$/i.test(globalName)
+  ) {
     return {
       id: cleanId,
-      name: sanitizeText(APP_STATE.guildName, ""),
-      found: true
+      name: globalName
     };
   }
 
   return {
     id: cleanId,
-    name: "Ad tapılmadı (Bot serverdə deyil)",
-    found: false
+    name: `Sunucu (${cleanId.slice(-4)})`
   };
 };
 
@@ -722,20 +715,23 @@ const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = 
   };
 };
 
-const sendPanelMessageToChannel = async (channelId, guildId = "") => {
+const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "") => {
   const targetChannelId = sanitizeSnowflakeId(channelId);
   if (!targetChannelId) {
     throw new Error("Panel göndəriləcək kanal ID-si düzgün deyil.");
   }
 
   const design = getPanelDesignForGuild(guildId);
+  const scripts = getScriptsForGuild(guildId);
+  const selectedScript = scriptId ? scripts.find((s) => s.id === scriptId) : null;
+
   const rowsMap = new Map();
   (design.buttons || []).forEach((btn, index) => {
     const rowIdx = Math.min(4, Math.floor(index / 5));
     if (!rowsMap.has(rowIdx)) rowsMap.set(rowIdx, []);
     const btnObj = {
       type: 2,
-      custom_id: btn.id,
+      custom_id: selectedScript ? `${btn.id}::${selectedScript.id}` : btn.id,
       label: sanitizeText(btn.label, "Button").slice(0, 80),
       style: normalizeButtonStyle(btn.style)
     };
@@ -751,8 +747,10 @@ const sendPanelMessageToChannel = async (channelId, guildId = "") => {
   }));
 
   const embed = {
-    title: design.title,
-    description: design.description,
+    title: selectedScript ? `${design.title} • ${selectedScript.name}` : design.title,
+    description: selectedScript
+      ? `**Seçilmiş Script:** \`${selectedScript.name}\`\n\n${design.description}`
+      : design.description,
     color: design.color,
     footer: { text: design.footerText }
   };
@@ -765,6 +763,14 @@ const sendPanelMessageToChannel = async (channelId, guildId = "") => {
     components
   });
   return res && res.data ? res.data : null;
+};
+
+const parseCustomIdAndScript = (rawCustomId = "") => {
+  const parts = String(rawCustomId || "").split("::");
+  return {
+    baseId: sanitizeText(parts[0], ""),
+    boundScriptId: sanitizeText(parts[1] || "", "")
+  };
 };
 
 const handleDiscordInteraction = async (interaction) => {
@@ -793,14 +799,21 @@ const handleDiscordInteraction = async (interaction) => {
       };
 
       if (cmdName === "panel") {
+        const chosenScriptId = sanitizeText(String(getOpt("script") || ""), "");
         const targetCh = sanitizeSnowflakeId(
-          getOpt("channel") || interaction.channel_id || APP_STATE.panelChannelId || ""
+          interaction.channel_id ||
+            (guildId ? getTenantRecordByGuildId(guildId, true).panelChannelId : "") ||
+            APP_STATE.panelChannelId ||
+            ""
         );
-        await sendPanelMessageToChannel(targetCh, guildId);
+        await sendPanelMessageToChannel(targetCh, guildId, chosenScriptId);
+        const scripts = getScriptsForGuild(guildId);
+        const sObj = scripts.find((s) => s.id === chosenScriptId);
+        const labelText = sObj ? ` (**${sObj.name}**)` : "";
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `✅ Panel <#${targetCh}> kanalına göndərildi.`,
+            content: `✅ Panel${labelText} <#${targetCh}> kanalına göndərildi.`,
             flags: 64
           }
         });
@@ -938,13 +951,14 @@ const handleDiscordInteraction = async (interaction) => {
     }
 
     if (interactionType === 3) {
-      const customId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+      const rawCustomId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+      const { baseId: customId, boundScriptId } = parseCustomIdAndScript(rawCustomId);
 
       if (customId === "btn_redeem_key") {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 9,
           data: {
-            custom_id: "modal_redeem_key",
+            custom_id: boundScriptId ? `modal_redeem_key::${boundScriptId}` : "modal_redeem_key",
             title: "Lisenziya Açarını Daxil Edin",
             components: [
               {
@@ -970,7 +984,11 @@ const handleDiscordInteraction = async (interaction) => {
       if (customId === "btn_get_script") {
         const wl = getWhitelistForGuild(guildId);
         const keys = getKeysForGuild(guildId);
-        const userWl = wl.find((w) => String(w.discordId) === actorId);
+        const userWl = wl.find(
+          (w) =>
+            String(w.discordId) === actorId &&
+            (!boundScriptId || !w.scriptId || w.scriptId === boundScriptId)
+        );
         const hasValidKey =
           userWl &&
           userWl.keyCode &&
@@ -993,7 +1011,8 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const scriptInfo = getScriptContentForUser(guildId, actorId, userWl.scriptId || "");
+        const effectiveScriptId = boundScriptId || userWl.scriptId || "";
+        const scriptInfo = getScriptContentForUser(guildId, actorId, effectiveScriptId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
@@ -1004,7 +1023,7 @@ const handleDiscordInteraction = async (interaction) => {
                 components: [
                   {
                     type: 2,
-                    custom_id: "btn_copy_script",
+                    custom_id: effectiveScriptId ? `btn_copy_script::${effectiveScriptId}` : "btn_copy_script",
                     label: "Scripti Kopyala",
                     style: 2,
                     emoji: { name: "📋" }
@@ -1024,7 +1043,7 @@ const handleDiscordInteraction = async (interaction) => {
         const scriptInfo = getScriptContentForUser(
           guildId,
           actorId,
-          userWl ? userWl.scriptId || "" : ""
+          boundScriptId || (userWl ? userWl.scriptId || "" : "")
         );
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1083,7 +1102,8 @@ const handleDiscordInteraction = async (interaction) => {
     }
 
     if (interactionType === 5) {
-      const modalId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+      const rawModalId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+      const { baseId: modalId, boundScriptId } = parseCustomIdAndScript(rawModalId);
       if (modalId === "modal_redeem_key") {
         let rawInput = "";
         const rows = Array.isArray(interaction.data && interaction.data.components)
@@ -1124,7 +1144,7 @@ const handleDiscordInteraction = async (interaction) => {
           discordId: actorId,
           tag: actorTag,
           keyCode: foundKey.code,
-          scriptId: foundKey.scriptId || "",
+          scriptId: boundScriptId || foundKey.scriptId || "",
           hwid: existingIdx >= 0 ? wl[existingIdx].hwid || "" : "",
           addedAt: new Date().toISOString()
         };
@@ -1195,10 +1215,14 @@ const buildSlashCommandsPayload = (guildId = "") => {
       type: 1,
       options: [
         {
-          name: "channel",
-          description: "Panel göndəriləcək kanal ID-si",
+          name: "script",
+          description: "Mövcud scriptlərdən birini seçin",
           type: 3,
-          required: false
+          required: true,
+          choices:
+            scriptChoices.length > 0
+              ? scriptChoices
+              : [{ name: "Default Script", value: "default" }]
         }
       ]
     },
@@ -1395,7 +1419,7 @@ const startDiscordGatewayListener = () => {
             if (gid) {
               const tRec = getTenantRecordByGuildId(gid, true);
               const gInfo = await fetchGuildInfoFromDiscord(gid);
-              if (tRec && gInfo && gInfo.found && gInfo.name) {
+              if (tRec && gInfo && gInfo.name) {
                 tRec.guildName = gInfo.name;
                 if (APP_STATE.guildId === gid) {
                   APP_STATE.guildName = gInfo.name;
@@ -1416,7 +1440,7 @@ const startDiscordGatewayListener = () => {
           const gName = sanitizeText(eventData.name, "");
           const tRec = getTenantRecordByGuildId(gid, true);
           if (tRec) {
-            if (gName && !isPlaceholderGuildName(gName)) {
+            if (gName) {
               tRec.guildName = gName;
             }
             if (!tRec.botAddedBy) {
@@ -1432,7 +1456,7 @@ const startDiscordGatewayListener = () => {
             }
             if (!APP_STATE.guildId) {
               APP_STATE.guildId = gid;
-              if (gName && !isPlaceholderGuildName(gName)) APP_STATE.guildName = gName;
+              if (gName) APP_STATE.guildName = gName;
             }
             syncTenantIntoGlobalIfPrimary(tRec);
             saveAppStateToDisk();
@@ -1517,23 +1541,35 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const cleanGuildId = sanitizeSnowflakeId(requestedGuildId || APP_STATE.guildId || "");
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
-  let resolvedGuildName = tenant && !isPlaceholderGuildName(tenant.guildName)
-    ? sanitizeText(tenant.guildName, "")
-    : "";
-
+  let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
+  if (
+    resolvedGuildName &&
+    (/^Sunucu\s*\(/i.test(resolvedGuildName) ||
+      /^Sunucu\s*#/i.test(resolvedGuildName) ||
+      /^Sunucu$/i.test(resolvedGuildName) ||
+      /^Discord Sunucusu/i.test(resolvedGuildName))
+  ) {
+    resolvedGuildName = "";
+  }
   if (cleanGuildId) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
-    if (info && info.found && info.name) {
+    if (info && info.name) {
       resolvedGuildName = info.name;
       if (tenant) {
         tenant.guildName = info.name;
         syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
       }
-    } else if (!resolvedGuildName && APP_STATE.guildId === cleanGuildId && !isPlaceholderGuildName(APP_STATE.guildName)) {
-      resolvedGuildName = sanitizeText(APP_STATE.guildName, "");
-    } else if (!resolvedGuildName) {
-      resolvedGuildName = "Ad tapılmadı (Bot serverdə deyil)";
+    } else if (!resolvedGuildName && APP_STATE.guildId === cleanGuildId && sanitizeText(APP_STATE.guildName, "")) {
+      const gFallback = sanitizeText(APP_STATE.guildName, "");
+      if (
+        !/^Sunucu\s*\(/i.test(gFallback) &&
+        !/^Sunucu\s*#/i.test(gFallback) &&
+        !/^Sunucu$/i.test(gFallback) &&
+        !/^Discord Sunucusu/i.test(gFallback)
+      ) {
+        resolvedGuildName = gFallback;
+      }
     }
   }
 
@@ -1572,7 +1608,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
       const gNameClean = sanitizeText(t.guildName, "");
       return {
         guildId: t.guildId,
-        guildName: !isPlaceholderGuildName(gNameClean) ? gNameClean : "",
+        guildName: gNameClean && !/^Sunucu\s*\(/i.test(gNameClean) ? gNameClean : "",
         planId: getEffectivePlanForGuild(t.guildId)
       };
     });
@@ -1665,6 +1701,15 @@ const readJsonBody = (req) => {
     });
     req.on("error", reject);
   });
+};
+
+const escapeHtml = (str) => {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 };
 
 const renderDashboardHtml = () => {
@@ -1829,6 +1874,7 @@ const renderDashboardHtml = () => {
       border: 1px solid var(--border);
     }
     .pill-ok { background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.35); color: #6ee7b7; }
+    .pill-warn { background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.35); color: #fcd34d; }
     .btn {
       display: inline-flex;
       align-items: center;
@@ -2156,6 +2202,36 @@ const renderDashboardHtml = () => {
 
         <div class="card">
           <div class="card-title">Mövcud Scriptlər</div>
+          <div id="editScriptModalBox" style="display:none;padding:12px;border:1px solid rgba(99,102,241,0.4);border-radius:12px;background:rgba(22,32,51,0.85);flex-direction:column;gap:10px;">
+            <div style="font-size:13px;font-weight:700;">✏️ Scripti Yenilə (Update)</div>
+            <input id="editScriptIdInput" type="hidden" />
+            <div class="grid-2">
+              <div class="field-group">
+                <label for="editScriptNameInput">Script Adı</label>
+                <input id="editScriptNameInput" type="text" />
+              </div>
+              <div class="field-group">
+                <label for="editScriptModeSelect">Mənbə Növü</label>
+                <select id="editScriptModeSelect">
+                  <option value="code">Lua Kodu</option>
+                  <option value="url">Raw URL</option>
+                  <option value="file">Dosya Məzmunu</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-group">
+              <label for="editScriptUrlInput">Raw URL</label>
+              <input id="editScriptUrlInput" type="text" placeholder="https://..." />
+            </div>
+            <div class="field-group">
+              <label for="editScriptCodeInput">Lua Script Kodu</label>
+              <textarea id="editScriptCodeInput"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button id="saveUpdatedScriptBtn" type="button" class="btn btn-success btn-sm">💾 Update Et</button>
+              <button id="cancelEditScriptBtn" type="button" class="btn btn-ghost btn-sm">Ləğv Et</button>
+            </div>
+          </div>
           <div style="overflow:auto;">
             <table>
               <thead>
@@ -2474,6 +2550,7 @@ const renderDashboardHtml = () => {
 
     const applySnapshotToUi = (snap) => {
       clientState.snapshot = snap;
+      const bot = snap.bot || {};
       const guild = snap.guild || {};
       const plan = snap.plan || {};
 
@@ -2490,10 +2567,13 @@ const renderDashboardHtml = () => {
 
       if (document.getElementById("headerGuildName")) {
         const gText =
-          guild.guildName && String(guild.guildName).trim()
-            ? String(guild.guildName).trim()
+          guild.guildName &&
+          !/^Discord Sunucusu/i.test(guild.guildName) &&
+          !/^Sunucu\\s*#/i.test(guild.guildName) &&
+          !/^Sunucu$/i.test(guild.guildName)
+            ? guild.guildName
             : guild.guildId
-              ? "Ad tapılmadı (Bot serverdə deyil)"
+              ? "Sunucu (" + String(guild.guildId).slice(-4) + ")"
               : "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
@@ -2582,13 +2662,37 @@ const renderDashboardHtml = () => {
             "<td>" +
             escapeHtmlClient(modeLabel) +
             "</td>" +
-            "<td><button class='btn btn-danger btn-sm' data-del-script='" +
+            "<td style='display:flex;gap:6px;flex-wrap:wrap;'>" +
+            "<button type='button' class='btn btn-primary btn-sm' data-edit-script='" +
             escapeHtmlClient(s.id) +
-            "'>Sil</button></td>" +
+            "'>Update</button>" +
+            "<button type='button' class='btn btn-danger btn-sm' data-del-script='" +
+            escapeHtmlClient(s.id) +
+            "'>Sil</button>" +
+            "</td>" +
             "</tr>"
           );
         })
         .join("");
+
+      document.querySelectorAll("[data-edit-script]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const targetId = btn.getAttribute("data-edit-script");
+          const foundScript = (clientState.snapshot && clientState.snapshot.scripts || []).find(
+            (item) => item.id === targetId
+          );
+          const box = document.getElementById("editScriptModalBox");
+          if (foundScript && box) {
+            document.getElementById("editScriptIdInput").value = foundScript.id;
+            document.getElementById("editScriptNameInput").value = foundScript.name || "";
+            document.getElementById("editScriptModeSelect").value = foundScript.mode || "code";
+            document.getElementById("editScriptUrlInput").value = foundScript.url || "";
+            document.getElementById("editScriptCodeInput").value = foundScript.code || "";
+            box.style.display = "flex";
+            box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }
+        });
+      });
 
       document.querySelectorAll("[data-del-script]").forEach((btn) => {
         btn.addEventListener("click", async () => {
@@ -2928,6 +3032,38 @@ const renderDashboardHtml = () => {
         };
       }
 
+      const saveUpdatedScriptBtn = document.getElementById("saveUpdatedScriptBtn");
+      const cancelEditScriptBtn = document.getElementById("cancelEditScriptBtn");
+      if (cancelEditScriptBtn) {
+        cancelEditScriptBtn.onclick = () => {
+          const box = document.getElementById("editScriptModalBox");
+          if (box) box.style.display = "none";
+        };
+      }
+      if (saveUpdatedScriptBtn) {
+        saveUpdatedScriptBtn.onclick = async () => {
+          try {
+            const scriptId = document.getElementById("editScriptIdInput").value.trim();
+            const name = document.getElementById("editScriptNameInput").value.trim();
+            const mode = document.getElementById("editScriptModeSelect").value;
+            const url = document.getElementById("editScriptUrlInput").value.trim();
+            const code = document.getElementById("editScriptCodeInput").value;
+            await apiRequest("/api/scripts/" + encodeURIComponent(scriptId), "PUT", {
+              name,
+              mode,
+              url,
+              code
+            });
+            const box = document.getElementById("editScriptModalBox");
+            if (box) box.style.display = "none";
+            showToast("Script yeniləndi (Update)");
+            await refreshDashboardSnapshot();
+          } catch (err) {
+            showToast(err.message);
+          }
+        };
+      }
+
       const createLicenseKeyBtn = document.getElementById("createLicenseKeyBtn");
       if (createLicenseKeyBtn) {
         createLicenseKeyBtn.onclick = async () => {
@@ -3139,20 +3275,25 @@ const createHttpServer = () => {
           if (tenant) {
             if (panelChannelId) tenant.panelChannelId = panelChannelId;
             const info = await fetchGuildInfoFromDiscord(guildId);
-            if (info && info.found && info.name) {
+            if (info && info.name) {
               resolvedName = info.name;
               tenant.guildName = resolvedName;
               APP_STATE.guildName = resolvedName;
             } else {
               const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
-              if (!isPlaceholderGuildName(prevName)) {
+              if (
+                prevName &&
+                !/^Sunucu\s*#/i.test(prevName) &&
+                !/^Sunucu$/i.test(prevName) &&
+                !/^Discord Sunucusu/i.test(prevName)
+              ) {
                 resolvedName = prevName;
                 tenant.guildName = resolvedName;
                 APP_STATE.guildName = resolvedName;
               } else {
-                resolvedName = "Ad tapılmadı (Bot serverdə deyil)";
-                tenant.guildName = "";
-                APP_STATE.guildName = "";
+                resolvedName = `Sunucu (${guildId.slice(-4)})`;
+                tenant.guildName = resolvedName;
+                APP_STATE.guildName = resolvedName;
               }
             }
             syncTenantIntoGlobalIfPrimary(tenant);
@@ -3233,6 +3374,52 @@ const createHttpServer = () => {
         appendAuditLog("CREATE_SCRIPT", name, targetGuildId);
         await syncSlashCommandsWithDiscord(targetGuildId);
         sendJsonResponse(res, 201, { ok: true, script: newScript });
+        return;
+      }
+
+      if (method === "PUT" && pathname.startsWith("/api/scripts/")) {
+        const scriptId = decodeURIComponent(pathname.replace("/api/scripts/", ""));
+        const body = await readJsonBody(req);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
+        const scripts = getScriptsForGuild(targetGuildId);
+        const idx = scripts.findIndex((s) => s.id === scriptId);
+        if (idx === -1) {
+          sendJsonResponse(res, 404, { error: "Script tapılmadı." });
+          return;
+        }
+        const current = scripts[idx];
+        const nextName = sanitizeText(body.name, current.name);
+        if (!nextName) {
+          sendJsonResponse(res, 400, { error: "Script adı boş ola bilməz." });
+          return;
+        }
+        const nextMode =
+          body.mode === "url" || body.mode === "file" || body.mode === "code"
+            ? body.mode
+            : current.mode || "code";
+        const updatedScript = {
+          ...current,
+          name: nextName,
+          mode: nextMode,
+          url: typeof body.url === "string" ? sanitizeText(body.url, "") : current.url || "",
+          code: typeof body.code === "string" ? body.code : current.code || "",
+          updatedAt: new Date().toISOString()
+        };
+        scripts[idx] = updatedScript;
+
+        if (targetGuildId) {
+          const tenant = getTenantRecordByGuildId(targetGuildId, true);
+          if (tenant) {
+            tenant.scripts = scripts;
+            syncTenantIntoGlobalIfPrimary(tenant);
+          }
+        } else {
+          APP_STATE.scripts = scripts;
+        }
+        saveAppStateToDisk();
+        appendAuditLog("UPDATE_SCRIPT", updatedScript.name, targetGuildId);
+        await syncSlashCommandsWithDiscord(targetGuildId);
+        sendJsonResponse(res, 200, { ok: true, script: updatedScript });
         return;
       }
 
