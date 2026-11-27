@@ -474,6 +474,13 @@ const syncBotAdderForGuild = async (guildId) => {
   return tenant.botAddedBy || null;
 };
 
+const getScriptsForGuild = (guildId) => {
+  const cleanGid = sanitizeSnowflakeId(guildId);
+  if (!cleanGid) return [];
+  const tenant = getTenantRecordByGuildId(cleanGid);
+  return tenant && Array.isArray(tenant.scripts) ? tenant.scripts : [];
+};
+
 const getKeysForGuild = (guildId) => {
   const cleanGid = sanitizeSnowflakeId(guildId);
   if (!cleanGid) return [];
