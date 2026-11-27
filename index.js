@@ -745,6 +745,135 @@ const fetchRemoteLuaText = (targetUrlStr, redirectDepth = 0) => {
   });
 };
 
+const wrapLuaWithUltraProtection = (rawLuaCode, meta = {}) => {
+  const xorSecret = crypto.randomBytes(16).toString("hex");
+  const sourceBuf = Buffer.from(String(rawLuaCode || ""), "utf8");
+  const encryptedBytes = new Array(sourceBuf.length);
+  for (let i = 0; i < sourceBuf.length; i++) {
+    const kByte = xorSecret.charCodeAt(i % xorSecret.length);
+    encryptedBytes[i] = (sourceBuf[i] ^ kByte ^ ((i * 13 + 7) & 255)) & 255;
+  }
+
+  const reportUrl = sanitizeText(meta.reportUrl || "", "").replace(/"/g, '\\"');
+  const safeKey = sanitizeText(meta.key || "", "").replace(/"/g, '\\"');
+  const safeUid = sanitizeText(meta.uid || "", "").replace(/"/g, '\\"');
+  const safeGid = sanitizeText(meta.gid || "", "").replace(/"/g, '\\"');
+  const byteArrayLiteral = encryptedBytes.join(",");
+
+  return [
+    "-- [[ SADO PROTECT ULTRA GUARD v3.0 • ANTI-DUMP / ANTI-SPY / ANTI-TAMPER ]]",
+    "(function()",
+    "  local _G_ENV = (getgenv and getgenv()) or _G",
+    "  if _G_ENV.__SADO_GUARD_RUNNING then return end",
+    "  _G_ENV.__SADO_GUARD_RUNNING = true",
+    "",
+    "  local Players = game:GetService('Players')",
+    "  local LocalPlayer = Players.LocalPlayer",
+    "",
+    "  local function _tripSecurity(reason)",
+    "    pcall(function()",
+    `      local rUrl = "${reportUrl}"`,
+    "      if rUrl ~= '' and game and game.HttpGet then",
+    `        local q = rUrl .. "?key=${safeKey}&uid=${safeUid}&gid=${safeGid}&reason=" .. tostring(reason or "tamper")`,
+    "        pcall(function() game:HttpGet(q) end)",
+    "      end",
+    "    end)",
+    "    pcall(function()",
+    "      if LocalPlayer then",
+    "        LocalPlayer:Kick('[SADO ULTRA PROTECT] Sizdirma / Anti-Cheat Pozuntusu: ' .. tostring(reason))",
+    "      end",
+    "    end)",
+    "    while true do end",
+    "  end",
+    "",
+    "  -- 1. Core Function Integrity & Anti-Hook Yoxlamasi",
+    "  local _pcall = pcall",
+    "  local _type = type",
+    "  local _tostring = tostring",
+    "  local _loadstring = loadstring",
+    "  local _string_char = string.char",
+    "  local _string_byte = string.byte",
+    "  local _table_concat = table.concat",
+    "  local _bit_bxor = (bit32 and bit32.bxor) or function(a, b)",
+    "    local res, bit = 0, 1",
+    "    while a > 0 or b > 0 do",
+    "      local aa, bb = a % 2, b % 2",
+    "      if aa ~= bb then res = res + bit end",
+    "      a = (a - aa) / 2",
+    "      b = (b - bb) / 2",
+    "      bit = bit * 2",
+    "    end",
+    "    return res",
+    "  end",
+    "",
+    "  if _type(_loadstring) ~= 'function' or _type(_pcall) ~= 'function' then",
+    "    _tripSecurity('HOOK_DETECTED_CORE')",
+    "  end",
+    "",
+    "  if iscclosure then",
+    "    if not iscclosure(_pcall) or not iscclosure(_string_char) or not iscclosure(_string_byte) then",
+    "      _tripSecurity('CCLOSURE_TAMPER')",
+    "    end",
+    "  end",
+    "",
+    "  if isfunctionhooked then",
+    "    if isfunctionhooked(_loadstring) or isfunctionhooked(_pcall) or (game.HttpGet and isfunctionhooked(game.HttpGet)) then",
+    "      _tripSecurity('HTTPSPY_HOOK_DETECTED')",
+    "    end",
+    "  end",
+    "",
+    "  -- 2. Anti-HttpSpy / Anti-RemoteSpy / Anti-SaveInstance GUI Taramasi",
+    "  pcall(function()",
+    "    local CoreGui = game:GetService('CoreGui')",
+    "    local blockedNames = {'httpspy', 'simplespy', 'remotespy', 'hydro', 'dex', 'darkdex', 'saveinstance', 'hydroxide'}",
+    "    for _, obj in ipairs(CoreGui:GetChildren()) do",
+    "      local n = string.lower(_tostring(obj.Name))",
+    "      for _, bad in ipairs(blockedNames) do",
+    "        if string.find(n, bad, 1, true) then",
+    "          _tripSecurity('SPY_GUI_' .. bad)",
+    "        end",
+    "      end",
+    "    end",
+    "  end)",
+    "",
+    "  -- 3. Anti-Dump / Yaddas Qorumasi",
+    "  if getgenv then",
+    "    local g = getgenv()",
+    "    g.saveinstance = function() _tripSecurity('SAVEINSTANCE_BLOCKED') end",
+    "    if g.decompile then",
+    "      g.decompile = function() _tripSecurity('DECOMPILE_BLOCKED') end",
+    "    end",
+    "  end",
+    "",
+    "  -- 4. Dinamik XOR + Rolling Key Desifrasi",
+    `  local _k = "${xorSecret}"`,
+    `  local _b = {${byteArrayLiteral}}`,
+    "  local _kLen = #_k",
+    "  local _out = table.create(#_b)",
+    "  for i = 1, #_b do",
+    "    local kByte = _string_byte(_k, ((i - 1) % _kLen) + 1)",
+    "    local roll = ((i - 1) * 13 + 7) % 256",
+    "    local dec = _bit_bxor(_bit_bxor(_b[i], kByte), roll)",
+    "    _out[i] = _string_char(dec)",
+    "  end",
+    "  local _finalSrc = _table_concat(_out)",
+    "  _b = nil",
+    "  _out = nil",
+    "",
+    "  local _fn, _compileErr = _loadstring(_finalSrc)",
+    "  _finalSrc = nil",
+    "  if not _fn then",
+    "    _tripSecurity('RUNTIME_COMPILE_FAIL')",
+    "  end",
+    "  _G_ENV.__SADO_GUARD_RUNNING = nil",
+    "  local _ok, _runErr = _pcall(_fn)",
+    "  if not _ok then",
+    "    warn('[SADO PROTECT] Script icra xetasi: ' .. _tostring(_runErr))",
+    "  end",
+    "end)()"
+  ].join("\n");
+};
+
 const generateUniqueLicenseKeyCode = () => {
   return `SADO-${crypto.randomBytes(2).toString("hex").toUpperCase()}-${crypto
     .randomBytes(2)
@@ -3347,6 +3476,36 @@ const createHttpServer = () => {
       const pathname = reqUrl.pathname;
       const method = String(req.method || "GET").toUpperCase();
 
+      if (method === "GET" && pathname === "/loader-report") {
+        const repUid = sanitizeSnowflakeId(reqUrl.searchParams.get("uid") || "");
+        const repGid = sanitizeSnowflakeId(reqUrl.searchParams.get("gid") || APP_STATE.guildId || "");
+        const repReason = sanitizeText(reqUrl.searchParams.get("reason") || "ANTI_LEAK", "ANTI_LEAK").slice(0, 80);
+        if (repUid) {
+          const bl = getBlacklistForGuild(repGid);
+          if (!bl.some((b) => String(b.discordId) === repUid)) {
+            bl.push({
+              discordId: repUid,
+              reason: `Auto-Blacklist (${repReason})`,
+              addedAt: new Date().toISOString()
+            });
+            if (repGid) {
+              const t = getTenantRecordByGuildId(repGid, true);
+              if (t) {
+                t.blacklist = bl;
+                syncTenantIntoGlobalIfPrimary(t);
+              }
+            } else {
+              APP_STATE.blacklist = bl;
+            }
+            saveAppStateToDisk();
+            appendAuditLog("AUTO_BLACKLIST_LEAK", `${repUid} -> ${repReason}`, repGid);
+          }
+        }
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("-- blocked");
+        return;
+      }
+
       if (method === "GET" && pathname.startsWith("/loader/")) {
         const requestedScriptId = decodeURIComponent(pathname.replace("/loader/", "")).trim();
         const providedKey = sanitizeText(reqUrl.searchParams.get("key") || "", "").toUpperCase();
@@ -3354,6 +3513,36 @@ const createHttpServer = () => {
         const providedGid = sanitizeSnowflakeId(
           reqUrl.searchParams.get("gid") || APP_STATE.guildId || ""
         );
+        const userAgent = String(req.headers["user-agent"] || "").toLowerCase();
+
+        const sendLuaError = (reasonText) => {
+          const safeReason = String(reasonText || "Access Denied").replace(/"/g, '\\"');
+          res.writeHead(200, {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store"
+          });
+          res.end(`game:GetService("Players").LocalPlayer:Kick("[SADO PROTECT] ${safeReason}")`);
+        };
+
+        // Brauzer, curl, python və scraper sorğularını blokla (yalnız Roblox Executor)
+        if (
+          !userAgent ||
+          userAgent.includes("mozilla/") ||
+          userAgent.includes("chrome/") ||
+          userAgent.includes("safari/") ||
+          userAgent.includes("firefox/") ||
+          userAgent.includes("curl/") ||
+          userAgent.includes("wget/") ||
+          userAgent.includes("python") ||
+          userAgent.includes("postman")
+        ) {
+          res.writeHead(403, {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store"
+          });
+          res.end("-- [SADO ULTRA PROTECT] Browser / Scraper erisimi qadagandir!");
+          return;
+        }
 
         const clientHwid = sanitizeText(
           String(
@@ -3485,11 +3674,19 @@ const createHttpServer = () => {
           return;
         }
 
+        const protectedPayload = wrapLuaWithUltraProtection(luaOutput, {
+          reportUrl: `${baseUrl}/loader-report`,
+          key: providedKey,
+          uid: effectiveUid,
+          gid: matchedGuildId
+        });
+
         res.writeHead(200, {
           "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store"
+          "Cache-Control": "no-store, no-cache, must-revalidate, private",
+          "X-Content-Type-Options": "nosniff"
         });
-        res.end(luaOutput);
+        res.end(protectedPayload);
         return;
       }
 
