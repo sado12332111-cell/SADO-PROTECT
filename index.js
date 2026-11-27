@@ -670,6 +670,17 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     !/^Discord Sunucusu/i.test(globalName) &&
     !/^Sunucu\s*\(/i.test(globalName) &&
     !/^Sunucu\s*#/i.test(globalName) &&
+    !/^Sunucu$/i.test(globalName)
+  ) {
+    return {
+      id: cleanId,
+      name: globalName
+    };
+  }
+
+  return null;
+};
+
 const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = "", activeKeyCode = "") => {
   const scripts = getScriptsForGuild(guildId);
   const chosen =
