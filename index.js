@@ -667,18 +667,15 @@ const getScriptContentForUser = (
     null;
 
   const scriptName = chosen
-    ? sanitizeText(chosen.name, "SADO PROTECT Script")
-    : "SADO PROTECT Script";
-  const safeKey = sanitizeText(activeKeyCode, "SADO-ACTIVE-KEY").replace(/"/g, '\\"');
-  const rawBody = chosen && typeof chosen.code === "string" && chosen.code.trim()
-    ? chosen.code.trim()
-    : `print("[SADO PROTECT] ${scriptName.replace(/"/g, '\\"')} yuklendi!")`;
+    ? sanitizeText(chosen.name, "SADO Script")
+    : "SADO Script";
+  const safeKey = sanitizeText(activeKeyCode, "SADO-KEY").replace(/"/g, '\\"');
+  const rawBody =
+    chosen && typeof chosen.code === "string" && chosen.code.trim()
+      ? chosen.code.trim()
+      : `print("${scriptName.replace(/"/g, '\\"')} OK")`;
 
-  const shortLocalCode = [
-    `script_key = "${safeKey}"`,
-    `(getgenv and getgenv() or _G).script_key = "${safeKey}"`,
-    `pcall(function() ${rawBody} end)`
-  ].join("\n");
+  const shortLocalCode = `script_key="${safeKey}"\npcall(function()\n${rawBody}\nend)`;
 
   return {
     scriptName,
