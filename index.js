@@ -658,7 +658,7 @@ const getScriptContentForUser = (
   userId = "",
   preferredScriptId = "",
   activeKeyCode = "",
-  baseUrlOverride = ""
+  _baseUrlOverride = ""
 ) => {
   const scripts = getScriptsForGuild(guildId);
   const chosen =
@@ -669,27 +669,20 @@ const getScriptContentForUser = (
   const scriptName = chosen
     ? sanitizeText(chosen.name, "SADO PROTECT Script")
     : "SADO PROTECT Script";
-  const safeKey = sanitizeText(activeKeyCode, "SADO-ACTIVE-KEY");
-  const safeUserId = sanitizeText(userId, "0");
-  const cleanGuildId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  const serviceBase = sanitizeText(baseUrlOverride, "").replace(/\/$/, "") || getPublicServiceBaseUrl();
-  const targetScriptId = chosen ? chosen.id : "default";
+  const safeKey = sanitizeText(activeKeyCode, "SADO-ACTIVE-KEY").replace(/"/g, '\\"');
+  const rawBody = chosen && typeof chosen.code === "string" && chosen.code.trim()
+    ? chosen.code.trim()
+    : `print("[SADO PROTECT] ${scriptName.replace(/"/g, '\\"')} yuklendi!")`;
 
-  const loaderParams = new URLSearchParams({
-    key: safeKey,
-    uid: safeUserId
-  });
-  if (cleanGuildId) {
-    loaderParams.set("gid", cleanGuildId);
-  }
-  const loaderUrl = `${serviceBase}/loader/${encodeURIComponent(targetScriptId)}?${loaderParams.toString()}`;
+  const shortLocalCode = [
+    `script_key = "${safeKey}"`,
+    `(getgenv and getgenv() or _G).script_key = "${safeKey}"`,
+    `pcall(function() ${rawBody} end)`
+  ].join("\n");
 
   return {
     scriptName,
-    code: [
-      `script_key = "${safeKey}";`,
-      `loadstring(game:HttpGet("${loaderUrl}"))()`
-    ].join("\n")
+    code: shortLocalCode
   };
 };
 
