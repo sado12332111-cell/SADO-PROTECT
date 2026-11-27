@@ -3558,15 +3558,6 @@ const createHttpServer = () => {
           ""
         ).slice(0, 180);
 
-        const sendLuaError = (reasonText) => {
-          const safeReason = String(reasonText || "Access Denied").replace(/"/g, '\\"');
-          res.writeHead(200, {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-store"
-          });
-          res.end(`game:GetService("Players").LocalPlayer:Kick("[SADO PROTECT] ${safeReason}")`);
-        };
-
         if (!providedKey) {
           sendLuaError("Acar (script_key) tapilmadi!");
           return;
