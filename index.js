@@ -715,6 +715,14 @@ const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = 
   };
 };
 
+const buildSafeCustomId = (baseId, scriptId = "") => {
+  const cleanBase = sanitizeText(baseId, "btn").slice(0, 60);
+  const cleanScript = sanitizeText(scriptId, "").slice(0, 32);
+  if (!cleanScript) return cleanBase;
+  const combined = `${cleanBase}::${cleanScript}`;
+  return combined.length <= 100 ? combined : cleanBase;
+};
+
 const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "") => {
   const targetChannelId = sanitizeSnowflakeId(channelId);
   if (!targetChannelId) {
@@ -731,7 +739,7 @@ const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "")
     if (!rowsMap.has(rowIdx)) rowsMap.set(rowIdx, []);
     const btnObj = {
       type: 2,
-      custom_id: selectedScript ? `${btn.id}::${selectedScript.id}` : btn.id,
+      custom_id: buildSafeCustomId(btn.id, selectedScript ? selectedScript.id : ""),
       label: sanitizeText(btn.label, "Button").slice(0, 80),
       style: normalizeButtonStyle(btn.style)
     };
@@ -747,12 +755,15 @@ const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "")
   }));
 
   const embed = {
-    title: selectedScript ? `${design.title} • ${selectedScript.name}` : design.title,
-    description: selectedScript
+    title: selectedScript
+      ? `${design.title} • ${selectedScript.name}`.slice(0, 256)
+      : design.title.slice(0, 256),
+    description: (selectedScript
       ? `**Seçilmiş Script:** \`${selectedScript.name}\`\n\n${design.description}`
-      : design.description,
+      : design.description
+    ).slice(0, 4000),
     color: design.color,
-    footer: { text: design.footerText }
+    footer: { text: design.footerText.slice(0, 2048) }
   };
   if (design.imageUrl) {
     embed.image = { url: design.imageUrl };
@@ -874,13 +885,45 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "whitelist") {
-        const targetUserId = sanitizeSnowflakeId(String(getOpt("user") || actorId));
-        const targetScriptId = sanitizeText(String(getOpt("script_id") || ""), "");
+        const rawUserVal = getOpt("user");
+        const targetUserId = sanitizeSnowflakeId(rawUserVal || actorId);
+        if (!targetUserId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa sunucudan bir istifadəçi seçin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const resolvedUsersMap =
+          (interaction.data && interaction.data.resolved && interaction.data.resolved.users) || {};
+        const resolvedMembersMap =
+          (interaction.data && interaction.data.resolved && interaction.data.resolved.members) || {};
+        const pickedUserObj = resolvedUsersMap[targetUserId] || null;
+        const pickedMemberObj = resolvedMembersMap[targetUserId] || null;
+        const pickedUserTag = pickedUserObj
+          ? sanitizeText(
+              (pickedMemberObj && pickedMemberObj.nick) ||
+                pickedUserObj.global_name ||
+                pickedUserObj.username,
+              `User_${targetUserId}`
+            )
+          : targetUserId === actorId
+            ? actorTag
+            : `User_${targetUserId}`;
+
+        const targetScriptId = sanitizeText(String(getOpt("script") || ""), "");
+        const scripts = getScriptsForGuild(guildId);
+        const chosenScriptObj = scripts.find((s) => s.id === targetScriptId) || null;
+
         const wl = getWhitelistForGuild(guildId);
         const idx = wl.findIndex((w) => String(w.discordId) === targetUserId);
         const record = {
           discordId: targetUserId,
-          tag: targetUserId === actorId ? actorTag : `User_${targetUserId}`,
+          tag: pickedUserTag,
           keyCode: idx >= 0 ? wl[idx].keyCode || "MANUAL-WL" : "MANUAL-WL",
           scriptId: targetScriptId || (idx >= 0 ? wl[idx].scriptId || "" : ""),
           hwid: idx >= 0 ? wl[idx].hwid || "" : "",
@@ -893,10 +936,11 @@ const handleDiscordInteraction = async (interaction) => {
         if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
 
+        const scriptText = chosenScriptObj ? ` (**${chosenScriptObj.name}** scriptinə)` : "";
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `🛡️ <@${targetUserId}> Whitelist-ə əlavə olundu.`,
+            content: `🛡️ <@${targetUserId}>${scriptText} Whitelist-ə əlavə olundu.`,
             flags: 64
           }
         });
@@ -958,7 +1002,7 @@ const handleDiscordInteraction = async (interaction) => {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 9,
           data: {
-            custom_id: boundScriptId ? `modal_redeem_key::${boundScriptId}` : "modal_redeem_key",
+            custom_id: buildSafeCustomId("modal_redeem_key", boundScriptId),
             title: "Lisenziya Açarını Daxil Edin",
             components: [
               {
@@ -1013,17 +1057,20 @@ const handleDiscordInteraction = async (interaction) => {
 
         const effectiveScriptId = boundScriptId || userWl.scriptId || "";
         const scriptInfo = getScriptContentForUser(guildId, actorId, effectiveScriptId);
+        const safeCode = String(scriptInfo.code || '-- print("SADO PROTECT")').slice(0, 1800);
+        const copyBtnCustomId = buildSafeCustomId("btn_copy_script", effectiveScriptId);
+
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `📜 **${scriptInfo.scriptName}** üçün scriptiniz hazırdır:\n\`\`\`lua\n${scriptInfo.code}\n\`\`\``,
+            content: `📜 **${scriptInfo.scriptName}** üçün scriptiniz hazırdır:\n\`\`\`lua\n${safeCode}\n\`\`\``,
             components: [
               {
                 type: 1,
                 components: [
                   {
                     type: 2,
-                    custom_id: effectiveScriptId ? `btn_copy_script::${effectiveScriptId}` : "btn_copy_script",
+                    custom_id: copyBtnCustomId,
                     label: "Scripti Kopyala",
                     style: 2,
                     emoji: { name: "📋" }
@@ -1048,7 +1095,7 @@ const handleDiscordInteraction = async (interaction) => {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `${scriptInfo.code}`,
+            content: String(scriptInfo.code || "").slice(0, 1950),
             flags: 64
           }
         });
@@ -1192,18 +1239,18 @@ const buildSlashCommandsPayload = (guildId = "") => {
   const whitelistOptions = [
     {
       name: "user",
-      description: "Whitelist-ə əlavə ediləcək istifadəçi ID-si",
-      type: 3,
-      required: false
+      description: "Sunucudan istifadəçi seçin",
+      type: 6,
+      required: true
     }
   ];
 
   if (scriptChoices.length > 0) {
     whitelistOptions.push({
-      name: "script_id",
-      description: "Bağlanacaq script",
+      name: "script",
+      description: "Whitelist veriləcək scripti seçin",
       type: 3,
-      required: false,
+      required: true,
       choices: scriptChoices
     });
   }
@@ -1241,7 +1288,7 @@ const buildSlashCommandsPayload = (guildId = "") => {
     },
     {
       name: "whitelist",
-      description: "İstifadəçini Whitelist-ə əlavə et",
+      description: "İstifadəçini seçilmiş scriptə Whitelist-ə əlavə et",
       type: 1,
       options: whitelistOptions
     },
@@ -1252,8 +1299,8 @@ const buildSlashCommandsPayload = (guildId = "") => {
       options: [
         {
           name: "user",
-          description: "Çıxarılacaq istifadəçi ID-si",
-          type: 3,
+          description: "Çıxarılacaq istifadəçi",
+          type: 6,
           required: true
         }
       ]
@@ -1703,15 +1750,6 @@ const readJsonBody = (req) => {
   });
 };
 
-const escapeHtml = (str) => {
-  return String(str || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-};
-
 const renderDashboardHtml = () => {
   return `<!DOCTYPE html>
 <html lang="az">
@@ -1874,7 +1912,6 @@ const renderDashboardHtml = () => {
       border: 1px solid var(--border);
     }
     .pill-ok { background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.35); color: #6ee7b7; }
-    .pill-warn { background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.35); color: #fcd34d; }
     .btn {
       display: inline-flex;
       align-items: center;
@@ -2215,9 +2252,13 @@ const renderDashboardHtml = () => {
                 <select id="editScriptModeSelect">
                   <option value="code">Lua Kodu</option>
                   <option value="url">Raw URL</option>
-                  <option value="file">Dosya Məzmunu</option>
+                  <option value="file">Dosya (.lua / .txt)</option>
                 </select>
               </div>
+            </div>
+            <div class="field-group">
+              <label for="editScriptFileInput">Dosyadan Yüklə (.lua / .txt)</label>
+              <input id="editScriptFileInput" type="file" accept=".lua,.txt,.js,.json,text/*" />
             </div>
             <div class="field-group">
               <label for="editScriptUrlInput">Raw URL</label>
@@ -2688,6 +2729,8 @@ const renderDashboardHtml = () => {
             document.getElementById("editScriptModeSelect").value = foundScript.mode || "code";
             document.getElementById("editScriptUrlInput").value = foundScript.url || "";
             document.getElementById("editScriptCodeInput").value = foundScript.code || "";
+            const editFileInp = document.getElementById("editScriptFileInput");
+            if (editFileInp) editFileInp.value = "";
             box.style.display = "flex";
             box.scrollIntoView({ behavior: "smooth", block: "nearest" });
           }
@@ -2741,13 +2784,15 @@ const renderDashboardHtml = () => {
 
       document.getElementById("whitelistTableBody").innerHTML = wl
         .map(function (w) {
+          const matchedScript = scripts.find((sc) => sc.id === w.scriptId);
+          const scriptLabel = matchedScript ? matchedScript.name : w.scriptId || "Default";
           return (
             "<tr>" +
             "<td>" +
             escapeHtmlClient(w.discordId) +
             "</td>" +
             "<td>" +
-            escapeHtmlClient(w.scriptId || "Default") +
+            escapeHtmlClient(scriptLabel) +
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-wl='" +
             escapeHtmlClient(w.discordId) +
@@ -3032,6 +3077,22 @@ const renderDashboardHtml = () => {
         };
       }
 
+      const editScriptFileInput = document.getElementById("editScriptFileInput");
+      if (editScriptFileInput) {
+        editScriptFileInput.onchange = async () => {
+          const file = editScriptFileInput.files && editScriptFileInput.files[0];
+          if (!file) return;
+          const text = await file.text();
+          document.getElementById("editScriptCodeInput").value = text;
+          document.getElementById("editScriptModeSelect").value = "file";
+          const editNameInp = document.getElementById("editScriptNameInput");
+          if (editNameInp && !editNameInp.value.trim()) {
+            editNameInp.value = file.name.replace(/\\.[^/.]+$/, "");
+          }
+          showToast("Dosya yükləndi: " + file.name);
+        };
+      }
+
       const saveUpdatedScriptBtn = document.getElementById("saveUpdatedScriptBtn");
       const cancelEditScriptBtn = document.getElementById("cancelEditScriptBtn");
       if (cancelEditScriptBtn) {
@@ -3048,11 +3109,16 @@ const renderDashboardHtml = () => {
             const mode = document.getElementById("editScriptModeSelect").value;
             const url = document.getElementById("editScriptUrlInput").value.trim();
             const code = document.getElementById("editScriptCodeInput").value;
+            const fileName =
+              editScriptFileInput && editScriptFileInput.files && editScriptFileInput.files[0]
+                ? editScriptFileInput.files[0].name
+                : "";
             await apiRequest("/api/scripts/" + encodeURIComponent(scriptId), "PUT", {
               name,
               mode,
               url,
-              code
+              code,
+              fileName
             });
             const box = document.getElementById("editScriptModalBox");
             if (box) box.style.display = "none";
@@ -3403,6 +3469,10 @@ const createHttpServer = () => {
           mode: nextMode,
           url: typeof body.url === "string" ? sanitizeText(body.url, "") : current.url || "",
           code: typeof body.code === "string" ? body.code : current.code || "",
+          fileName:
+            typeof body.fileName === "string" && body.fileName.trim()
+              ? sanitizeText(body.fileName, "")
+              : current.fileName || "",
           updatedAt: new Date().toISOString()
         };
         scripts[idx] = updatedScript;
