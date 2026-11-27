@@ -2363,11 +2363,34 @@ const renderDashboardHtml = () => {
       const btns = clientState.designerButtons || [];
       listEl.innerHTML = btns
         .map((btn, idx) => {
+          const currentStyle = btn.style || "Primary";
           return (
             "<div class='btn-designer-row'>" +
-            "<div style='font-weight:600;font-size:13px;'>" +
-            (btn.emoji ? escapeHtml(btn.emoji) + " " : "") +
-            escapeHtml(btn.label) +
+            "<div style='display:flex;align-items:center;gap:8px;flex:1;min-width:190px;flex-wrap:wrap;'>" +
+            "<span style='font-size:15px;'>" +
+            escapeHtml(btn.emoji || "🔘") +
+            "</span>" +
+            "<input type='text' class='btn-label-input' data-idx='" +
+            idx +
+            "' value='" +
+            escapeHtml(btn.label || "") +
+            "' placeholder='Düymə adı' style='flex:1;min-width:120px;padding:7px 10px;' />" +
+            "<select class='btn-style-select' data-idx='" +
+            idx +
+            "' style='width:125px;padding:7px 8px;'>" +
+            "<option value='Primary'" +
+            (currentStyle === "Primary" ? " selected" : "") +
+            ">Primary (Mavi)</option>" +
+            "<option value='Secondary'" +
+            (currentStyle === "Secondary" ? " selected" : "") +
+            ">Secondary (Boz)</option>" +
+            "<option value='Success'" +
+            (currentStyle === "Success" ? " selected" : "") +
+            ">Success (Yaşıl)</option>" +
+            "<option value='Danger'" +
+            (currentStyle === "Danger" ? " selected" : "") +
+            ">Danger (Qırmızı)</option>" +
+            "</select>" +
             "</div>" +
             "<div class='row'>" +
             "<button type='button' class='btn btn-ghost btn-sm btn-move-up' data-idx='" +
@@ -2386,6 +2409,26 @@ const renderDashboardHtml = () => {
           );
         })
         .join("");
+
+      listEl.querySelectorAll(".btn-label-input").forEach((inp) => {
+        inp.addEventListener("input", () => {
+          const i = Number(inp.getAttribute("data-idx"));
+          if (clientState.designerButtons[i]) {
+            clientState.designerButtons[i].label = inp.value;
+            renderDesignerPreview();
+          }
+        });
+      });
+
+      listEl.querySelectorAll(".btn-style-select").forEach((sel) => {
+        sel.addEventListener("change", () => {
+          const i = Number(sel.getAttribute("data-idx"));
+          if (clientState.designerButtons[i]) {
+            clientState.designerButtons[i].style = sel.value;
+            renderDesignerPreview();
+          }
+        });
+      });
 
       listEl.querySelectorAll(".btn-move-up").forEach((b) => {
         b.addEventListener("click", () => {
