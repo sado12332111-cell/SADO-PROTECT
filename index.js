@@ -216,23 +216,6 @@ const appendAuditLog = (action, details = "", guildId = "") => {
   } catch (_err) {}
 };
 
-const createEmptyTenantRecord = (guildId, guildName = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId);
-  return {
-    guildId: cleanId,
-    guildName: sanitizeText(guildName, ""),
-    panelChannelId: "",
-    botAddedBy: null,
-    activePlan: "free",
-    activeApiKeyCode: "",
-    scripts: [],
-    keys: [],
-    whitelist: [],
-    blacklist: [],
-    panelDesign: normalizePanelDesign(DEFAULT_PANEL_DESIGN)
-  };
-};
-
 const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
   const cleanId = sanitizeSnowflakeId(guildId);
   if (!cleanId) return null;
@@ -367,8 +350,7 @@ const getEffectivePlanForGuild = (guildId = "") => {
 };
 
 const resolveDiscordBotToken = () => {
-  const envToken = sanitizeText(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "", "");
-  return envToken;
+  return sanitizeText(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "", "");
 };
 
 const discordApiRequest = (endpointPath, method = "GET", bodyPayload = null, overrideToken = "") => {
@@ -2439,15 +2421,29 @@ const renderDashboardHtml = () => {
       if (!previewEl || !clientState.draftDesign) return;
       const d = clientState.draftDesign;
       const btnsHtml = (d.buttons || [])
-        .map((b) => `<span class="btn btn-ghost btn-sm">${escapeHtml(b.emoji || "")} ${escapeHtml(b.label)}</span>`)
+        .map(
+          (b) =>
+            "<span class='btn btn-ghost btn-sm'>" +
+            escapeHtml(b.emoji || "") +
+            " " +
+            escapeHtml(b.label) +
+            "</span>"
+        )
         .join("");
 
-      previewEl.innerHTML = `
-        <div style="font-weight:700;font-size:15px;">${escapeHtml(d.title)}</div>
-        <div style="font-size:13px;color:#cbd5e1;">${escapeHtml(d.description)}</div>
-        <div class="preview-btns">${btnsHtml}</div>
-        <div style="font-size:11px;color:#94a3b8;">${escapeHtml(d.footerText)}</div>
-      `;
+      previewEl.innerHTML =
+        "<div style='font-weight:700;font-size:15px;'>" +
+        escapeHtml(d.title) +
+        "</div>" +
+        "<div style='font-size:13px;color:#cbd5e1;'>" +
+        escapeHtml(d.description) +
+        "</div>" +
+        "<div class='preview-btns'>" +
+        btnsHtml +
+        "</div>" +
+        "<div style='font-size:11px;color:#94a3b8;'>" +
+        escapeHtml(d.footerText) +
+        "</div>";
     };
 
     const applySnapshotToUi = (snap) => {
