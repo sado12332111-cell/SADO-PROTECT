@@ -2005,7 +2005,7 @@ const renderDashboardHtml = () => {
         <span class="pill">💎 Plan: <strong id="headerPlanName">Free</strong></span>
       </div>
       <div class="topbar-right">
-        <a id="topJoinDiscordLink" class="btn btn-primary btn-sm" href="${DISCORD_INVITE_URL}" target="_blank" rel="noopener noreferrer">
+        <a id="topJoinDiscordLink" class="btn btn-primary btn-sm" href="https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=8&scope=bot%20applications.commands" target="_blank" rel="noopener noreferrer">
           ➕ Join Discord
         </a>
         <button id="refreshSnapshotBtn" class="btn btn-ghost btn-sm">🔄 Yenilə</button>
@@ -3016,7 +3016,6 @@ const renderDashboardHtml = () => {
       }
 
       refreshDashboardSnapshot();
-    });
   </script>
 </body>
 </html>`;
