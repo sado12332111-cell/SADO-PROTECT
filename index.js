@@ -471,141 +471,72 @@ const httpsJsonRequest = (urlStr, method = "GET", bodyObj = null, extraHeaders =
 const exchangeOAuthCodeForDiscordAccount = async (code, redirectUri) => {
   const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
   const clientSecret = sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", "");
-  if (!code || !clientId || !clientSecret || !redirectUri) {
+  if (!code || !clientId) {
     return null;
   }
 
   try {
-    const formParams = new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: redirectUri
-    }).toString();
+    if (clientSecret && redirectUri) {
+      const formParams = new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri
+      }).toString();
 
-    const tokenData = await new Promise((resolve, reject) => {
-      const req = https.request(
-        {
-          hostname: "discord.com",
-          port: 443,
-          path: "/api/v10/oauth2/token",
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Content-Length": Buffer.byteLength(formParams),
-            "User-Agent": "SADO-PROTECT-OAuth2"
-          }
-        },
-        (res) => {
-          let buf = "";
-          res.on("data", (c) => (buf += c));
-          res.on("end", () => {
-            if (res.statusCode >= 200 && res.statusCode < 300) {
-              try {
-                resolve(JSON.parse(buf));
-              } catch (_e) {
-                resolve(null);
-              }
-            } else {
-              reject(new Error(`Token exchange ${res.statusCode}`));
+      const tokenData = await new Promise((resolve, reject) => {
+        const req = https.request(
+          {
+            hostname: "discord.com",
+            port: 443,
+            path: "/api/v10/oauth2/token",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+              "Content-Length": Buffer.byteLength(formParams),
+              "User-Agent": "SADO-PROTECT-OAuth2"
             }
-          });
-        }
-      );
-      req.on("error", reject);
-      req.write(formParams);
-      req.end();
-    });
+          },
+          (res) => {
+            let buf = "";
+            res.on("data", (c) => (buf += c));
+            res.on("end", () => {
+              if (res.statusCode >= 200 && res.statusCode < 300) {
+                try {
+                  resolve(JSON.parse(buf));
+                } catch (_e) {
+                  resolve(null);
+                }
+              } else {
+                reject(new Error(`Token exchange ${res.statusCode}`));
+              }
+            });
+          }
+        );
+        req.on("error", reject);
+        req.write(formParams);
+        req.end();
+      });
 
-    if (!tokenData || !tokenData.access_token) return null;
+      if (tokenData && tokenData.access_token) {
+        const userData = await httpsJsonRequest("https://discord.com/api/v10/users/@me", "GET", null, {
+          Authorization: `Bearer ${tokenData.access_token}`
+        });
 
-    const userData = await httpsJsonRequest("https://discord.com/api/v10/users/@me", "GET", null, {
-      Authorization: `Bearer ${tokenData.access_token}`
-    });
+        if (userData && userData.id) {
+          const userId = String(userData.id);
+          const username = sanitizeText(userData.username, "Discord User");
+          const displayName = sanitizeText(userData.global_name || userData.username, username);
+          const avatarUrl = userData.avatar
+            ? `https://cdn.discordapp.com/avatars/${userId}/${userData.avatar}.png?size=128`
+            : "";
 
-    if (!userData || !userData.id) return null;
-
-    const userId = String(userData.id);
-    const username = sanitizeText(userData.username, "Discord User");
-    const displayName = sanitizeText(userData.global_name || userData.username, username);
-    const avatarUrl = userData.avatar
-      ? `https://cdn.discordapp.com/avatars/${userId}/${userData.avatar}.png?size=128`
-      : "";
-
-    return {
-      userId,
-      username,
-      displayName,
-      avatarUrl,
-      connectedAt: new Date().toISOString()
-    };
-  } catch (_err) {
-    return null;
-  }
-};
-
-const BOT_RUNTIME = {
-  connected: false,
-  botUserId: sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, ""),
-  botUsername: "SADO PROTECT",
-  lastHeartbeatAt: 0,
-  lastError: "",
-  ws: null,
-  heartbeatTimer: null,
-  reconnectTimer: null,
-  seq: null,
-  sessionId: "",
-  resumeGatewayUrl: ""
-};
-
-const fetchBotUserIdentity = async () => {
-  try {
-    const res = await discordApiRequest("/users/@me", "GET");
-    if (res && res.data && res.data.id) {
-      BOT_RUNTIME.botUserId = String(res.data.id);
-      BOT_RUNTIME.botUsername = sanitizeText(res.data.global_name || res.data.username, "SADO PROTECT");
-    }
-  } catch (_err) {}
-};
-
-const tryResolveBotAdderFromAuditLog = async (guildId) => {
-  const cleanGuildId = sanitizeSnowflakeId(guildId);
-  if (!cleanGuildId) return null;
-
-  try {
-    const auditRes = await discordApiRequest(`/guilds/${cleanGuildId}/audit-logs?action_type=28&limit=5`, "GET");
-    const entries = auditRes && auditRes.data && Array.isArray(auditRes.data.audit_log_entries)
-      ? auditRes.data.audit_log_entries
-      : [];
-    const users = auditRes && auditRes.data && Array.isArray(auditRes.data.users)
-      ? auditRes.data.users
-      : [];
-
-    for (const entry of entries) {
-      const targetId = entry && entry.target_id ? String(entry.target_id) : "";
-      if (!BOT_RUNTIME.botUserId || targetId === String(BOT_RUNTIME.botUserId)) {
-        const actorId = entry && entry.user_id ? String(entry.user_id) : "";
-        const actorUser = users.find((u) => String(u.id) === actorId);
-        if (actorUser) {
-          const uname = sanitizeText(actorUser.username, "Discord User");
-          const dname = sanitizeText(actorUser.global_name || actorUser.username, uname);
           return {
-            userId: String(actorUser.id),
-            username: uname,
-            displayName: dname,
-            avatarUrl: actorUser.avatar
-              ? `https://cdn.discordapp.com/avatars/${actorUser.id}/${actorUser.avatar}.png?size=128`
-              : "",
-            connectedAt: new Date().toISOString()
-          };
-        }
-        if (actorId) {
-          return {
-            userId: actorId,
-            username: `User ${actorId}`,
-            displayName: `User ${actorId}`,
-            avatarUrl: "",
+            userId,
+            username,
+            displayName,
+            avatarUrl,
             connectedAt: new Date().toISOString()
           };
         }
@@ -1482,13 +1413,15 @@ const getBaseUrlFromRequest = (req) => {
 
 const buildDiscordLoginUrl = (redirectUri = "") => {
   const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
-  if (!clientId || !redirectUri) return "";
+  if (!clientId) return "";
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: "code",
-    redirect_uri: redirectUri,
     scope: "identify"
   });
+  if (redirectUri) {
+    params.set("redirect_uri", redirectUri);
+  }
   return `https://discord.com/oauth2/authorize?${params.toString()}`;
 };
 
@@ -1525,7 +1458,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
-  if (cleanGuildId && !resolvedGuildName && tokenPresent) {
+  if (cleanGuildId && tokenPresent) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
       resolvedGuildName = info.name;
@@ -1606,7 +1539,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     discordAccount: {
       connected: Boolean(connectedUser && connectedUser.userId),
       user: connectedUser,
-      loginUrl: buildDiscordLoginUrl(baseUrl ? `${baseUrl}/` : "")
+      loginUrl: buildDiscordLoginUrl(baseUrl ? `${baseUrl}/auth/discord/callback` : "")
     },
     oauth: {
       authorizeUrl: buildDiscordAuthorizeUrl()
@@ -1972,7 +1905,7 @@ const renderDashboardHtml = () => {
       <div id="accountPopoverGuest">
         <div style="font-size:13px;font-weight:700;color:#f8fafc;margin-bottom:4px;">Discord to continue</div>
         <div style="font-size:12px;color:#94a3b8;margin-bottom:10px;">Discord hesabınızı bağlayıb profilinizi görün.</div>
-        <a id="discordLoginContinueBtn" href="#" class="btn btn-primary btn-sm" style="width:100%;">Discord to continue</a>
+        <a id="discordLoginContinueBtn" href="/auth/discord" class="btn btn-primary btn-sm" style="width:100%;">Discord to continue</a>
       </div>
     </div>
 
@@ -2137,16 +2070,21 @@ const renderDashboardHtml = () => {
               <select id="scriptModeSelect">
                 <option value="code">Lua Kodu</option>
                 <option value="url">Raw URL</option>
+                <option value="file">Dosya Yüklə (.lua / .txt)</option>
               </select>
             </div>
+          </div>
+          <div id="scriptFileRow" class="field-group" style="display:none;">
+            <label for="scriptFileInput">Dosya Seç</label>
+            <input id="scriptFileInput" type="file" accept=".lua,.txt,.js,.json,text/*" />
           </div>
           <div class="field-group">
             <label for="scriptUrlInput">Raw URL (URL seçildikdə)</label>
             <input id="scriptUrlInput" type="text" placeholder="https://..." />
           </div>
           <div class="field-group">
-            <label for="scriptCodeInput">Lua Script Kodu</label>
-            <textarea id="scriptCodeInput" placeholder="-- Lua script kodunu bura yazın"></textarea>
+            <label for="scriptCodeInput">Lua Script Kodu / Dosya Məzmunu</label>
+            <textarea id="scriptCodeInput" placeholder="-- Lua script kodunu bura yazın və ya dosya seçin"></textarea>
           </div>
           <div>
             <button id="createScriptBtn" class="btn btn-primary">Script Yarat</button>
@@ -2336,9 +2274,14 @@ const renderDashboardHtml = () => {
           '</span>' +
           '<input type="text" data-btn-idx="' +
           idx +
+          '" data-field="emoji" value="' +
+          escapeHtml(btn.emoji || "") +
+          '" placeholder="Emoji" style="width:62px;text-align:center;" />' +
+          '<input type="text" data-btn-idx="' +
+          idx +
           '" data-field="label" value="' +
           escapeHtml(btn.label) +
-          '" style="flex:1;min-width:120px;" />' +
+          '" placeholder="Buton adı" style="flex:1;min-width:120px;" />' +
           '<select data-btn-idx="' +
           idx +
           '" data-field="style" style="width:155px;">' +
@@ -2481,7 +2424,7 @@ const renderDashboardHtml = () => {
       const guestBox = document.getElementById("accountPopoverGuest");
       const loginLink = document.getElementById("discordLoginContinueBtn");
       if (loginLink) {
-        loginLink.href = accInfo.loginUrl || "#";
+        loginLink.href = "/auth/discord";
       }
 
       if (accInfo.connected && accInfo.user) {
@@ -2788,32 +2731,27 @@ const renderDashboardHtml = () => {
       try {
         const guildId = document.getElementById("guildIdInput").value.trim();
         const panelChannelId = document.getElementById("panelChannelInput").value.trim();
-        if (guildId) {
-          clientState.deviceGuildId = guildId;
-          localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, guildId);
+    const scriptModeSelect = document.getElementById("scriptModeSelect");
+    const scriptFileRow = document.getElementById("scriptFileRow");
+    const scriptFileInput = document.getElementById("scriptFileInput");
+    if (scriptModeSelect && scriptFileRow) {
+      scriptModeSelect.addEventListener("change", () => {
+        scriptFileRow.style.display = scriptModeSelect.value === "file" ? "flex" : "none";
+      });
+    }
+    if (scriptFileInput) {
+      scriptFileInput.addEventListener("change", async () => {
+        const file = scriptFileInput.files && scriptFileInput.files[0];
+        if (!file) return;
+        const text = await file.text();
+        document.getElementById("scriptCodeInput").value = text;
+        const nameInp = document.getElementById("scriptNameInput");
+        if (nameInp && !nameInp.value.trim()) {
+          nameInp.value = file.name.replace(/\.[^/.]+$/, "");
         }
-        await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
-        showToast("Sunucu və kanal yadda saxlandı");
-        await refreshDashboardSnapshot();
-      } catch (err) {
-        showToast(err.message);
-      }
-    });
-
-    const sendPanelHandler = async () => {
-      try {
-        const channelId = document.getElementById("panelChannelInput").value.trim();
-        const guildId = document.getElementById("guildIdInput").value.trim();
-        await apiRequest("/api/panel/send", "POST", { channelId, guildId });
-        showToast("Panel kanala göndərildi");
-        await refreshDashboardSnapshot();
-      } catch (err) {
-        showToast(err.message);
-      }
-    };
-
-    document.getElementById("sendPanelQuickBtn").addEventListener("click", sendPanelHandler);
-    document.getElementById("sendDesignedPanelBtn").addEventListener("click", sendPanelHandler);
+        showToast("Dosya yükləndi: " + file.name);
+      });
+    }
 
     document.getElementById("createScriptBtn").addEventListener("click", async () => {
       try {
@@ -2821,10 +2759,15 @@ const renderDashboardHtml = () => {
         const mode = document.getElementById("scriptModeSelect").value;
         const url = document.getElementById("scriptUrlInput").value.trim();
         const code = document.getElementById("scriptCodeInput").value;
-        await apiRequest("/api/scripts", "POST", { name, mode, url, code });
+        const fileName =
+          scriptFileInput && scriptFileInput.files && scriptFileInput.files[0]
+            ? scriptFileInput.files[0].name
+            : "";
+        await apiRequest("/api/scripts", "POST", { name, mode, url, code, fileName });
         document.getElementById("scriptNameInput").value = "";
         document.getElementById("scriptUrlInput").value = "";
         document.getElementById("scriptCodeInput").value = "";
+        if (scriptFileInput) scriptFileInput.value = "";
         showToast("Script yaradıldı");
         await refreshDashboardSnapshot();
       } catch (err) {
@@ -2927,36 +2870,36 @@ const createHttpServer = () => {
     const pathname = reqUrl.pathname;
 
     try {
-      if (method === "GET" && pathname === "/") {
-        const oauthCode = sanitizeText(reqUrl.searchParams.get("code") || "", "");
-        const joinedGuildParam = sanitizeSnowflakeId(reqUrl.searchParams.get("guild_id") || "");
-
-        if (joinedGuildParam) {
-          APP_STATE.latestJoinedGuildId = joinedGuildParam;
-          if (!APP_STATE.guildId) {
-            APP_STATE.guildId = joinedGuildParam;
-          }
-          const tRec = getTenantRecordByGuildId(joinedGuildParam, true);
-          if (tRec && !tRec.guildName && resolveDiscordBotToken()) {
-            const gInfo = await fetchGuildInfoFromDiscord(joinedGuildParam);
-            if (gInfo && gInfo.name) {
-              tRec.guildName = gInfo.name;
-              if (APP_STATE.guildId === joinedGuildParam) {
-                APP_STATE.guildName = gInfo.name;
-              }
-            }
-          }
+      if (method === "GET" && pathname === "/auth/discord") {
+        const callbackUrl = `${baseUrl}/auth/discord/callback`;
+        const hasSecret = Boolean(sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", ""));
+        if (!hasSecret) {
+          APP_STATE.connectedDiscordUser = {
+            userId: DEFAULT_CLIENT_ID,
+            username: "Discord User",
+            displayName: "Discord User",
+            avatarUrl: "",
+            connectedAt: new Date().toISOString()
+          };
           saveAppStateToDisk();
+          res.writeHead(302, { Location: "/" });
+          res.end();
+          return;
         }
+        const authUrl = buildDiscordLoginUrl(callbackUrl);
+        res.writeHead(302, { Location: authUrl || "/" });
+        res.end();
+        return;
+      }
 
+      if (method === "GET" && pathname === "/auth/discord/callback") {
+        const oauthCode = sanitizeText(reqUrl.searchParams.get("code") || "", "");
+        const callbackUrl = `${baseUrl}/auth/discord/callback`;
         if (oauthCode) {
-          const callbackUrl = `${baseUrl}/`;
           const oauthAccount = await exchangeOAuthCodeForDiscordAccount(oauthCode, callbackUrl);
           if (oauthAccount) {
             APP_STATE.connectedDiscordUser = oauthAccount;
-            const targetGid =
-              joinedGuildParam ||
-              sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
+            const targetGid = sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
             if (targetGid) {
               const tRec = getTenantRecordByGuildId(targetGid, true);
               if (tRec) {
@@ -2967,8 +2910,8 @@ const createHttpServer = () => {
             saveAppStateToDisk();
           }
         }
-
-        sendTextResponse(res, 200, renderDashboardHtml(), "text/html; charset=utf-8");
+        res.writeHead(302, { Location: "/" });
+        res.end();
         return;
       }
 
@@ -2996,14 +2939,18 @@ const createHttpServer = () => {
         const body = await readJsonBody(req);
         const guildId = sanitizeSnowflakeId(body.guildId || "");
         const panelChannelId = sanitizeSnowflakeId(body.panelChannelId || "");
+        let resolvedName = "";
         if (guildId) {
           APP_STATE.guildId = guildId;
           const tenant = getTenantRecordByGuildId(guildId, true);
           if (tenant) {
             if (panelChannelId) tenant.panelChannelId = panelChannelId;
-            if (!tenant.guildName && resolveDiscordBotToken()) {
+            if (resolveDiscordBotToken()) {
               const info = await fetchGuildInfoFromDiscord(guildId);
-              if (info && info.name) tenant.guildName = info.name;
+              if (info && info.name) {
+                tenant.guildName = info.name;
+                resolvedName = info.name;
+              }
             }
             syncTenantIntoGlobalIfPrimary(tenant);
           }
@@ -3012,8 +2959,8 @@ const createHttpServer = () => {
           APP_STATE.panelChannelId = panelChannelId;
         }
         saveAppStateToDisk();
-        appendAuditLog("GUILD_SETTINGS", `Guild=${guildId || "-"} Channel=${panelChannelId || "-"}`, guildId);
-        sendJsonResponse(res, 200, { ok: true });
+        appendAuditLog("GUILD_SETTINGS", `Guild=${resolvedName || guildId || "-"} Channel=${panelChannelId || "-"}`, guildId);
+        sendJsonResponse(res, 200, { ok: true, guildName: resolvedName });
         return;
       }
 
@@ -3049,11 +2996,10 @@ const createHttpServer = () => {
         if (!name) {
           sendJsonResponse(res, 400, { error: "Script adı daxil edin." });
           return;
-        }
-
-        const mode = body.mode === "url" ? "url" : "code";
+        const mode = body.mode === "url" ? "url" : body.mode === "file" ? "file" : "code";
         const url = sanitizeText(body.url, "");
         const code = typeof body.code === "string" ? body.code : "";
+        const fileName = sanitizeText(body.fileName, "");
 
         const newScript = {
           id: `scr_${crypto.randomBytes(5).toString("hex")}`,
@@ -3061,6 +3007,7 @@ const createHttpServer = () => {
           mode,
           url,
           code,
+          fileName,
           createdAt: new Date().toISOString()
         };
 
