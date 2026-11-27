@@ -20,19 +20,14 @@ const DISCORD_INVITE_URL =
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 
-const DEFAULT_PANEL_DESIGN = {
-  title: "SADO PROTECT • Lisenziya & Script Paneli",
-  description:
-    "Aşağıdakı düymələrdən istifadə edərək lisenziya açarınızı aktivləşdirə, HWID sıfırlaya və ya scriptinizi əldə edə bilərsiniz.",
-  colorHex: "#6366f1",
-  footerText: "SADO PROTECT • Premium Təhlükəsizlik Sistemi",
-  imageUrl: "",
-  buttons: [
-    { id: "btn_redeem_key", label: "Reedem Key", emoji: "🔑", style: "Primary", enabled: true },
-    { id: "btn_get_script", label: "Get Script", emoji: "📜", style: "Success", enabled: true },
-    { id: "btn_reset_hwid", label: "Reset HWID", emoji: "⚙️", style: "Danger", enabled: true },
-    { id: "btn_stats", label: "Statistikam", emoji: "📊", style: "Secondary", enabled: true }
-  ]
+const buildDiscordAuthorizeUrl = (redirectUri = "") => {
+  const baseUrl = new URL(DISCORD_INVITE_URL);
+  if (redirectUri) {
+    baseUrl.searchParams.set("response_type", "code");
+    baseUrl.searchParams.set("redirect_uri", redirectUri);
+    baseUrl.searchParams.set("scope", "applications.commands bot identify guilds");
+  }
+  return baseUrl.toString();
 };
 
 const PLAN_CONFIGS = {
@@ -1646,6 +1641,93 @@ const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
   return "";
 };
 
+const exchangeOAuthCodeForDiscordAccount = async (codeStr, redirectUri) => {
+  const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || "1562080654282199121", "");
+  const clientSecret = sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", "");
+  if (!codeStr || !clientId || !clientSecret) return null;
+
+  return new Promise((resolve) => {
+    const bodyParams = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "authorization_code",
+      code: codeStr,
+      redirect_uri: redirectUri
+    }).toString();
+
+    const req = https.request(
+      {
+        hostname: "discord.com",
+        port: 443,
+        path: "/api/v10/oauth2/token",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": Buffer.byteLength(bodyParams)
+        }
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (ch) => {
+          raw += ch.toString("utf8");
+        });
+        res.on("end", async () => {
+          try {
+            const tokenData = JSON.parse(raw);
+            if (!tokenData || !tokenData.access_token) {
+              resolve(null);
+              return;
+            }
+            const userData = await new Promise((resUser) => {
+              const uReq = https.request(
+                {
+                  hostname: "discord.com",
+                  port: 443,
+                  path: "/api/v10/users/@me",
+                  method: "GET",
+                  headers: { Authorization: `Bearer ${tokenData.access_token}` }
+                },
+                (uRes) => {
+                  let uRaw = "";
+                  uRes.on("data", (c) => {
+                    uRaw += c.toString("utf8");
+                  });
+                  uRes.on("end", () => {
+                    try {
+                      resUser(JSON.parse(uRaw));
+                    } catch (_e) {
+                      resUser(null);
+                    }
+                  });
+                }
+              );
+              uReq.on("error", () => resUser(null));
+              uReq.end();
+            });
+            if (!userData || !userData.id) {
+              resolve(null);
+              return;
+            }
+            resolve({
+              userId: sanitizeSnowflakeId(userData.id),
+              username: String(userData.username || userData.global_name || userData.id),
+              displayName: String(userData.global_name || userData.username || userData.id),
+              avatarUrl: userData.avatar
+                ? `https://cdn.discordapp.com/avatars/${userData.id}/${userData.avatar}.png?size=64`
+                : ""
+            });
+          } catch (_err) {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on("error", () => resolve(null));
+    req.write(bodyParams);
+    req.end();
+  });
+};
+
 const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = false) => {
   const tokenPresent = Boolean(resolveDiscordBotToken());
   const cleanGuildId = sanitizeSnowflakeId(requestedGuildId);
@@ -1696,6 +1778,9 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
       displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
       panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
       botAddedBy: botAddedByInfo
+    },
+    oauth: {
+      authorizeUrl: buildDiscordAuthorizeUrl()
     },
     plan: {
       tier: activePlan.id,
@@ -3243,7 +3328,41 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
-      sendTextResponse(res, 200, renderDashboardHtml(), "text/html; charset=utf-8");
+      const oauthCode = sanitizeText(reqUrl.searchParams.get("code") || "", "");
+      const joinedGuildParam = sanitizeSnowflakeId(reqUrl.searchParams.get("guild_id") || "");
+      const callbackUrl = `${baseUrl}/`;
+
+      if (joinedGuildParam) {
+        APP_STATE.latestJoinedGuildId = joinedGuildParam;
+        if (!APP_STATE.guildId) {
+          APP_STATE.guildId = joinedGuildParam;
+        }
+        getTenantRecordByGuildId(joinedGuildParam);
+        saveAppStateToDisk();
+      }
+
+      if (oauthCode) {
+        const oauthAccount = await exchangeOAuthCodeForDiscordAccount(oauthCode, callbackUrl);
+        if (oauthAccount) {
+          const targetGid =
+            joinedGuildParam ||
+            sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
+          if (targetGid) {
+            const tRec = getTenantRecordByGuildId(targetGid);
+            if (tRec) {
+              tRec.botAddedBy = oauthAccount;
+              syncTenantIntoGlobalIfPrimary(tRec);
+              saveAppStateToDisk();
+            }
+          }
+        }
+      }
+
+      const renderedHtml = renderDashboardHtml().replaceAll(
+        DISCORD_INVITE_URL,
+        buildDiscordAuthorizeUrl(callbackUrl)
+      );
+      sendTextResponse(res, 200, renderedHtml, "text/html; charset=utf-8");
       return;
     }
 
