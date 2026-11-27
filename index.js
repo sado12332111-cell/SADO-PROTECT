@@ -207,6 +207,125 @@ const BOT_RUNTIME = {
   ws: null
 };
 
+const resolveDiscordBotToken = () => {
+  return sanitizeText(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "", "");
+};
+
+const discordApiRequest = (endpointPath, method = "GET", bodyPayload = null, overrideToken = "") => {
+  return new Promise((resolve, reject) => {
+    const botToken = overrideToken || resolveDiscordBotToken();
+    if (!botToken) {
+      reject(new Error("DISCORD_BOT_TOKEN təyin edilməyib."));
+      return;
+    }
+
+    const fullUrl = new URL(`${DISCORD_API_BASE}${endpointPath}`);
+    const payloadString = bodyPayload ? JSON.stringify(bodyPayload) : null;
+
+    const options = {
+      hostname: fullUrl.hostname,
+      port: 443,
+      path: `${fullUrl.pathname}${fullUrl.search}`,
+      method,
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        "User-Agent": "SADO-PROTECT-Bot (https://sado-protect.onrender.com, 2.0.0)"
+      }
+    };
+
+    if (payloadString) {
+      options.headers["Content-Type"] = "application/json";
+      options.headers["Content-Length"] = Buffer.byteLength(payloadString);
+    }
+
+    const req = https.request(options, (res) => {
+      let rawData = "";
+      res.on("data", (chunk) => {
+        rawData += chunk;
+      });
+      res.on("end", () => {
+        let parsed = null;
+        try {
+          parsed = rawData ? JSON.parse(rawData) : null;
+        } catch (_err) {
+          parsed = rawData;
+        }
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ status: res.statusCode, data: parsed });
+        } else {
+          const errMsg =
+            parsed && typeof parsed === "object" && parsed.message
+              ? `Discord API (${res.statusCode}): ${parsed.message}`
+              : `Discord API xətası (${res.statusCode})`;
+          reject(new Error(errMsg));
+        }
+      });
+    });
+
+    req.on("error", (err) => {
+      reject(new Error(`Discord şəbəkə xətası: ${err.message}`));
+    });
+
+    req.setTimeout(12000, () => {
+      req.destroy(new Error("Discord API sorğusu vaxt aşımına uğradı."));
+    });
+
+    if (payloadString) {
+      req.write(payloadString);
+    }
+    req.end();
+  });
+};
+
+const httpsJsonRequest = (urlStr, method = "GET", bodyObj = null, extraHeaders = {}) => {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(urlStr);
+    const bodyText = bodyObj ? JSON.stringify(bodyObj) : null;
+    const headers = {
+      "User-Agent": "SADO-PROTECT (https://sado-protect.onrender.com, 2.0.0)",
+      ...extraHeaders
+    };
+    if (bodyText && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+      headers["Content-Length"] = Buffer.byteLength(bodyText);
+    }
+
+    const req = https.request(
+      {
+        hostname: parsedUrl.hostname,
+        port: 443,
+        path: `${parsedUrl.pathname}${parsedUrl.search}`,
+        method,
+        headers
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (chunk) => {
+          raw += chunk;
+        });
+        res.on("end", () => {
+          let parsed = null;
+          try {
+            parsed = raw ? JSON.parse(raw) : null;
+          } catch (_err) {
+            parsed = raw;
+          }
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}`));
+          }
+        });
+      }
+    );
+
+    req.on("error", (err) => reject(err));
+    req.setTimeout(10000, () => req.destroy(new Error("Timeout")));
+    if (bodyText) req.write(bodyText);
+    req.end();
+  });
+};
+
 const fetchBotUserIdentity = async () => {
   try {
     const res = await discordApiRequest("/users/@me", "GET");
@@ -416,197 +535,76 @@ const getEffectivePlanForGuild = (guildId = "") => {
   return "free";
 };
 
-const resolveDiscordBotToken = () => {
-  return sanitizeText(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "", "");
-};
-
-const discordApiRequest = (endpointPath, method = "GET", bodyPayload = null, overrideToken = "") => {
-  return new Promise((resolve, reject) => {
-    const botToken = overrideToken || resolveDiscordBotToken();
-    if (!botToken) {
-      reject(new Error("DISCORD_BOT_TOKEN təyin edilməyib."));
-      return;
-    }
-
-    const fullUrl = new URL(`${DISCORD_API_BASE}${endpointPath}`);
-    const payloadString = bodyPayload ? JSON.stringify(bodyPayload) : null;
-
-    const options = {
-      hostname: fullUrl.hostname,
-      port: 443,
-      path: `${fullUrl.pathname}${fullUrl.search}`,
-      method,
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        "User-Agent": "SADO-PROTECT-Bot (https://sado-protect.onrender.com, 2.0.0)"
-      }
-    };
-
-    if (payloadString) {
-      options.headers["Content-Type"] = "application/json";
-      options.headers["Content-Length"] = Buffer.byteLength(payloadString);
-    }
-
-    const req = https.request(options, (res) => {
-      let rawData = "";
-      res.on("data", (chunk) => {
-        rawData += chunk;
-      });
-      res.on("end", () => {
-        let parsed = null;
-        try {
-          parsed = rawData ? JSON.parse(rawData) : null;
-        } catch (_err) {
-          parsed = rawData;
-        }
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve({ status: res.statusCode, data: parsed });
-        } else {
-          const errMsg =
-            parsed && typeof parsed === "object" && parsed.message
-              ? `Discord API (${res.statusCode}): ${parsed.message}`
-              : `Discord API xətası (${res.statusCode})`;
-          reject(new Error(errMsg));
-        }
-      });
-    });
-
-    req.on("error", (err) => {
-      reject(new Error(`Discord şəbəkə xətası: ${err.message}`));
-    });
-
-    req.setTimeout(12000, () => {
-      req.destroy(new Error("Discord API sorğusu vaxt aşımına uğradı."));
-    });
-
-    if (payloadString) {
-      req.write(payloadString);
-    }
-    req.end();
-  });
-};
-
-const httpsJsonRequest = (urlStr, method = "GET", bodyObj = null, extraHeaders = {}) => {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(urlStr);
-    const bodyText = bodyObj ? JSON.stringify(bodyObj) : null;
-    const headers = {
-      "User-Agent": "SADO-PROTECT (https://sado-protect.onrender.com, 2.0.0)",
-      ...extraHeaders
-    };
-    if (bodyText && !headers["Content-Type"]) {
-      headers["Content-Type"] = "application/json";
-      headers["Content-Length"] = Buffer.byteLength(bodyText);
-    }
-
-    const req = https.request(
-      {
-        hostname: parsedUrl.hostname,
-        port: 443,
-        path: `${parsedUrl.pathname}${parsedUrl.search}`,
-        method,
-        headers
-      },
-      (res) => {
-        let raw = "";
-        res.on("data", (chunk) => {
-          raw += chunk;
-        });
-        res.on("end", () => {
-          let parsed = null;
-          try {
-            parsed = raw ? JSON.parse(raw) : null;
-          } catch (_err) {
-            parsed = raw;
-          }
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(parsed);
-          } else {
-            reject(new Error(`HTTP ${res.statusCode}`));
-          }
-        });
-      }
-    );
-
-    req.on("error", (err) => reject(err));
-    req.setTimeout(10000, () => req.destroy(new Error("Timeout")));
-    if (bodyText) req.write(bodyText);
-    req.end();
-  });
-};
-
 const exchangeOAuthCodeForDiscordAccount = async (code, redirectUri) => {
   const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
   const clientSecret = sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", "");
-  if (!code || !clientId) {
+  if (!code || !clientId || !clientSecret || !redirectUri) {
     return null;
   }
 
   try {
-    if (clientSecret && redirectUri) {
-      const formParams = new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri
-      }).toString();
+    const formParams = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri
+    }).toString();
 
-      const tokenData = await new Promise((resolve, reject) => {
-        const req = https.request(
-          {
-            hostname: "discord.com",
-            port: 443,
-            path: "/api/v10/oauth2/token",
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              "Content-Length": Buffer.byteLength(formParams),
-              "User-Agent": "SADO-PROTECT-OAuth2"
-            }
-          },
-          (res) => {
-            let buf = "";
-            res.on("data", (c) => (buf += c));
-            res.on("end", () => {
-              if (res.statusCode >= 200 && res.statusCode < 300) {
-                try {
-                  resolve(JSON.parse(buf));
-                } catch (_e) {
-                  resolve(null);
-                }
-              } else {
-                reject(new Error(`Token exchange ${res.statusCode}`));
-              }
-            });
+    const tokenData = await new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          hostname: "discord.com",
+          port: 443,
+          path: "/api/v10/oauth2/token",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": Buffer.byteLength(formParams),
+            "User-Agent": "SADO-PROTECT-OAuth2"
           }
-        );
-        req.on("error", reject);
-        req.write(formParams);
-        req.end();
+        },
+        (res) => {
+          let buf = "";
+          res.on("data", (c) => (buf += c));
+          res.on("end", () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              try {
+                resolve(JSON.parse(buf));
+              } catch (_e) {
+                resolve(null);
+              }
+            } else {
+              reject(new Error(`Token exchange ${res.statusCode}`));
+            }
+          });
+        }
+      );
+      req.on("error", reject);
+      req.write(formParams);
+      req.end();
+    });
+
+    if (tokenData && tokenData.access_token) {
+      const userData = await httpsJsonRequest("https://discord.com/api/v10/users/@me", "GET", null, {
+        Authorization: `Bearer ${tokenData.access_token}`
       });
 
-      if (tokenData && tokenData.access_token) {
-        const userData = await httpsJsonRequest("https://discord.com/api/v10/users/@me", "GET", null, {
-          Authorization: `Bearer ${tokenData.access_token}`
-        });
+      if (userData && userData.id) {
+        const userId = String(userData.id);
+        const username = sanitizeText(userData.username, "Discord User");
+        const displayName = sanitizeText(userData.global_name || userData.username, username);
+        const avatarUrl = userData.avatar
+          ? `https://cdn.discordapp.com/avatars/${userId}/${userData.avatar}.png?size=128`
+          : "";
 
-        if (userData && userData.id) {
-          const userId = String(userData.id);
-          const username = sanitizeText(userData.username, "Discord User");
-          const displayName = sanitizeText(userData.global_name || userData.username, username);
-          const avatarUrl = userData.avatar
-            ? `https://cdn.discordapp.com/avatars/${userId}/${userData.avatar}.png?size=128`
-            : "";
-
-          return {
-            userId,
-            username,
-            displayName,
-            avatarUrl,
-            connectedAt: new Date().toISOString()
-          };
-        }
+        return {
+          userId,
+          username,
+          displayName,
+          avatarUrl,
+          connectedAt: new Date().toISOString()
+        };
       }
     }
   } catch (_err) {}
@@ -662,7 +660,10 @@ const buildPanelEmbed = (guildId, designObj) => {
   const design = normalizePanelDesign(designObj);
   const cleanGuildId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
-  const guildLabel = (tenant && tenant.guildName) || APP_STATE.guildName || (cleanGuildId ? `Guild ${cleanGuildId}` : "SADO HUB");
+  const guildLabel =
+    (tenant && tenant.guildName) ||
+    APP_STATE.guildName ||
+    (cleanGuildId ? `Guild ${cleanGuildId}` : "SADO HUB");
   const scriptsList = getScriptsForGuild(cleanGuildId);
   const keysList = getKeysForGuild(cleanGuildId);
   const wlList = getWhitelistForGuild(cleanGuildId);
@@ -671,7 +672,9 @@ const buildPanelEmbed = (guildId, designObj) => {
   const scriptSourceLabel = firstScript
     ? firstScript.mode === "url"
       ? `URL (${firstScript.url || "Link"})`
-      : `Fayl (${firstScript.fileName || `${firstScript.name}.lua`})`
+      : firstScript.mode === "file"
+      ? `Dosya (${firstScript.fileName || `${firstScript.name}.lua`})`
+      : `Kod (${firstScript.fileName || `${firstScript.name}.lua`})`
     : "Təyin edilməyib";
 
   const embed = {
@@ -1640,14 +1643,6 @@ const sendJsonResponse = (res, statusCode, payload) => {
   res.end(body);
 };
 
-const sendTextResponse = (res, statusCode, textBody, contentType = "text/plain; charset=utf-8") => {
-  res.writeHead(statusCode, {
-    "Content-Type": contentType,
-    "Cache-Control": "no-store"
-  });
-  res.end(textBody);
-};
-
 const readJsonBody = (req) => {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -2553,13 +2548,14 @@ const renderDashboardHtml = () => {
 
       document.getElementById("scriptsTableBody").innerHTML = scripts
         .map(function (s) {
+          const modeLabel = s.mode === "url" ? "URL" : s.mode === "file" ? "Dosya" : "Kod";
           return (
             "<tr>" +
             "<td>" +
             escapeHtml(s.name) +
             "</td>" +
             "<td>" +
-            escapeHtml(s.mode === "url" ? "URL" : "Kod") +
+            escapeHtml(modeLabel) +
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-script='" +
             escapeHtml(s.id) +
@@ -2806,6 +2802,21 @@ const renderDashboardHtml = () => {
       }
     });
 
+    const triggerSendPanel = async () => {
+      try {
+        const guildId = document.getElementById("guildIdInput").value.trim();
+        const channelId = document.getElementById("panelChannelInput").value.trim();
+        await apiRequest("/api/panel/send", "POST", { guildId, channelId });
+        showToast("Panel kanala göndərildi");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+
+    document.getElementById("sendPanelQuickBtn").addEventListener("click", triggerSendPanel);
+    document.getElementById("sendDesignedPanelBtn").addEventListener("click", triggerSendPanel);
+
     const scriptModeSelect = document.getElementById("scriptModeSelect");
     const scriptFileRow = document.getElementById("scriptFileRow");
     const scriptFileInput = document.getElementById("scriptFileInput");
@@ -2945,6 +2956,16 @@ const createHttpServer = () => {
     const pathname = reqUrl.pathname;
 
     try {
+      if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+        const html = renderDashboardHtml();
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store"
+        });
+        res.end(html);
+        return;
+      }
+
       if (method === "GET" && pathname === "/auth/discord") {
         const callbackUrl = `${baseUrl}/auth/discord/callback`;
         const hasSecret = Boolean(sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", ""));
@@ -3034,7 +3055,11 @@ const createHttpServer = () => {
           APP_STATE.panelChannelId = panelChannelId;
         }
         saveAppStateToDisk();
-        appendAuditLog("GUILD_SETTINGS", `Guild=${resolvedName || guildId || "-"} Channel=${panelChannelId || "-"}`, guildId);
+        appendAuditLog(
+          "GUILD_SETTINGS",
+          `Guild=${resolvedName || guildId || "-"} Channel=${panelChannelId || "-"}`,
+          guildId
+        );
         sendJsonResponse(res, 200, { ok: true, guildName: resolvedName });
         return;
       }
