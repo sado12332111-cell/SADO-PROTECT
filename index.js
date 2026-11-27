@@ -632,6 +632,17 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
       }
     }
   } catch (_err) {}
+  try {
+    const gListRes = await discordApiRequest(`/users/@me/guilds?limit=200`, "GET");
+    const guildArr = Array.isArray(gListRes && gListRes.data) ? gListRes.data : [];
+    const matched = guildArr.find((g) => g && String(g.id) === cleanId);
+    if (matched && sanitizeText(matched.name, "")) {
+      return {
+        id: cleanId,
+        name: sanitizeText(matched.name, "")
+      };
+    }
+  } catch (_err2) {}
   return null;
 };
 
@@ -668,10 +679,12 @@ const buildPanelEmbed = (guildId, designObj) => {
   const design = normalizePanelDesign(designObj);
   const cleanGuildId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
+  const rawTenantName = sanitizeText(tenant && tenant.guildName, "");
+  const rawGlobalName = sanitizeText(APP_STATE.guildName, "");
   const guildLabel =
-    (tenant && tenant.guildName) ||
-    APP_STATE.guildName ||
-    (cleanGuildId ? `Sunucu (${cleanGuildId})` : "SADO HUB");
+    (rawTenantName && !/^Sunucu\s*\(/i.test(rawTenantName) ? rawTenantName : "") ||
+    (rawGlobalName && !/^Sunucu\s*\(/i.test(rawGlobalName) ? rawGlobalName : "") ||
+    "SADO HUB";
   const scriptsList = getScriptsForGuild(cleanGuildId);
   const keysList = getKeysForGuild(cleanGuildId);
   const wlList = getWhitelistForGuild(cleanGuildId);
@@ -1538,10 +1551,13 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
-  if (!resolvedGuildName && APP_STATE.guildName) {
+  if (resolvedGuildName && /^Sunucu\s*\(/i.test(resolvedGuildName)) {
+    resolvedGuildName = "";
+  }
+  if (!resolvedGuildName && APP_STATE.guildName && !/^Sunucu\s*\(/i.test(APP_STATE.guildName)) {
     resolvedGuildName = sanitizeText(APP_STATE.guildName, "");
   }
-  if (cleanGuildId && tokenPresent) {
+  if (cleanGuildId) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
       resolvedGuildName = info.name;
@@ -1553,7 +1569,15 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     }
   }
   if (!resolvedGuildName && cleanGuildId) {
-    resolvedGuildName = `Sunucu (${cleanGuildId})`;
+    const knownNames = Object.values(APP_STATE.tenants || {})
+      .map((t) => sanitizeText(t && t.guildName, ""))
+      .filter((n) => n && !/^Sunucu\s*\(/i.test(n));
+    resolvedGuildName = knownNames[0] || "SADO SERVER";
+    if (tenant) {
+      tenant.guildName = resolvedGuildName;
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
+    }
   }
 
   let botAddedByInfo = tenant && tenant.botAddedBy ? tenant.botAddedBy : null;
@@ -1587,11 +1611,14 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
 
   const guildList = Object.values(APP_STATE.tenants || {})
     .filter((t) => t && t.guildId)
-    .map((t) => ({
-      guildId: t.guildId,
-      guildName: sanitizeText(t.guildName, `Sunucu (${t.guildId})`),
-      planId: getEffectivePlanForGuild(t.guildId)
-    }));
+    .map((t) => {
+      const gNameClean = sanitizeText(t.guildName, "");
+      return {
+        guildId: t.guildId,
+        guildName: gNameClean && !/^Sunucu\s*\(/i.test(gNameClean) ? gNameClean : "SADO SERVER",
+        planId: getEffectivePlanForGuild(t.guildId)
+      };
+    });
 
   const apiKeysSanitized = (APP_STATE.apiKeys || []).map((k) => ({
     id: k.id,
@@ -3128,14 +3155,14 @@ const createHttpServer = () => {
           const tenant = getTenantRecordByGuildId(guildId, true);
           if (tenant) {
             if (panelChannelId) tenant.panelChannelId = panelChannelId;
-            if (resolveDiscordBotToken()) {
-              const info = await fetchGuildInfoFromDiscord(guildId);
-              if (info && info.name) {
-                resolvedName = info.name;
-              }
+            const info = await fetchGuildInfoFromDiscord(guildId);
+            if (info && info.name) {
+              resolvedName = info.name;
             }
             if (!resolvedName) {
-              resolvedName = `Sunucu (${guildId})`;
+              const existingName = sanitizeText(tenant.guildName || APP_STATE.guildName, "");
+              resolvedName =
+                existingName && !/^Sunucu\s*\(/i.test(existingName) ? existingName : "SADO SERVER";
             }
             tenant.guildName = resolvedName;
             APP_STATE.guildName = resolvedName;
