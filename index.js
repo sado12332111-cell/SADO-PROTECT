@@ -1583,9 +1583,11 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
         syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
       }
-    } else if (tenant) {
-      tenant.guildName = "";
-      saveAppStateToDisk();
+    } else if (!resolvedGuildName && APP_STATE.guildId === cleanGuildId && sanitizeText(APP_STATE.guildName, "")) {
+      const gFallback = sanitizeText(APP_STATE.guildName, "");
+      if (!/^Sunucu\s*\(/i.test(gFallback) && !/^Discord Sunucusu\s+/i.test(gFallback)) {
+        resolvedGuildName = gFallback;
+      }
     }
   }
 
@@ -1653,7 +1655,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     guild: {
       guildId: cleanGuildId,
       guildName: resolvedGuildName,
-      displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
+      displayName: resolvedGuildName || (cleanGuildId ? "Discord Sunucusu" : "Bağlı Sunucu Yoxdur"),
       panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
       botAddedBy: botAddedByInfo
     },
@@ -2552,7 +2554,9 @@ const renderDashboardHtml = () => {
       }
 
       if (document.getElementById("headerGuildName")) {
-        const gText = guild.guildName || "Bağlı Sunucu Yoxdur";
+        const gText =
+          guild.guildName ||
+          (guild.guildId ? "Discord Sunucusu" : "Bağlı Sunucu Yoxdur");
         document.getElementById("headerGuildName").textContent = gText;
       }
       if (document.getElementById("headerPlanName")) {
@@ -2904,7 +2908,10 @@ const renderDashboardHtml = () => {
           clientState.deviceGuildId = guildId;
           localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, guildId);
         }
-        await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
+        const saveRes = await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
+        if (saveRes && saveRes.guildName && document.getElementById("headerGuildName")) {
+          document.getElementById("headerGuildName").textContent = saveRes.guildName;
+        }
         showToast("Sunucu və kanal yadda saxlandı");
         await refreshDashboardSnapshot();
       } catch (err) {
@@ -3168,11 +3175,11 @@ const createHttpServer = () => {
             if (info && info.name) {
               resolvedName = info.name;
             } else {
+              const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
               resolvedName =
-                (tenant.guildName && !/^Sunucu\s*\(/i.test(tenant.guildName)
-                  ? sanitizeText(tenant.guildName, "")
-                  : "") ||
-                `Discord Sunucusu ${guildId.slice(-4)}`;
+                prevName && !/^Sunucu\s*\(/i.test(prevName) && !/^Discord Sunucusu\s+/i.test(prevName)
+                  ? prevName
+                  : "Discord Sunucusu";
             }
             tenant.guildName = resolvedName;
             APP_STATE.guildName = resolvedName;
