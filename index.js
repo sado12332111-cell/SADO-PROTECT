@@ -658,7 +658,7 @@ const getScriptContentForUser = (
   userId = "",
   preferredScriptId = "",
   activeKeyCode = "",
-  _baseUrlOverride = ""
+  baseUrlOverride = ""
 ) => {
   const scripts = getScriptsForGuild(guildId);
   const chosen =
@@ -669,15 +669,21 @@ const getScriptContentForUser = (
   const scriptName = chosen
     ? sanitizeText(chosen.name, "SADO Script")
     : "SADO Script";
-  const safeKey = sanitizeText(activeKeyCode, "SADO-KEY").replace(/"/g, '\\"');
-  const rawBody =
-    chosen && typeof chosen.code === "string" && chosen.code.trim()
-      ? chosen.code.trim()
-      : `print("${scriptName.replace(/"/g, '\\"')} Loaded")`;
+  const scriptIdForUrl = chosen ? chosen.id : "default";
+  const baseUrl = sanitizeText(baseUrlOverride, "") || getPublicServiceBaseUrl();
+
+  const qParams = new URLSearchParams();
+  if (activeKeyCode) qParams.set("key", String(activeKeyCode));
+  if (userId) qParams.set("uid", String(userId));
+  if (guildId) qParams.set("gid", String(guildId));
+
+  const loaderUrl = `${baseUrl}/loader/${encodeURIComponent(scriptIdForUrl)}?${qParams.toString()}`;
+  const safeUrl = loaderUrl.replace(/"/g, '\\"');
+  const safeKey = sanitizeText(activeKeyCode, "").replace(/"/g, '\\"');
 
   return {
     scriptName,
-    code: `script_key="${safeKey}"\n${rawBody}`
+    code: `script_key="${safeKey}"\nloadstring(game:HttpGet("${safeUrl}"))()`
   };
 };
 
@@ -1261,7 +1267,8 @@ const handleDiscordInteraction = async (interaction) => {
           guildId,
           actorId,
           effectiveScriptId,
-          activeKeyLabel
+          activeKeyLabel,
+          getPublicServiceBaseUrl()
         );
         const safeCode = String(scriptInfo.code || "").slice(0, 1800);
         const copyBtnCustomId = buildSafeCustomId("btn_copy_script", effectiveScriptId);
@@ -1297,7 +1304,8 @@ const handleDiscordInteraction = async (interaction) => {
           guildId,
           actorId,
           boundScriptId || (userWl ? userWl.scriptId || "" : ""),
-          userWl ? userWl.keyCode || "" : ""
+          userWl ? userWl.keyCode || "" : "",
+          getPublicServiceBaseUrl()
         );
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -3594,16 +3602,6 @@ const createHttpServer = () => {
           wlList.push(wlEntry);
         }
 
-        if (wlEntry && clientHwid) {
-          if (wlEntry.hwid && wlEntry.hwid !== clientHwid) {
-            sendLuaError("HWID uyusmur! Discord panelden Reset HWID edin.");
-            return;
-          }
-          if (!wlEntry.hwid) {
-            wlEntry.hwid = clientHwid;
-          }
-        }
-
         if (matchedGuildId) {
           const tenant = getTenantRecordByGuildId(matchedGuildId, true);
           if (tenant) {
@@ -3627,12 +3625,31 @@ const createHttpServer = () => {
           sendLuaError("Bu key ucun hec bir script tapilmadi!");
           return;
         }
+
         const safeKeyEsc = providedKey.replace(/"/g, '\\"');
-        const bodyText =
-          typeof targetScript.code === "string" && targetScript.code.trim()
-            ? targetScript.code.trim()
-            : `print("${sanitizeText(targetScript.name, "SADO Script").replace(/"/g, '\\"')} Loaded")`;
-        const protectedPayload = `script_key="${safeKeyEsc}"\n${bodyText}`;
+        let bodyText = "";
+        if (targetScript.mode === "url" && targetScript.url) {
+          try {
+            bodyText = await fetchRemoteLuaText(targetScript.url);
+          } catch (remoteErr) {
+            sendLuaError(remoteErr.message || "Uzaq script yuklenmedi!");
+            return;
+          }
+        } else {
+          bodyText =
+            typeof targetScript.code === "string" && targetScript.code.trim()
+              ? targetScript.code.trim()
+              : `print("${sanitizeText(targetScript.name, "SADO Script").replace(/"/g, '\\"')} Loaded")`;
+        }
+
+        const protectedPayload = [
+          `script_key="${safeKeyEsc}"`,
+          `if getgenv then getgenv().script_key="${safeKeyEsc}" end`,
+          `local _ok, _err = pcall(function()`,
+          bodyText,
+          `end)`,
+          `if not _ok then warn("[SADO PROTECT] " .. tostring(_err)) end`
+        ].join("\n");
 
         res.writeHead(200, {
           "Content-Type": "text/plain; charset=utf-8",
