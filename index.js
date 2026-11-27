@@ -957,6 +957,29 @@ const handleDiscordInteraction = async (interaction) => {
       };
 
       if (cmdName === "panel") {
+        if (!actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ İstifadəçi ID-si (User ID) müəyyən edilə bilmədi.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const bl = getBlacklistForGuild(guildId);
+        if (bl.some((b) => String(b.discordId) === actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ Sizin ID (\`${actorId}\`) Blacklist-dədir, panel əmri bloklandı.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const chosenScriptId = sanitizeText(String(getOpt("script") || ""), "");
         const targetCh = sanitizeSnowflakeId(
           interaction.channel_id ||
@@ -964,10 +987,23 @@ const handleDiscordInteraction = async (interaction) => {
             APP_STATE.panelChannelId ||
             ""
         );
+
+        if (!targetCh) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Panel göndəriləcək kanal ID-si tapılmadı.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        appendAuditLog("CMD_PANEL", `UserID=${actorId} ChannelID=${targetCh}`, guildId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⏳ Panel <#${targetCh}> kanalına göndərilir...`,
+            content: `⏳ Panel (<@${actorId}> / ID: \`${actorId}\`) <#${targetCh}> kanalına göndərilir...`,
             flags: 64
           }
         });
@@ -976,7 +1012,41 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "key") {
+        if (!actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ İstifadəçi ID-si (User ID) müəyyən edilə bilmədi.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const bl = getBlacklistForGuild(guildId);
+        if (bl.some((b) => String(b.discordId) === actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ ID \`${actorId}\` Blacklist-dədir! Açar aktivləşdirilə bilməz.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const inputKey = sanitizeText(String(getOpt("key") || ""), "").toUpperCase();
+        if (!inputKey) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa düzgün lisenziya açarı daxil edin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const keys = getKeysForGuild(guildId);
         const foundKey = keys.find(
           (k) => String(k.code || "").toUpperCase() === inputKey && !k.revoked
@@ -986,6 +1056,17 @@ const handleDiscordInteraction = async (interaction) => {
             type: 4,
             data: {
               content: "❌ Daxil etdiyiniz açar yanlışdır, etibarsızdır və ya silinib.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        if (foundKey.claimedBy && String(foundKey.claimedBy) !== actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Bu açar artıq başqa istifadəçi ID-sinə (\`${foundKey.claimedBy}\`) bağlıdır.`,
               flags: 64
             }
           });
@@ -1004,6 +1085,7 @@ const handleDiscordInteraction = async (interaction) => {
           keyCode: foundKey.code,
           scriptId: foundKey.scriptId || "",
           hwid: existingIdx >= 0 ? wl[existingIdx].hwid || "" : "",
+          lockedHwid: existingIdx >= 0 ? wl[existingIdx].lockedHwid || "" : "",
           addedAt: new Date().toISOString()
         };
         if (existingIdx >= 0) {
@@ -1014,14 +1096,17 @@ const handleDiscordInteraction = async (interaction) => {
 
         const tenant = guildId ? getTenantRecordByGuildId(guildId, true) : null;
         if (tenant) {
+          tenant.keys = keys;
+          tenant.whitelist = wl;
           syncTenantIntoGlobalIfPrimary(tenant);
         }
         saveAppStateToDisk();
+        appendAuditLog("CMD_REDEEM_KEY", `UserID=${actorId} Key=${foundKey.code}`, guildId);
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `✅ Açar (\`${foundKey.code}\`) uğurla aktivləşdirildi və **${actorTag}** Whitelist-ə əlavə edildi!`,
+            content: `✅ Açar (\`${foundKey.code}\`) uğurla aktivləşdirildi və **${actorTag}** (\`ID: ${actorId}\`) Whitelist-ə əlavə edildi!`,
             flags: 64
           }
         });
@@ -1030,12 +1115,24 @@ const handleDiscordInteraction = async (interaction) => {
 
       if (cmdName === "whitelist") {
         const rawUserVal = getOpt("user");
-        const targetUserId = sanitizeSnowflakeId(rawUserVal || actorId);
+        const targetUserId = sanitizeSnowflakeId(rawUserVal || "");
         if (!targetUserId) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: "❌ Zəhmət olmasa sunucudan bir istifadəçi seçin.",
+              content: "❌ Zəhmət olmasa düzgün istifadəçi (User ID) seçin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const bl = getBlacklistForGuild(guildId);
+        if (bl.some((b) => String(b.discordId) === targetUserId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ \`ID: ${targetUserId}\` Blacklist-dədir! Əvvəlcə Blacklist-dən çıxarın.`,
               flags: 64
             }
           });
@@ -1090,6 +1187,9 @@ const handleDiscordInteraction = async (interaction) => {
             createdAt: new Date().toISOString()
           };
           keys.push(existingValidKey);
+        } else {
+          existingValidKey.claimedBy = targetUserId;
+          existingValidKey.claimedByTag = pickedUserTag;
         }
 
         const record = {
@@ -1098,6 +1198,7 @@ const handleDiscordInteraction = async (interaction) => {
           keyCode: existingValidKey.code,
           scriptId: effectiveScriptId,
           hwid: idx >= 0 ? wl[idx].hwid || "" : "",
+          lockedHwid: idx >= 0 ? wl[idx].lockedHwid || "" : "",
           addedAt: new Date().toISOString()
         };
         if (idx >= 0) wl[idx] = record;
@@ -1113,13 +1214,13 @@ const handleDiscordInteraction = async (interaction) => {
           APP_STATE.whitelist = wl;
         }
         saveAppStateToDisk();
-        appendAuditLog("AUTO_WHITELIST_KEY", `${pickedUserTag} -> ${existingValidKey.code}`, guildId);
+        appendAuditLog("AUTO_WHITELIST_KEY", `UserID=${targetUserId} (${pickedUserTag}) -> ${existingValidKey.code}`, guildId);
 
         const scriptText = chosenScriptObj ? ` (**${chosenScriptObj.name}** scriptinə)` : "";
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `🛡️ <@${targetUserId}>${scriptText} Whitelist-ə əlavə olundu!\n🔑 Avtomatik Key yaradıldı: \`${existingValidKey.code}\``,
+            content: `🛡️ <@${targetUserId}> (\`ID: ${targetUserId}\`)${scriptText} Whitelist-ə əlavə olundu!\n🔑 Avtomatik Key yaradıldı: \`${existingValidKey.code}\``,
             flags: 64
           }
         });
@@ -1128,7 +1229,19 @@ const handleDiscordInteraction = async (interaction) => {
 
       if (cmdName === "unwhitelist") {
         const targetUserId = sanitizeSnowflakeId(String(getOpt("user") || ""));
+        if (!targetUserId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa silinəcək istifadəçinin düzgün User ID-sini seçin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const wl = getWhitelistForGuild(guildId);
+        const existed = wl.some((w) => String(w.discordId) === targetUserId);
         const nextWl = wl.filter((w) => String(w.discordId) !== targetUserId);
         if (guildId) {
           const tenant = getTenantRecordByGuildId(guildId, true);
@@ -1140,11 +1253,14 @@ const handleDiscordInteraction = async (interaction) => {
           APP_STATE.whitelist = nextWl;
         }
         saveAppStateToDisk();
+        appendAuditLog("CMD_UNWHITELIST", `TargetID=${targetUserId} ByID=${actorId}`, guildId);
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `🗑️ <@${targetUserId}> Whitelist-dən çıxarıldı.`,
+            content: existed
+              ? `🗑️ <@${targetUserId}> (\`ID: ${targetUserId}\`) Whitelist-dən çıxarıldı.`
+              : `ℹ️ \`ID: ${targetUserId}\` artıq Whitelist-də deyildi.`,
             flags: 64
           }
         });
@@ -1152,6 +1268,17 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "resethwid") {
+        if (!actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const wl = getWhitelistForGuild(guildId);
         const keys = getKeysForGuild(guildId);
         const entry = wl.find((w) => String(w.discordId) === actorId);
@@ -1174,11 +1301,11 @@ const handleDiscordInteraction = async (interaction) => {
           }
         }
         saveAppStateToDisk();
-        appendAuditLog("RESET_HWID_CMD", actorTag, guildId);
+        appendAuditLog("RESET_HWID_CMD", `UserID=${actorId} (${actorTag})`, guildId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⚙️ **${actorTag}** üçün HWID sıfırlandı! Növbəti dəfə ilk açdığınız cihaza kilidlənəcək.`,
+            content: `⚙️ **${actorTag}** (\`ID: ${actorId}\`) üçün HWID sıfırlandı! Növbəti dəfə ilk açdığınız cihaza kilidlənəcək.`,
             flags: 64
           }
         });
@@ -1218,6 +1345,29 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_get_script") {
+        if (!actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const bl = getBlacklistForGuild(guildId);
+        if (bl.some((b) => String(b.discordId) === actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ ID \`${actorId}\` Blacklist-dədir, script verilmir.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const wl = getWhitelistForGuild(guildId);
         const keys = getKeysForGuild(guildId);
         const userWl = wl.find(
@@ -3608,9 +3758,11 @@ const createHttpServer = () => {
 
         const effectiveHwid =
           rawHeaderHwid ||
-          (clientIp
-            ? `NET-${crypto.createHash("sha256").update(`${clientIp}|${uaHeader}`).digest("hex").slice(0, 24)}`
-            : "");
+          `DEV-${crypto
+            .createHash("sha256")
+            .update(`${clientIp || "local"}|${uaHeader || "exec"}`)
+            .digest("hex")
+            .slice(0, 24)}`;
 
         let matchedGuildId = providedGid;
         let matchedKey = null;
@@ -3696,27 +3848,27 @@ const createHttpServer = () => {
           ""
         );
 
-        if (effectiveHwid) {
-          if (!boundHwid) {
-            if (wlEntry) {
-              wlEntry.hwid = effectiveHwid;
-              wlEntry.lockedHwid = effectiveHwid;
-            }
-            if (matchedKey) {
-              matchedKey.hwid = effectiveHwid;
-              matchedKey.lockedHwid = effectiveHwid;
-            }
-            appendAuditLog("HWID_LOCKED", `${effectiveUid || effectiveKey} -> ${effectiveHwid.slice(0, 14)}`, matchedGuildId);
-          } else if (boundHwid !== effectiveHwid) {
-            appendAuditLog("HWID_MISMATCH_KICK", `${effectiveUid || effectiveKey} blocked on another device`, matchedGuildId);
-            sendLuaKick("HWID basqa cihaza kilidlenib! Yeniden baglamaq ucun Reset HWID edin.");
-            return;
+        if (!boundHwid) {
+          const lockIdToSave = effectiveHwid || `LOCK-${crypto.randomBytes(6).toString("hex")}`;
+          if (wlEntry) {
+            wlEntry.hwid = lockIdToSave;
+            wlEntry.lockedHwid = lockIdToSave;
           }
+          if (matchedKey) {
+            matchedKey.hwid = lockIdToSave;
+            matchedKey.lockedHwid = lockIdToSave;
+          }
+          appendAuditLog("HWID_LOCKED", `UserID=${effectiveUid || "-"} Key=${effectiveKey} -> ${lockIdToSave.slice(0, 14)}`, matchedGuildId);
+        } else if (boundHwid !== effectiveHwid) {
+          appendAuditLog("HWID_MISMATCH_KICK", `UserID=${effectiveUid || "-"} Key=${effectiveKey} blocked on another device`, matchedGuildId);
+          sendLuaKick("HWID basqa cihaza kilidlenib! Yeniden baglamaq ucun Reset HWID edin.");
+          return;
         }
 
         if (matchedGuildId) {
           const tenant = getTenantRecordByGuildId(matchedGuildId, true);
           if (tenant) {
+            tenant.keys = Array.isArray(tenant.keys) && tenant.keys.length > 0 ? tenant.keys : getKeysForGuild(matchedGuildId);
             tenant.whitelist = wlList;
             syncTenantIntoGlobalIfPrimary(tenant);
           }
