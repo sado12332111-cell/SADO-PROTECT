@@ -684,7 +684,7 @@ const buildPanelEmbed = (guildId, designObj) => {
   const guildLabel =
     (rawTenantName && !/^Sunucu\s*\(/i.test(rawTenantName) ? rawTenantName : "") ||
     (rawGlobalName && !/^Sunucu\s*\(/i.test(rawGlobalName) ? rawGlobalName : "") ||
-    "SADO HUB";
+    "Discord Sunucusu";
   const scriptsList = getScriptsForGuild(cleanGuildId);
   const keysList = getKeysForGuild(cleanGuildId);
   const wlList = getWhitelistForGuild(cleanGuildId);
@@ -1568,17 +1568,6 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
       }
     }
   }
-  if (!resolvedGuildName && cleanGuildId) {
-    const knownNames = Object.values(APP_STATE.tenants || {})
-      .map((t) => sanitizeText(t && t.guildName, ""))
-      .filter((n) => n && !/^Sunucu\s*\(/i.test(n));
-    resolvedGuildName = knownNames[0] || "SADO SERVER";
-    if (tenant) {
-      tenant.guildName = resolvedGuildName;
-      syncTenantIntoGlobalIfPrimary(tenant);
-      saveAppStateToDisk();
-    }
-  }
 
   let botAddedByInfo = tenant && tenant.botAddedBy ? tenant.botAddedBy : null;
   if (cleanGuildId && !botAddedByInfo && tokenPresent) {
@@ -1615,7 +1604,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
       const gNameClean = sanitizeText(t.guildName, "");
       return {
         guildId: t.guildId,
-        guildName: gNameClean && !/^Sunucu\s*\(/i.test(gNameClean) ? gNameClean : "SADO SERVER",
+        guildName: gNameClean && !/^Sunucu\s*\(/i.test(gNameClean) ? gNameClean : "",
         planId: getEffectivePlanForGuild(t.guildId)
       };
     });
@@ -3158,14 +3147,9 @@ const createHttpServer = () => {
             const info = await fetchGuildInfoFromDiscord(guildId);
             if (info && info.name) {
               resolvedName = info.name;
+              tenant.guildName = resolvedName;
+              APP_STATE.guildName = resolvedName;
             }
-            if (!resolvedName) {
-              const existingName = sanitizeText(tenant.guildName || APP_STATE.guildName, "");
-              resolvedName =
-                existingName && !/^Sunucu\s*\(/i.test(existingName) ? existingName : "SADO SERVER";
-            }
-            tenant.guildName = resolvedName;
-            APP_STATE.guildName = resolvedName;
             syncTenantIntoGlobalIfPrimary(tenant);
           }
         }
