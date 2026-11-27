@@ -2856,166 +2856,166 @@ const renderDashboardHtml = () => {
 
     document.getElementById("refreshSnapshotBtn").addEventListener("click", refreshDashboardSnapshot);
 
-      document.getElementById("saveGuildSettingsBtn").addEventListener("click", async () => {
-        try {
-          const guildId = document.getElementById("guildIdInput").value.trim();
-          const panelChannelId = document.getElementById("panelChannelInput").value.trim();
-          if (guildId) {
-            clientState.deviceGuildId = guildId;
-            localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, guildId);
-          }
-          const saveRes = await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
-          if (saveRes && saveRes.guildName && document.getElementById("headerGuildName")) {
-            document.getElementById("headerGuildName").textContent = saveRes.guildName;
-          }
-          showToast("Sunucu və kanal yadda saxlandı");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
+    document.getElementById("saveGuildSettingsBtn").addEventListener("click", async () => {
+      try {
+        const guildId = document.getElementById("guildIdInput").value.trim();
+        const panelChannelId = document.getElementById("panelChannelInput").value.trim();
+        if (guildId) {
+          clientState.deviceGuildId = guildId;
+          localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, guildId);
         }
-      });
-
-      const triggerSendPanel = async () => {
-        try {
-          const guildId = document.getElementById("guildIdInput").value.trim();
-          const channelId = document.getElementById("panelChannelInput").value.trim();
-          await apiRequest("/api/panel/send", "POST", { guildId, channelId });
-          showToast("Panel kanala göndərildi");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
+        const saveRes = await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
+        if (saveRes && saveRes.guildName && document.getElementById("headerGuildName")) {
+          document.getElementById("headerGuildName").textContent = saveRes.guildName;
         }
-      };
-
-      document.getElementById("sendPanelQuickBtn").addEventListener("click", triggerSendPanel);
-      document.getElementById("sendDesignedPanelBtn").addEventListener("click", triggerSendPanel);
-
-      const scriptModeSelect = document.getElementById("scriptModeSelect");
-      const scriptFileRow = document.getElementById("scriptFileRow");
-      const scriptFileInput = document.getElementById("scriptFileInput");
-      if (scriptModeSelect && scriptFileRow) {
-        scriptModeSelect.addEventListener("change", () => {
-          scriptFileRow.style.display = scriptModeSelect.value === "file" ? "flex" : "none";
-        });
+        showToast("Sunucu və kanal yadda saxlandı");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
       }
-      if (scriptFileInput) {
-        scriptFileInput.addEventListener("change", async () => {
-          const file = scriptFileInput.files && scriptFileInput.files[0];
-          if (!file) return;
-          const text = await file.text();
-          document.getElementById("scriptCodeInput").value = text;
-          const nameInp = document.getElementById("scriptNameInput");
-          if (nameInp && !nameInp.value.trim()) {
-            nameInp.value = file.name.replace(/\.[^/.]+$/, "");
-          }
-          showToast("Dosya yükləndi: " + file.name);
-        });
+    });
+
+    const triggerSendPanel = async () => {
+      try {
+        const guildId = document.getElementById("guildIdInput").value.trim();
+        const channelId = document.getElementById("panelChannelInput").value.trim();
+        await apiRequest("/api/panel/send", "POST", { guildId, channelId });
+        showToast("Panel kanala göndərildi");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
       }
+    };
 
-      document.getElementById("createScriptBtn").addEventListener("click", async () => {
-        try {
-          const name = document.getElementById("scriptNameInput").value.trim();
-          const mode = document.getElementById("scriptModeSelect").value;
-          const url = document.getElementById("scriptUrlInput").value.trim();
-          const code = document.getElementById("scriptCodeInput").value;
-          const fileName =
-            scriptFileInput && scriptFileInput.files && scriptFileInput.files[0]
-              ? scriptFileInput.files[0].name
-              : "";
-          await apiRequest("/api/scripts", "POST", { name, mode, url, code, fileName });
-          document.getElementById("scriptNameInput").value = "";
-          document.getElementById("scriptUrlInput").value = "";
-          document.getElementById("scriptCodeInput").value = "";
-          if (scriptFileInput) scriptFileInput.value = "";
-          showToast("Script yaradıldı");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
-        }
+    document.getElementById("sendPanelQuickBtn").addEventListener("click", triggerSendPanel);
+    document.getElementById("sendDesignedPanelBtn").addEventListener("click", triggerSendPanel);
+
+    const scriptModeSelect = document.getElementById("scriptModeSelect");
+    const scriptFileRow = document.getElementById("scriptFileRow");
+    const scriptFileInput = document.getElementById("scriptFileInput");
+    if (scriptModeSelect && scriptFileRow) {
+      scriptModeSelect.addEventListener("change", () => {
+        scriptFileRow.style.display = scriptModeSelect.value === "file" ? "flex" : "none";
       });
-
-      document.getElementById("createLicenseKeyBtn").addEventListener("click", async () => {
-        try {
-          const code = document.getElementById("keyCustomCodeInput").value.trim();
-          const scriptId = document.getElementById("keyScriptSelect").value;
-          await apiRequest("/api/keys", "POST", { code, scriptId });
-          document.getElementById("keyCustomCodeInput").value = "";
-          showToast("Lisenziya keyi yaradıldı");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
+    }
+    if (scriptFileInput) {
+      scriptFileInput.addEventListener("change", async () => {
+        const file = scriptFileInput.files && scriptFileInput.files[0];
+        if (!file) return;
+        const text = await file.text();
+        document.getElementById("scriptCodeInput").value = text;
+        const nameInp = document.getElementById("scriptNameInput");
+        if (nameInp && !nameInp.value.trim()) {
+          nameInp.value = file.name.replace(/\.[^/.]+$/, "");
         }
+        showToast("Dosya yükləndi: " + file.name);
       });
+    }
 
-      document.getElementById("savePanelDesignBtn").addEventListener("click", async () => {
-        try {
-          if (!clientState.draftDesign) return;
-          clientState.draftDesign.title = document.getElementById("designTitleInput").value.trim();
-          clientState.draftDesign.description = document.getElementById("designDescInput").value.trim();
-          clientState.draftDesign.footerText = document.getElementById("designFooterInput").value.trim();
-          await apiRequest("/api/panel-design", "POST", { panelDesign: clientState.draftDesign });
-          showToast("Panel dizaynı yadda saxlandı");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
-        }
-      });
-
-      document.getElementById("addWhitelistBtn").addEventListener("click", async () => {
-        try {
-          const discordId = document.getElementById("wlDiscordIdInput").value.trim();
-          const scriptId = document.getElementById("wlScriptSelect").value;
-          await apiRequest("/api/whitelist", "POST", { discordId, scriptId });
-          document.getElementById("wlDiscordIdInput").value = "";
-          showToast("Whitelist-ə əlavə edildi");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
-        }
-      });
-
-      document.getElementById("addBlacklistBtn").addEventListener("click", async () => {
-        try {
-          const discordId = document.getElementById("blDiscordIdInput").value.trim();
-          await apiRequest("/api/blacklist", "POST", { discordId });
-          document.getElementById("blDiscordIdInput").value = "";
-          showToast("Blacklist-ə əlavə edildi");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
-        }
-      });
-
-      document.getElementById("activateUserApiKeyBtn").addEventListener("click", async () => {
-        try {
-          const apiKey = document.getElementById("userApiKeyInput").value.trim();
-          const discordUserInput = document.getElementById("apiUserDiscordNameInput").value.trim();
-          await apiRequest("/api/plan/activate-api", "POST", { apiKey, discordUserInput });
-          document.getElementById("userApiKeyInput").value = "";
-          showToast("Plan API açarla bağlandı");
-          await refreshDashboardSnapshot();
-        } catch (err) {
-          showToast(err.message);
-        }
-      });
-
-      const createAdminApiBtn = document.getElementById("createAdminApiKeyBtn");
-      if (createAdminApiBtn) {
-        createAdminApiBtn.addEventListener("click", async () => {
-          try {
-            const planId = document.getElementById("adminApiPlanSelect").value;
-            const label = document.getElementById("adminApiLabelInput").value.trim();
-            await apiRequest("/api/admin/api-keys", "POST", { planId, label });
-            document.getElementById("adminApiLabelInput").value = "";
-            showToast("Yeni API açar yaradıldı");
-            await refreshDashboardSnapshot();
-          } catch (err) {
-            showToast(err.message);
-          }
-        });
+    document.getElementById("createScriptBtn").addEventListener("click", async () => {
+      try {
+        const name = document.getElementById("scriptNameInput").value.trim();
+        const mode = document.getElementById("scriptModeSelect").value;
+        const url = document.getElementById("scriptUrlInput").value.trim();
+        const code = document.getElementById("scriptCodeInput").value;
+        const fileName =
+          scriptFileInput && scriptFileInput.files && scriptFileInput.files[0]
+            ? scriptFileInput.files[0].name
+            : "";
+        await apiRequest("/api/scripts", "POST", { name, mode, url, code, fileName });
+        document.getElementById("scriptNameInput").value = "";
+        document.getElementById("scriptUrlInput").value = "";
+        document.getElementById("scriptCodeInput").value = "";
+        if (scriptFileInput) scriptFileInput.value = "";
+        showToast("Script yaradıldı");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
       }
+    });
 
-      refreshDashboardSnapshot();
+    document.getElementById("createLicenseKeyBtn").addEventListener("click", async () => {
+      try {
+        const code = document.getElementById("keyCustomCodeInput").value.trim();
+        const scriptId = document.getElementById("keyScriptSelect").value;
+        await apiRequest("/api/keys", "POST", { code, scriptId });
+        document.getElementById("keyCustomCodeInput").value = "";
+        showToast("Lisenziya keyi yaradıldı");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    document.getElementById("savePanelDesignBtn").addEventListener("click", async () => {
+      try {
+        if (!clientState.draftDesign) return;
+        clientState.draftDesign.title = document.getElementById("designTitleInput").value.trim();
+        clientState.draftDesign.description = document.getElementById("designDescInput").value.trim();
+        clientState.draftDesign.footerText = document.getElementById("designFooterInput").value.trim();
+        await apiRequest("/api/panel-design", "POST", { panelDesign: clientState.draftDesign });
+        showToast("Panel dizaynı yadda saxlandı");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    document.getElementById("addWhitelistBtn").addEventListener("click", async () => {
+      try {
+        const discordId = document.getElementById("wlDiscordIdInput").value.trim();
+        const scriptId = document.getElementById("wlScriptSelect").value;
+        await apiRequest("/api/whitelist", "POST", { discordId, scriptId });
+        document.getElementById("wlDiscordIdInput").value = "";
+        showToast("Whitelist-ə əlavə edildi");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    document.getElementById("addBlacklistBtn").addEventListener("click", async () => {
+      try {
+        const discordId = document.getElementById("blDiscordIdInput").value.trim();
+        await apiRequest("/api/blacklist", "POST", { discordId });
+        document.getElementById("blDiscordIdInput").value = "";
+        showToast("Blacklist-ə əlavə edildi");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    document.getElementById("activateUserApiKeyBtn").addEventListener("click", async () => {
+      try {
+        const apiKey = document.getElementById("userApiKeyInput").value.trim();
+        const discordUserInput = document.getElementById("apiUserDiscordNameInput").value.trim();
+        await apiRequest("/api/plan/activate-api", "POST", { apiKey, discordUserInput });
+        document.getElementById("userApiKeyInput").value = "";
+        showToast("Plan API açarla bağlandı");
+        await refreshDashboardSnapshot();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    const createAdminApiBtn = document.getElementById("createAdminApiKeyBtn");
+    if (createAdminApiBtn) {
+      createAdminApiBtn.addEventListener("click", async () => {
+        try {
+          const planId = document.getElementById("adminApiPlanSelect").value;
+          const label = document.getElementById("adminApiLabelInput").value.trim();
+          await apiRequest("/api/admin/api-keys", "POST", { planId, label });
+          document.getElementById("adminApiLabelInput").value = "";
+          showToast("Yeni API açar yaradıldı");
+          await refreshDashboardSnapshot();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+    }
+
+    refreshDashboardSnapshot();
   </script>
 </body>
 </html>`;
