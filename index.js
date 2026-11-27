@@ -1238,8 +1238,35 @@ const handleDiscordInteractionCreate = async (interaction) => {
     const matchedBtn = activeDesign.buttons.find((b) => b.id === btnId);
     const matchedScript = ctxScripts.find((s) => s.id === scriptId) || ctxScripts[0] || null;
 
+    if (btnId === "btn_redeem_key") {
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 9,
+        data: {
+          custom_id: `sado_redeem_modal:${matchedScript ? matchedScript.id : "general"}`.slice(0, 100),
+          title: "🔑 Lisenziya Açarı Aktiv Et",
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 4,
+                  custom_id: "redeem_key_input",
+                  label: "Lisenziya Açarınızı Daxil Edin",
+                  style: 1,
+                  min_length: 4,
+                  max_length: 64,
+                  placeholder: "Məs: SADO-XXXX-XXXX-XXXX",
+                  required: true
+                }
+              ]
+            }
+          ]
+        }
+      });
+      return;
+    }
+
     if (btnId === "btn_reset_hwid") {
-      await deferDiscordInteraction(interaction.id, interaction.token, true);
       const userTokens = collectUserMatchTokens(userId, senderObj);
       const userMatchedKeys = ctxKeys.filter((k) => {
         if (!k) return false;
@@ -1251,8 +1278,12 @@ const handleDiscordInteractionCreate = async (interaction) => {
       });
 
       if (userMatchedKeys.length === 0) {
-        await editDeferredDiscordResponse(appId, interaction.token, {
-          content: "❌ Sizin adınıza bağlı aktiv Key tapılmadı. Əvvəlcə `/whitelist` ilə qeydiyyatdan keçin."
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "❌ Sizin adınıza bağlı aktiv Key tapılmadı. Əvvəlcə **Reedem Key** ilə açarınızı aktivləşdirin və ya `/whitelist` ilə qeydiyyatdan keçin.",
+            flags: 64
+          }
         });
         return;
       }
@@ -1270,14 +1301,17 @@ const handleDiscordInteractionCreate = async (interaction) => {
         interactionGuildId
       );
 
-      await editDeferredDiscordResponse(appId, interaction.token, {
-        content: `🔄 **HWID Uğurla Sıfırlandı!**\n🔑 **Yenilənən Key sayı:** ${userMatchedKeys.length} ədəd\n📱 İndi scripti yeni cihazınızda işlətdikdə həmin cihaza avtomatik bağlanacaq.`
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `🔄 **HWID Uğurla Sıfırlandı!**\n🔑 **Yenilənən Key sayı:** ${userMatchedKeys.length} ədəd\n📱 İndi scripti yeni cihazınızda işlətdikdə həmin cihaza avtomatik bağlanacaq.`,
+          flags: 64
+        }
       });
       return;
     }
 
     if (btnId === "btn_get_script") {
-      await deferDiscordInteraction(interaction.id, interaction.token, true);
       const userTokens = collectUserMatchTokens(userId, senderObj);
 
       const userInBlacklist = ctxBlacklist.some((item) => {
@@ -1316,17 +1350,25 @@ const handleDiscordInteractionCreate = async (interaction) => {
       });
 
       if (userInBlacklist) {
-        await editDeferredDiscordResponse(appId, interaction.token, {
-          content: "⛔ Siz **Blacklist** siyahısındasınız. Scriptə girişiniz qadağandır."
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "⛔ Siz **Blacklist** siyahısındasınız. Scriptə girişiniz qadağandır.",
+            flags: 64
+          }
         });
         return;
       }
 
       if (!userInWhitelist) {
-        await editDeferredDiscordResponse(appId, interaction.token, {
-          content: matchedScript
-            ? `🚫 **${matchedScript.name}** scripti üçün **Whitelist** icazəniz yoxdur.`
-            : "🚫 **Whitelist** icazəniz yoxdur. Əvvəlcə admin tərəfindən `/whitelist` ilə əlavə edilməlisiniz."
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: matchedScript
+              ? `🚫 **${matchedScript.name}** scripti üçün **Whitelist** icazəniz yoxdur. Əgər açarınız varsa **Reedem Key** düyməsi ilə aktiv edin.`
+              : "🚫 **Whitelist** icazəniz yoxdur. Əgər açarınız varsa **Reedem Key** düyməsi ilə aktiv edin.",
+            flags: 64
+          }
         });
         return;
       }
@@ -1379,36 +1421,40 @@ const handleDiscordInteractionCreate = async (interaction) => {
         : `${basePublicUrl}/raw/default?key=${encodeURIComponent(userKeyRecord.key)}`;
       const loaderCode = buildShortLoaderString(rawScriptLink);
 
-      await editDeferredDiscordResponse(appId, interaction.token, {
-        embeds: [
-          {
-            title: `📜 ${matchedScript ? matchedScript.name : "SADO PROTECT Script"}`,
-            color: 2278750,
-            description: [
-              `✅ **Whitelist təsdiqləndi!**`,
-              `🔑 **Sizin Key:** \`${userKeyRecord.key}\``,
-              `🔒 **Cihaz Kilidi:** İlk açılan cihaza avtomatik bağlanır`,
-              "",
-              "**Loader Kodu:**",
-              `\`\`\`lua\n${loaderCode}\n\`\`\``
-            ].join("\n"),
-            footer: { text: "SADO PROTECT • Şəxsi Loader (Başqa cihazda işləmir)" }
-          }
-        ],
-        components: [
-          {
-            type: 1,
-            components: [
-              {
-                type: 2,
-                style: 2,
-                label: "Scripti Kopyala",
-                emoji: { name: "📋" },
-                custom_id: `sado_copy_script:${matchedScript ? matchedScript.id : "general"}:${userKeyRecord.key}`.slice(0, 100)
-              }
-            ]
-          }
-        ]
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          embeds: [
+            {
+              title: `📜 ${matchedScript ? matchedScript.name : "SADO PROTECT Script"}`,
+              color: 2278750,
+              description: [
+                `✅ **Whitelist təsdiqləndi!**`,
+                `🔑 **Sizin Key:** \`${userKeyRecord.key}\``,
+                `🔒 **Cihaz Kilidi:** İlk açılan cihaza avtomatik bağlanır`,
+                "",
+                "**Loader Kodu:**",
+                `\`\`\`lua\n${loaderCode}\n\`\`\``
+              ].join("\n"),
+              footer: { text: "SADO PROTECT • Şəxsi Loader (Başqa cihazda işləmir)" }
+            }
+          ],
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "Scripti Kopyala",
+                  emoji: { name: "📋" },
+                  custom_id: `sado_copy_script:${matchedScript ? matchedScript.id : "general"}:${userKeyRecord.key}`.slice(0, 100)
+                }
+              ]
+            }
+          ],
+          flags: 64
+        }
       });
       return;
     }
@@ -1438,7 +1484,6 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     if (btnId === "btn_my_stats") {
-      await deferDiscordInteraction(interaction.id, interaction.token, true);
       const userTokens = collectUserMatchTokens(userId, senderObj);
       const myKeys = ctxKeys.filter((k) => {
         if (!k) return false;
@@ -1455,16 +1500,20 @@ const handleDiscordInteractionCreate = async (interaction) => {
           )
         : ["Adınıza bağlı aktiv açar tapılmadı."];
 
-      await editDeferredDiscordResponse(appId, interaction.token, {
-        embeds: [
-          {
-            title: "📊 SADO PROTECT • İstifadəçi Statistikası",
-            color: 5793266,
-            description: [`**İstifadəçi:** <@${userId}>`, `**Aktiv Key Sayı:** ${myKeys.length}`, "", ...statsLines].join(
-              "\n"
-            )
-          }
-        ]
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          embeds: [
+            {
+              title: "📊 SADO PROTECT • İstifadəçi Statistikası",
+              color: 5793266,
+              description: [`**İstifadəçi:** <@${userId}>`, `**Aktiv Key Sayı:** ${myKeys.length}`, "", ...statsLines].join(
+                "\n"
+              )
+            }
+          ],
+          flags: 64
+        }
       });
       return;
     }
@@ -1480,6 +1529,141 @@ const handleDiscordInteractionCreate = async (interaction) => {
         flags: 64
       }
     });
+    return;
+  }
+
+  if (interactionType === 5) {
+    const modalCustomId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+    if (!modalCustomId.startsWith("sado_redeem_modal")) return;
+
+    const modalParts = modalCustomId.split(":");
+    const targetScriptId = modalParts[1] || "";
+    const targetScript = ctxScripts.find((s) => s.id === targetScriptId) || ctxScripts[0] || null;
+    const senderObj = (interaction.member && interaction.member.user) || interaction.user || {};
+    const userId = sanitizeSnowflakeId(senderObj.id || "0");
+    const userDisplayLabel = formatDiscordUserDisplay(senderObj, userId);
+
+    const modalRows = Array.isArray(interaction.data && interaction.data.components)
+      ? interaction.data.components
+      : [];
+    let enteredKeyRaw = "";
+    for (const row of modalRows) {
+      const comps = Array.isArray(row && row.components) ? row.components : [];
+      for (const comp of comps) {
+        if (comp && comp.custom_id === "redeem_key_input") {
+          enteredKeyRaw = sanitizeText(comp.value, "");
+        }
+      }
+    }
+
+    if (!enteredKeyRaw) {
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: "❌ Zəhmət olmasa etibarlı lisenziya açarı daxil edin.",
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    const foundKeyObj =
+      ctxKeys.find((k) => k && sanitizeText(k.key, "").toLowerCase() === enteredKeyRaw.toLowerCase()) || null;
+
+    if (!foundKeyObj) {
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: `❌ \`${enteredKeyRaw}\` açarı tapılmadı. Düzgün yazdığınızdan əmin olun.`,
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    if (foundKeyObj.active === false) {
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: "⛔ Bu açar deaktiv edilib və ya bloklanıb.",
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    const existingOwnerId = sanitizeSnowflakeId(foundKeyObj.ownerId || "");
+    if (existingOwnerId && existingOwnerId !== userId) {
+      await respondToDiscordInteraction(interaction.id, interaction.token, {
+        type: 4,
+        data: {
+          content: "⚠️ Bu lisenziya açarı artıq başqa istifadəçi tərəfindən aktivləşdirilib.",
+          flags: 64
+        }
+      });
+      return;
+    }
+
+    const resolvedScriptName =
+      sanitizeText(foundKeyObj.scriptName, "") || (targetScript ? targetScript.name : "Ümumi");
+
+    foundKeyObj.owner = userDisplayLabel;
+    foundKeyObj.ownerId = userId;
+    foundKeyObj.scriptName = resolvedScriptName;
+    foundKeyObj.redeemedAt = new Date().toISOString();
+
+    const existingWl = ctxWhitelist.find(
+      (w) =>
+        w &&
+        normalizeAccessValue(w.userId || w.value) === normalizeAccessValue(userId) &&
+        normalizeAccessValue(w.scriptName) === normalizeAccessValue(resolvedScriptName)
+    );
+
+    if (!existingWl) {
+      ctxWhitelist.unshift({
+        id: generateUniqueId("acc"),
+        value: userDisplayLabel,
+        userId,
+        scriptName: resolvedScriptName,
+        generatedKey: foundKeyObj.key,
+        createdAt: new Date().toISOString()
+      });
+    } else {
+      existingWl.value = userDisplayLabel;
+      existingWl.userId = userId;
+      existingWl.generatedKey = foundKeyObj.key;
+    }
+
+    commitCtxState();
+    appendAuditLog(
+      "KEY_REDEEMED",
+      `${userDisplayLabel} açar aktiv etdi: ${foundKeyObj.key} (${resolvedScriptName})`,
+      userDisplayLabel,
+      interactionGuildId
+    );
+
+    await respondToDiscordInteraction(interaction.id, interaction.token, {
+      type: 4,
+      data: {
+        embeds: [
+          {
+            title: "✅ Lisenziya Açarı Uğurla Aktiv Edildi!",
+            color: 2278750,
+            description: [
+              `**İstifadəçi:** <@${userId}>`,
+              `**Aktiv Edilən Key:** \`${foundKeyObj.key}\``,
+              `**Script:** \`${resolvedScriptName}\``,
+              "",
+              "İndi **Get Script** düyməsinə basaraq scriptinizi əldə edə bilərsiniz."
+            ].join("\n"),
+            footer: { text: "SADO PROTECT • Lisenziya Sistemi" },
+            timestamp: new Date().toISOString()
+          }
+        ],
+        flags: 64
+      }
+    });
+    return;
   }
 };
 
