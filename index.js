@@ -3627,25 +3627,12 @@ const createHttpServer = () => {
           sendLuaError("Bu key ucun hec bir script tapilmadi!");
           return;
         }
-        const protectedPayload = [
-          "-- [[ SADO PROTECT LOCAL LOADER ]]",
-          "local _g = (getgenv and getgenv()) or _G",
-          `if "${providedKey.replace(/"/g, '\\"')}" ~= "" then`,
-          `  _g.script_key = "${providedKey.replace(/"/g, '\\"')}"`,
-          `  script_key = "${providedKey.replace(/"/g, '\\"')}"`,
-          "end",
-          "local ok, fnOrErr = pcall(function()",
-          `  return loadstring(${JSON.stringify(luaOutput)})`,
-          "end)",
-          "if not ok or type(fnOrErr) ~= 'function' then",
-          "  warn('[SADO PROTECT] Compile xetasi: ' .. tostring(fnOrErr))",
-          "  return",
-          "end",
-          "local runOk, runErr = pcall(fnOrErr)",
-          "if not runOk then",
-          "  warn('[SADO PROTECT] Icra xetasi: ' .. tostring(runErr))",
-          "end"
-        ].join("\n");
+        const safeKeyEsc = providedKey.replace(/"/g, '\\"');
+        const bodyText =
+          typeof targetScript.code === "string" && targetScript.code.trim()
+            ? targetScript.code.trim()
+            : `print("${sanitizeText(targetScript.name, "SADO Script").replace(/"/g, '\\"')} Loaded")`;
+        const protectedPayload = `script_key="${safeKeyEsc}"\n${bodyText}`;
 
         res.writeHead(200, {
           "Content-Type": "text/plain; charset=utf-8",
