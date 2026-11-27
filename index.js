@@ -2396,9 +2396,9 @@ const renderDashboardHtml = () => {
             "<span class='preview-btn-item' style='background:" +
             bgVal +
             ";'>" +
-            escapeHtml(b.emoji || "") +
+            escapeHtmlClient(b.emoji || "") +
             " " +
-            escapeHtml(b.label) +
+            escapeHtmlClient(b.label) +
             "</span>"
           );
         })
