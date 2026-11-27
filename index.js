@@ -362,11 +362,15 @@ const getTenantRecordByGuildId = (guildIdInput) => {
   const tenants = ensureTenantStore();
   if (!tenants[cleanGid]) {
     const isPrimaryGuild = sanitizeSnowflakeId(APP_STATE.guildId) === cleanGid;
+    const primaryScripts = Array.isArray(APP_STATE.scripts) ? APP_STATE.scripts : [];
+    const belongsToPrimary =
+      isPrimaryGuild &&
+      primaryScripts.some((sc) => sanitizeSnowflakeId(sc && sc.guildId) === cleanGid);
     tenants[cleanGid] = {
       guildId: cleanGid,
       guildName: isPrimaryGuild ? sanitizeText(APP_STATE.guildName, "") : "",
       panelChannelId: isPrimaryGuild ? sanitizeSnowflakeId(APP_STATE.panelChannelId) : "",
-      scripts: isPrimaryGuild ? [...(APP_STATE.scripts || [])] : [],
+      scripts: belongsToPrimary ? [...primaryScripts] : [],
       keys: isPrimaryGuild ? [...(APP_STATE.keys || [])] : [],
       whitelist: isPrimaryGuild ? [...(APP_STATE.whitelist || [])] : [],
       blacklist: isPrimaryGuild ? [...(APP_STATE.blacklist || [])] : [],
@@ -534,51 +538,22 @@ const resolveGuildDisplayName = async (guildId, fallbackName = "") => {
 const buildSlashCommandsPayloadForGuild = (guildIdInput = "") => {
   const tenant = getTenantRecordByGuildId(guildIdInput);
   const scriptsSource = tenant ? tenant.scripts || [] : [];
-  const hasScripts = Array.isArray(scriptsSource) && scriptsSource.length > 0;
 
-  const scriptOption = hasScripts
-    ? {
-        name: "script",
-        description: "Panel açılacaq mövcud scripti seçin",
-        type: 3,
-        required: false,
-        choices: scriptsSource.slice(0, 25).map((sc) => {
-          const scName = sanitizeText(sc && sc.name, "Script").slice(0, 100);
-          return {
-            name: scName,
-            value: scName
-          };
-        })
-      }
-    : {
-        name: "script",
-        description: "Panel açılacaq mövcud scripti seçin",
-        type: 3,
-        required: false,
-        autocomplete: true
-      };
+  const scriptOption = {
+    name: "script",
+    description: "Panel açılacaq mövcud scripti seçin",
+    type: 3,
+    required: false,
+    autocomplete: true
+  };
 
-  const whitelistScriptOption = hasScripts
-    ? {
-        name: "script",
-        description: "Avto key bağlanacaq mövcud scripti seçin",
-        type: 3,
-        required: false,
-        choices: scriptsSource.slice(0, 25).map((sc) => {
-          const scName = sanitizeText(sc && sc.name, "Script").slice(0, 100);
-          return {
-            name: scName,
-            value: scName
-          };
-        })
-      }
-    : {
-        name: "script",
-        description: "Avto key bağlanacaq mövcud scripti seçin",
-        type: 3,
-        required: false,
-        autocomplete: true
-      };
+  const whitelistScriptOption = {
+    name: "script",
+    description: "Avto key bağlanacaq mövcud scripti seçin",
+    type: 3,
+    required: false,
+    autocomplete: true
+  };
 
   return [
     {
