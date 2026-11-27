@@ -2737,7 +2737,7 @@ const renderDashboardHtml = () => {
     const refreshDashboardSnapshot = async () => {
       try {
         const queryStr = isAdminQuery ? "?admin=1" : "";
-        const snap = await apiRequest(`/api/snapshot${queryStr}`, "GET");
+        const snap = await apiRequest("/api/snapshot" + queryStr, "GET");
         applySnapshotToUi(snap);
       } catch (err) {
         showToast(err.message);
@@ -2750,7 +2750,7 @@ const renderDashboardHtml = () => {
         btn.classList.add("active");
         const tabName = btn.getAttribute("data-tab");
         document.querySelectorAll(".tab-pane").forEach((p) => p.classList.remove("active"));
-        const pane = document.getElementById(`tab-${tabName}`);
+        const pane = document.getElementById("tab-" + tabName);
         if (pane) pane.classList.add("active");
       });
     });
