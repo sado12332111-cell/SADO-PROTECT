@@ -193,6 +193,73 @@ const loadInitialAppState = () => {
 
 const APP_STATE = loadInitialAppState();
 
+const BOT_RUNTIME = {
+  connected: false,
+  botUserId: "",
+  botUsername: "SADO PROTECT",
+  sessionId: "",
+  resumeGatewayUrl: "",
+  seq: null,
+  heartbeatTimer: null,
+  reconnectTimer: null,
+  lastHeartbeatAt: 0,
+  lastError: "",
+  ws: null
+};
+
+const fetchBotUserIdentity = async () => {
+  try {
+    const res = await discordApiRequest("/users/@me", "GET");
+    if (res && res.data && res.data.id) {
+      BOT_RUNTIME.botUserId = String(res.data.id);
+      BOT_RUNTIME.botUsername = sanitizeText(
+        res.data.global_name || res.data.username,
+        "SADO PROTECT"
+      );
+    }
+  } catch (_err) {}
+};
+
+const tryResolveBotAdderFromAuditLog = async (guildId) => {
+  const cleanId = sanitizeSnowflakeId(guildId);
+  if (!cleanId) return null;
+  try {
+    if (!BOT_RUNTIME.botUserId) {
+      await fetchBotUserIdentity();
+    }
+    const res = await discordApiRequest(`/guilds/${cleanId}/audit-logs?action_type=28&limit=10`, "GET");
+    const entries = res && res.data && Array.isArray(res.data.audit_log_entries)
+      ? res.data.audit_log_entries
+      : [];
+    const users = res && res.data && Array.isArray(res.data.users)
+      ? res.data.users
+      : [];
+    const match = entries.find(
+      (e) =>
+        e &&
+        String(e.target_id || "") === String(BOT_RUNTIME.botUserId || "") &&
+        e.user_id
+    );
+    if (match && match.user_id) {
+      const foundUser = users.find((u) => String(u && u.id) === String(match.user_id)) || {};
+      const uid = String(match.user_id);
+      const uname = sanitizeText(foundUser.username, `User_${uid}`);
+      const dname = sanitizeText(foundUser.global_name || foundUser.username, uname);
+      const avUrl = foundUser.avatar
+        ? `https://cdn.discordapp.com/avatars/${uid}/${foundUser.avatar}.png?size=128`
+        : "";
+      return {
+        userId: uid,
+        username: uname,
+        displayName: dname,
+        avatarUrl: avUrl,
+        connectedAt: new Date().toISOString()
+      };
+    }
+  } catch (_err) {}
+  return null;
+};
+
 const saveAppStateToDisk = () => {
   try {
     ensureStorageDirectory();
