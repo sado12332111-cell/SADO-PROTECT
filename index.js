@@ -621,7 +621,6 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
   const cleanId = sanitizeSnowflakeId(guildId);
   if (!cleanId) return null;
 
-  // 1. Discord Bot API üzərindən birbaşa sunucu məlumatını çəkməyə çalışırıq
   try {
     const res = await discordApiRequest(`/guilds/${cleanId}`, "GET");
     if (res && res.data && res.data.id) {
@@ -635,7 +634,6 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     }
   } catch (_err) {}
 
-  // 2. Əgər birbaşa /guilds/{id} alınmadısa, istifadəçi/bot sunucu siyahısından axtarırıq
   try {
     const gListRes = await discordApiRequest(`/users/@me/guilds?limit=200`, "GET");
     const guildArr = Array.isArray(gListRes && gListRes.data) ? gListRes.data : [];
@@ -648,14 +646,16 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     }
   } catch (_err2) {}
 
-  // 3. Əgər APP_STATE və ya tenants içində həmin ID üçün yadda saxlanmış ad varsa onu qaytarırıq
   const existingTenant =
     APP_STATE.tenants && typeof APP_STATE.tenants === "object" ? APP_STATE.tenants[cleanId] : null;
   if (existingTenant && sanitizeText(existingTenant.guildName, "")) {
-    return {
-      id: cleanId,
-      name: sanitizeText(existingTenant.guildName, "")
-    };
+    const cachedName = sanitizeText(existingTenant.guildName, "");
+    if (!/^Discord Sunucusu\s+/i.test(cachedName) && !/^Sunucu\s*\(/i.test(cachedName)) {
+      return {
+        id: cleanId,
+        name: cachedName
+      };
+    }
   }
 
   return null;
@@ -1568,10 +1568,10 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
-  if (!resolvedGuildName && cleanGuildId && APP_STATE.guildId === cleanGuildId) {
-    resolvedGuildName = sanitizeText(APP_STATE.guildName, "");
-  }
-  if (resolvedGuildName && /^Sunucu\s*\(/i.test(resolvedGuildName)) {
+  if (
+    resolvedGuildName &&
+    (/^Sunucu\s*\(/i.test(resolvedGuildName) || /^Discord Sunucusu\s+/i.test(resolvedGuildName))
+  ) {
     resolvedGuildName = "";
   }
   if (cleanGuildId) {
@@ -1583,19 +1583,8 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
         syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
       }
-    }
-  }
-
-  // Əgər ID daxil edilib, amma Discord API bu ID-ni qaytarmayıbsa, sunucunun adını göstəririk
-  if (cleanGuildId && !resolvedGuildName) {
-    resolvedGuildName =
-      (APP_STATE.guildName && !/^Sunucu\s*\(/i.test(APP_STATE.guildName)
-        ? sanitizeText(APP_STATE.guildName, "")
-        : "") ||
-      `Discord Sunucusu ${cleanGuildId.slice(-4)}`;
-    if (tenant) {
-      tenant.guildName = resolvedGuildName;
-      syncTenantIntoGlobalIfPrimary(tenant);
+    } else if (tenant) {
+      tenant.guildName = "";
       saveAppStateToDisk();
     }
   }
