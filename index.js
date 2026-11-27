@@ -2232,7 +2232,7 @@ const renderDashboardHtml = () => {
       draftDesign: null
     };
 
-    const escapeHtml = (str) => {
+    const escapeHtmlClient = (str) => {
       return String(str || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -2288,51 +2288,51 @@ const renderDashboardHtml = () => {
         const row = document.createElement("div");
         row.className = "design-btn-row";
         row.innerHTML =
-          '<span style="font-size:12px;color:#94a3b8;min-width:22px;">#' +
+          "<span style='font-size:12px;color:#94a3b8;min-width:22px;'>#" +
           (idx + 1) +
-          '</span>' +
-          '<input type="text" data-btn-idx="' +
+          "</span>" +
+          "<input type='text' data-btn-idx='" +
           idx +
-          '" data-field="emoji" value="' +
-          escapeHtml(btn.emoji || "") +
-          '" placeholder="Emoji" style="width:62px;text-align:center;" />' +
-          '<input type="text" data-btn-idx="' +
+          "' data-field='emoji' value='" +
+          escapeHtmlClient(btn.emoji || "") +
+          "' placeholder='Emoji' style='width:62px;text-align:center;' />" +
+          "<input type='text' data-btn-idx='" +
           idx +
-          '" data-field="label" value="' +
-          escapeHtml(btn.label) +
-          '" placeholder="Buton adı" style="flex:1;min-width:120px;" />' +
-          '<select data-btn-idx="' +
+          "' data-field='label' value='" +
+          escapeHtmlClient(btn.label) +
+          "' placeholder='Buton adı' style='flex:1;min-width:120px;' />" +
+          "<select data-btn-idx='" +
           idx +
-          '" data-field="style" style="width:155px;">' +
-          '<option value="1" ' +
+          "' data-field='style' style='width:155px;'>" +
+          "<option value='1' " +
           (btn.style === 1 ? "selected" : "") +
           ">" +
           styleLabelMap[1] +
           "</option>" +
-          '<option value="2" ' +
+          "<option value='2' " +
           (btn.style === 2 ? "selected" : "") +
           ">" +
           styleLabelMap[2] +
           "</option>" +
-          '<option value="3" ' +
+          "<option value='3' " +
           (btn.style === 3 ? "selected" : "") +
           ">" +
           styleLabelMap[3] +
           "</option>" +
-          '<option value="4" ' +
+          "<option value='4' " +
           (btn.style === 4 ? "selected" : "") +
           ">" +
           styleLabelMap[4] +
           "</option>" +
           "</select>" +
-          '<button type="button" class="btn btn-ghost btn-sm" data-move-up="' +
+          "<button type='button' class='btn btn-ghost btn-sm' data-move-up='" +
           idx +
-          '" ' +
+          "' " +
           (idx === 0 ? "disabled" : "") +
           ">▲</button>" +
-          '<button type="button" class="btn btn-ghost btn-sm" data-move-down="' +
+          "<button type='button' class='btn btn-ghost btn-sm' data-move-down='" +
           idx +
-          '" ' +
+          "' " +
           (idx === d.buttons.length - 1 ? "disabled" : "") +
           ">▼</button>";
         editorEl.appendChild(row);
@@ -2406,16 +2406,16 @@ const renderDashboardHtml = () => {
 
       previewEl.innerHTML =
         "<div style='font-weight:700;font-size:15px;'>" +
-        escapeHtml(d.title) +
+        escapeHtmlClient(d.title) +
         "</div>" +
         "<div style='font-size:13px;color:#cbd5e1;'>" +
-        escapeHtml(d.description) +
+        escapeHtmlClient(d.description) +
         "</div>" +
         "<div class='preview-btns'>" +
         btnsHtml +
         "</div>" +
         "<div style='font-size:11px;color:#94a3b8;'>" +
-        escapeHtml(d.footerText) +
+        escapeHtmlClient(d.footerText) +
         "</div>";
     };
 
@@ -2463,7 +2463,7 @@ const renderDashboardHtml = () => {
       if (accInfo.connected && accInfo.user) {
         if (cornerBtn) {
           if (accInfo.user.avatarUrl) {
-            cornerBtn.innerHTML = "<img src='" + escapeHtml(accInfo.user.avatarUrl) + "' alt='Avatar' />";
+            cornerBtn.innerHTML = "<img src='" + escapeHtmlClient(accInfo.user.avatarUrl) + "' alt='Avatar' />";
           } else {
             const ch = (accInfo.user.displayName || accInfo.user.username || "D").charAt(0).toUpperCase();
             cornerBtn.textContent = ch;
@@ -2516,8 +2516,8 @@ const renderDashboardHtml = () => {
       document.getElementById("statBlCount").textContent = String(bl.length);
 
       const scriptOptionsHtml =
-        '<option value="">Default / İlk Script</option>' +
-        scripts.map((s) => '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + "</option>").join("");
+        "<option value=''>Default / İlk Script</option>" +
+        scripts.map((s) => "<option value='" + escapeHtmlClient(s.id) + "'>" + escapeHtmlClient(s.name) + "</option>").join("");
       document.getElementById("keyScriptSelect").innerHTML = scriptOptionsHtml;
       document.getElementById("wlScriptSelect").innerHTML = scriptOptionsHtml;
 
@@ -2527,13 +2527,13 @@ const renderDashboardHtml = () => {
           return (
             "<tr>" +
             "<td>" +
-            escapeHtml(s.name) +
+            escapeHtmlClient(s.name) +
             "</td>" +
             "<td>" +
-            escapeHtml(modeLabel) +
+            escapeHtmlClient(modeLabel) +
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-script='" +
-            escapeHtml(s.id) +
+            escapeHtmlClient(s.id) +
             "'>Sil</button></td>" +
             "</tr>"
           );
@@ -2557,16 +2557,16 @@ const renderDashboardHtml = () => {
           return (
             "<tr>" +
             "<td><code>" +
-            escapeHtml(k.code) +
+            escapeHtmlClient(k.code) +
             "</code></td>" +
             "<td>" +
-            escapeHtml(k.scriptId || "Default") +
+            escapeHtmlClient(k.scriptId || "Default") +
             "</td>" +
             "<td>" +
-            escapeHtml(k.claimedByTag || "Gözləyir") +
+            escapeHtmlClient(k.claimedByTag || "Gözləyir") +
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-key='" +
-            escapeHtml(k.id) +
+            escapeHtmlClient(k.id) +
             "'>Sil</button></td>" +
             "</tr>"
           );
@@ -2590,13 +2590,13 @@ const renderDashboardHtml = () => {
           return (
             "<tr>" +
             "<td>" +
-            escapeHtml(w.discordId) +
+            escapeHtmlClient(w.discordId) +
             "</td>" +
             "<td>" +
-            escapeHtml(w.scriptId || "Default") +
+            escapeHtmlClient(w.scriptId || "Default") +
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-wl='" +
-            escapeHtml(w.discordId) +
+            escapeHtmlClient(w.discordId) +
             "'>Sil</button></td>" +
             "</tr>"
           );
@@ -2620,10 +2620,10 @@ const renderDashboardHtml = () => {
           return (
             "<tr>" +
             "<td>" +
-            escapeHtml(b.discordId) +
+            escapeHtmlClient(b.discordId) +
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-bl='" +
-            escapeHtml(b.discordId) +
+            escapeHtmlClient(b.discordId) +
             "'>Sil</button></td>" +
             "</tr>"
           );
@@ -2648,13 +2648,13 @@ const renderDashboardHtml = () => {
           return (
             "<tr>" +
             "<td>" +
-            escapeHtml(l.action) +
+            escapeHtmlClient(l.action) +
             "</td>" +
             "<td>" +
-            escapeHtml(l.details) +
+            escapeHtmlClient(l.details) +
             "</td>" +
             "<td>" +
-            escapeHtml(l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : "") +
+            escapeHtmlClient(l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : "") +
             "</td>" +
             "</tr>"
           );
@@ -2674,22 +2674,22 @@ const renderDashboardHtml = () => {
             return (
               "<tr>" +
               "<td><code>" +
-              escapeHtml(ak.code) +
+              escapeHtmlClient(ak.code) +
               "</code></td>" +
               "<td>" +
-              escapeHtml(ak.planName) +
+              escapeHtmlClient(ak.planName) +
               "</td>" +
               "<td>" +
-              escapeHtml(ak.label || "-") +
+              escapeHtmlClient(ak.label || "-") +
               "</td>" +
               "<td>" +
-              escapeHtml(whoUsed) +
+              escapeHtmlClient(whoUsed) +
               "</td>" +
               "<td>" +
               (ak.revoked ? "Ləğv edilib" : "Aktiv") +
               "</td>" +
               "<td><button class='btn btn-danger btn-sm' data-revoke-api='" +
-              escapeHtml(ak.id) +
+              escapeHtmlClient(ak.id) +
               "'>Sil</button></td>" +
               "</tr>"
             );
