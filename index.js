@@ -3497,6 +3497,24 @@ const createHttpServer = () => {
           reqUrl.searchParams.get("gid") || APP_STATE.guildId || ""
         );
 
+        const uaHeader = String(req.headers["user-agent"] || "").toLowerCase();
+        const acceptHeader = String(req.headers["accept"] || "").toLowerCase();
+        const isBrowserOrScraper =
+          !uaHeader ||
+          /mozilla|chrome|safari|firefox|edge|opera|curl|wget|python|axios|postman|insomnia/.test(
+            uaHeader
+          ) ||
+          (acceptHeader.includes("text/html") && !uaHeader.includes("roblox"));
+
+        if (isBrowserOrScraper) {
+          res.writeHead(403, {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store, no-cache, must-revalidate, private"
+          });
+          res.end('-- Protected by SADO PROTECT');
+          return;
+        }
+
         const sendLuaError = (reasonText) => {
           const safeReason = String(reasonText || "Access Denied").replace(/"/g, '\\"');
           res.writeHead(200, {
@@ -3638,10 +3656,34 @@ const createHttpServer = () => {
               : `print("${sanitizeText(targetScript.name, "SADO Script").replace(/"/g, '\\"')} Loaded")`;
         }
 
+        const xorKey = crypto.randomBytes(12).toString("hex");
+        const rawBuf = Buffer.from(bodyText, "utf8");
+        const encBytes = new Array(rawBuf.length);
+        for (let i = 0; i < rawBuf.length; i++) {
+          const kVal = xorKey.charCodeAt(i % xorKey.length);
+          encBytes[i] = (rawBuf[i] ^ kVal ^ ((i * 7 + 11) & 255)) & 255;
+        }
+
         const protectedPayload = [
-          `script_key="${safeKeyEsc}"`,
-          `if getgenv then getgenv().script_key="${safeKeyEsc}" end`,
-          bodyText
+          `local _k = "${xorKey}"`,
+          `local _d = {${encBytes.join(",")}}`,
+          "local _t = {}",
+          "for i = 1, #_d do",
+          "  local kb = string.byte(_k, ((i - 1) % #_k) + 1)",
+          "  local rv = ((i - 1) * 7 + 11) % 256",
+          "  local v = _d[i]",
+          "  local x1, x2, p = 0, 0, 1",
+          "  local a, b = v, kb",
+          "  while a > 0 or b > 0 do local aa, bb = a % 2, b % 2; if aa ~= bb then x1 = x1 + p end; a = (a - aa) / 2; b = (b - bb) / 2; p = p * 2 end",
+          "  p = 1",
+          "  while x1 > 0 or rv > 0 do local aa, bb = x1 % 2, rv % 2; if aa ~= bb then x2 = x2 + p end; x1 = (x1 - aa) / 2; rv = (rv - bb) / 2; p = p * 2 end",
+          "  _t[i] = string.char(x2)",
+          "end",
+          `script_key = "${safeKeyEsc}"`,
+          `if getgenv then getgenv().script_key = "${safeKeyEsc}" end`,
+          "local _f = loadstring(table.concat(_t))",
+          "_d = nil; _t = nil",
+          "if _f then pcall(_f) else warn('[SADO PROTECT] Load error') end"
         ].join("\n");
 
         res.writeHead(200, {
