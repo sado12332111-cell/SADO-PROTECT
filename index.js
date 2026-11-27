@@ -2322,7 +2322,7 @@ const renderDashboardHtml = () => {
       const res = await fetch(endpoint, opts);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || `Sorğu xətası (${res.status})`);
+        throw new Error(data.error || "Sorğu xətası (" + res.status + ")");
       }
       return data;
     };
