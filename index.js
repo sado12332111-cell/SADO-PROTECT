@@ -646,7 +646,6 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     }
   } catch (_err2) {}
 
-  // Discord botu o sunucuya qoşulmayıbsa və ya API adını qaytarmırsa, sunucunu aktiv kimi tanıyıb adlandırırıq
   const existingTenant =
     APP_STATE.tenants && typeof APP_STATE.tenants === "object" ? APP_STATE.tenants[cleanId] : null;
   if (existingTenant && sanitizeText(existingTenant.guildName, "")) {
@@ -654,6 +653,7 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     if (
       !/^Discord Sunucusu/i.test(cachedName) &&
       !/^Sunucu\s*\(/i.test(cachedName) &&
+      !/^Sunucu\s*#/i.test(cachedName) &&
       !/^Sunucu$/i.test(cachedName)
     ) {
       return {
@@ -669,6 +669,7 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     globalName &&
     !/^Discord Sunucusu/i.test(globalName) &&
     !/^Sunucu\s*\(/i.test(globalName) &&
+    !/^Sunucu\s*#/i.test(globalName) &&
     !/^Sunucu$/i.test(globalName)
   ) {
     return {
@@ -679,7 +680,7 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
 
   return {
     id: cleanId,
-    name: `Sunucu #${cleanId.slice(-4)}`
+    name: ""
   };
 };
 
@@ -1444,7 +1445,10 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
   if (
     resolvedGuildName &&
-    (/^Sunucu\s*\(/i.test(resolvedGuildName) || /^Discord Sunucusu/i.test(resolvedGuildName))
+    (/^Sunucu\s*\(/i.test(resolvedGuildName) ||
+      /^Sunucu\s*#/i.test(resolvedGuildName) ||
+      /^Sunucu$/i.test(resolvedGuildName) ||
+      /^Discord Sunucusu/i.test(resolvedGuildName))
   ) {
     resolvedGuildName = "";
   }
@@ -1459,7 +1463,12 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
       }
     } else if (!resolvedGuildName && APP_STATE.guildId === cleanGuildId && sanitizeText(APP_STATE.guildName, "")) {
       const gFallback = sanitizeText(APP_STATE.guildName, "");
-      if (!/^Sunucu\s*\(/i.test(gFallback) && !/^Discord Sunucusu/i.test(gFallback)) {
+      if (
+        !/^Sunucu\s*\(/i.test(gFallback) &&
+        !/^Sunucu\s*#/i.test(gFallback) &&
+        !/^Sunucu$/i.test(gFallback) &&
+        !/^Discord Sunucusu/i.test(gFallback)
+      ) {
         resolvedGuildName = gFallback;
       }
     }
@@ -1529,7 +1538,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     guild: {
       guildId: cleanGuildId,
       guildName: resolvedGuildName,
-      displayName: resolvedGuildName || (cleanGuildId ? "" : "Bağlı Sunucu Yoxdur"),
+      displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
       panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
       botAddedBy: botAddedByInfo
     },
@@ -2430,11 +2439,11 @@ const renderDashboardHtml = () => {
       if (document.getElementById("headerGuildName")) {
         const gText =
           guild.guildName &&
-          !/^Discord Sunucusu$/i.test(guild.guildName) &&
+          !/^Discord Sunucusu/i.test(guild.guildName) &&
+          !/^Sunucu\s*#/i.test(guild.guildName) &&
+          !/^Sunucu\s*\(/i.test(guild.guildName) &&
           !/^Sunucu$/i.test(guild.guildName)
             ? guild.guildName
-            : guild.guildId
-            ? "Sunucu #" + String(guild.guildId).slice(-4)
             : "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
@@ -3051,21 +3060,26 @@ const createHttpServer = () => {
           if (tenant) {
             if (panelChannelId) tenant.panelChannelId = panelChannelId;
             const info = await fetchGuildInfoFromDiscord(guildId);
-            if (info && info.name && !/^Discord Sunucusu$/i.test(info.name)) {
+            if (info && info.name) {
               resolvedName = info.name;
-            } else {
-              const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
-              resolvedName =
-                prevName &&
-                !/^Sunucu\s*\(/i.test(prevName) &&
-                !/^Discord Sunucusu/i.test(prevName) &&
-                !/^Sunucu$/i.test(prevName)
-                  ? prevName
-                  : `Sunucu #${guildId.slice(-4)}`;
-            }
-            if (resolvedName) {
               tenant.guildName = resolvedName;
               APP_STATE.guildName = resolvedName;
+            } else {
+              const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
+              if (
+                prevName &&
+                !/^Sunucu\s*\(/i.test(prevName) &&
+                !/^Sunucu\s*#/i.test(prevName) &&
+                !/^Sunucu$/i.test(prevName) &&
+                !/^Discord Sunucusu/i.test(prevName)
+              ) {
+                resolvedName = prevName;
+                tenant.guildName = resolvedName;
+                APP_STATE.guildName = resolvedName;
+              } else {
+                tenant.guildName = "";
+                APP_STATE.guildName = "";
+              }
             }
             syncTenantIntoGlobalIfPrimary(tenant);
           }
