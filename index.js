@@ -3639,25 +3639,25 @@ const createHttpServer = () => {
           sendLuaError("Bu key ucun hec bir script tapilmadi!");
           return;
         }
-
-        let luaOutput = "";
-        if (targetScript.mode === "url" && targetScript.url) {
-          luaOutput = await fetchRemoteLuaText(targetScript.url);
-        } else {
-          luaOutput = String(targetScript.code || "");
-        }
-
-        if (!luaOutput.trim()) {
-          sendLuaError("Script kodu bosdur!");
-          return;
-        }
-
-        const protectedPayload = wrapLuaWithUltraProtection(luaOutput, {
-          reportUrl: `${baseUrl}/loader-report`,
-          key: providedKey,
-          uid: effectiveUid,
-          gid: matchedGuildId
-        });
+        const protectedPayload = [
+          "-- [[ SADO PROTECT LOCAL LOADER ]]",
+          "local _g = (getgenv and getgenv()) or _G",
+          `if "${providedKey.replace(/"/g, '\\"')}" ~= "" then`,
+          `  _g.script_key = "${providedKey.replace(/"/g, '\\"')}"`,
+          `  script_key = "${providedKey.replace(/"/g, '\\"')}"`,
+          "end",
+          "local ok, fnOrErr = pcall(function()",
+          `  return loadstring(${JSON.stringify(luaOutput)})`,
+          "end)",
+          "if not ok or type(fnOrErr) ~= 'function' then",
+          "  warn('[SADO PROTECT] Compile xetasi: ' .. tostring(fnOrErr))",
+          "  return",
+          "end",
+          "local runOk, runErr = pcall(fnOrErr)",
+          "if not runOk then",
+          "  warn('[SADO PROTECT] Icra xetasi: ' .. tostring(runErr))",
+          "end"
+        ].join("\n");
 
         res.writeHead(200, {
           "Content-Type": "text/plain; charset=utf-8",
