@@ -2508,8 +2508,8 @@ const renderDashboardHtml = () => {
         const gText =
           guild.guildName &&
           !/^Discord Sunucusu/i.test(guild.guildName) &&
-          !/^Sunucu\s*#/i.test(guild.guildName) &&
-          !/^Sunucu\s*\(/i.test(guild.guildName) &&
+          !/^Sunucu\\s*#/i.test(guild.guildName) &&
+          !/^Sunucu\\s*\\(/i.test(guild.guildName) &&
           !/^Sunucu$/i.test(guild.guildName)
             ? guild.guildName
             : "Bağlı Sunucu Yoxdur";
@@ -2825,6 +2825,7 @@ const renderDashboardHtml = () => {
           document.querySelectorAll(".tab-pane").forEach((p) => p.classList.remove("active"));
           const pane = document.getElementById("tab-" + tabName);
           if (pane) pane.classList.add("active");
+          if (pane && window.innerWidth <= 820) pane.scrollIntoView({ behavior: "smooth" });
         };
       });
 
@@ -2914,7 +2915,7 @@ const renderDashboardHtml = () => {
           document.getElementById("scriptCodeInput").value = text;
           const nameInp = document.getElementById("scriptNameInput");
           if (nameInp && !nameInp.value.trim()) {
-            nameInp.value = file.name.replace(/\.[^/.]+$/, "");
+            nameInp.value = file.name.replace(/\\.[^/.]+$/, "");
           }
           showToast("Dosya yükləndi: " + file.name);
         };
