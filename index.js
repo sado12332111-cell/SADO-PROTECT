@@ -2571,8 +2571,11 @@ const renderDashboardHtml = () => {
 
       if (document.getElementById("headerGuildName")) {
         const gText =
-          guild.guildName ||
-          (guild.guildId ? "Discord Sunucusu" : "Bağlı Sunucu Yoxdur");
+          guild.guildName && !/^Discord Sunucusu$/i.test(guild.guildName)
+            ? guild.guildName
+            : guild.guildId
+            ? "Sunucu"
+            : "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
       if (document.getElementById("headerPlanName")) {
@@ -3188,12 +3191,15 @@ const createHttpServer = () => {
           if (tenant) {
             if (panelChannelId) tenant.panelChannelId = panelChannelId;
             const info = await fetchGuildInfoFromDiscord(guildId);
-            if (info && info.name) {
+            if (info && info.name && !/^Discord Sunucusu$/i.test(info.name)) {
               resolvedName = info.name;
             } else {
               const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
               resolvedName =
-                prevName && !/^Sunucu\s*\(/i.test(prevName) && !/^Discord Sunucusu/i.test(prevName)
+                prevName &&
+                !/^Sunucu\s*\(/i.test(prevName) &&
+                !/^Discord Sunucusu/i.test(prevName) &&
+                !/^Sunucu$/i.test(prevName)
                   ? prevName
                   : "";
             }
