@@ -335,6 +335,9 @@ const fetchBotUserIdentity = async () => {
         res.data.global_name || res.data.username,
         "SADO PROTECT"
       );
+      if (resolveDiscordBotToken()) {
+        BOT_RUNTIME.connected = true;
+      }
     }
   } catch (_err) {}
 };
@@ -1492,9 +1495,6 @@ const buildDiscordLoginUrl = (redirectUri = "") => {
     response_type: "code",
     scope: "identify"
   });
-  if (redirectUri) {
-    params.set("redirect_uri", redirectUri);
-  }
   return `https://discord.com/oauth2/authorize?${params.toString()}`;
 };
 
@@ -2498,7 +2498,7 @@ const renderDashboardHtml = () => {
 
       const botPill = document.getElementById("botStatusPill");
       if (botPill) {
-        if (bot.connected) {
+        if (bot.connected || bot.tokenConfigured) {
           botPill.className = "pill pill-ok";
           botPill.textContent = "● Bot: Aktivdir";
         } else {
@@ -3027,12 +3027,8 @@ const createHttpServer = () => {
       }
 
       if (method === "GET" && pathname === "/auth/discord") {
-        const callbackUrl = `${baseUrl}/auth/discord/callback`;
-        const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
-        if (clientId) {
-          const authUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
-            clientId
-          )}&response_type=code&scope=identify&redirect_uri=${encodeURIComponent(callbackUrl)}`;
+        const authUrl = buildDiscordLoginUrl();
+        if (authUrl) {
           res.writeHead(302, { Location: authUrl });
           res.end();
           return;
@@ -3492,6 +3488,7 @@ const startKeepAlivePing = () => {
 
 const httpServer = createHttpServer();
 httpServer.listen(PORT, "0.0.0.0", () => {
+  fetchBotUserIdentity();
   startDiscordGatewayListener();
   startKeepAlivePing();
 });
