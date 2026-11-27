@@ -290,6 +290,14 @@ const resolveDiscordBotToken = () => {
   return sanitizeText(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "", "");
 };
 
+const getPublicServiceBaseUrl = () => {
+  const envUrl = sanitizeText(
+    process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || "",
+    ""
+  ).replace(/\/$/, "");
+  return envUrl || "https://sado-protect.onrender.com";
+};
+
 const discordApiRequest = (endpointPath, method = "GET", bodyPayload = null, overrideToken = "") => {
   return new Promise((resolve, reject) => {
     const botToken = overrideToken || resolveDiscordBotToken();
@@ -635,61 +643,13 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
       const realName = sanitizeText(res.data.name, "");
       if (realName) {
         return {
-          id: String(res.data.id),
-          name: realName
-        };
-      }
-    }
-  } catch (_err) {}
-
-  try {
-    const gListRes = await discordApiRequest(`/users/@me/guilds?limit=200`, "GET");
-    const guildArr = Array.isArray(gListRes && gListRes.data) ? gListRes.data : [];
-    const matched = guildArr.find((g) => g && String(g.id) === cleanId);
-    if (matched && sanitizeText(matched.name, "")) {
-      return {
-        id: cleanId,
-        name: sanitizeText(matched.name, "")
-      };
-    }
-  } catch (_err2) {}
-
-  const existingTenant =
-    APP_STATE.tenants && typeof APP_STATE.tenants === "object" ? APP_STATE.tenants[cleanId] : null;
-  if (existingTenant && sanitizeText(existingTenant.guildName, "")) {
-    const cachedName = sanitizeText(existingTenant.guildName, "");
-    if (
-      !/^Discord Sunucusu/i.test(cachedName) &&
-      !/^Sunucu\s*\(/i.test(cachedName) &&
-      !/^Sunucu\s*#/i.test(cachedName) &&
-      !/^Sunucu$/i.test(cachedName)
-    ) {
-      return {
-        id: cleanId,
-        name: cachedName
-      };
-    }
-  }
-
-  const globalName = sanitizeText(APP_STATE.guildName, "");
-  if (
-    APP_STATE.guildId === cleanId &&
-    globalName &&
-    !/^Discord Sunucusu/i.test(globalName) &&
-    !/^Sunucu\s*\(/i.test(globalName) &&
-    !/^Sunucu\s*#/i.test(globalName) &&
-    !/^Sunucu$/i.test(globalName)
-  ) {
-    return {
-      id: cleanId,
-      name: globalName
-    };
-  }
-
-  return null;
-};
-
-const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = "", activeKeyCode = "") => {
+const getScriptContentForUser = (
+  guildId = "",
+  userId = "",
+  preferredScriptId = "",
+  activeKeyCode = "",
+  baseUrlOverride = ""
+) => {
   const scripts = getScriptsForGuild(guildId);
   const chosen =
     (preferredScriptId && scripts.find((s) => s.id === preferredScriptId)) ||
@@ -701,37 +661,85 @@ const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = 
     : "SADO PROTECT Script";
   const safeKey = sanitizeText(activeKeyCode, "SADO-ACTIVE-KEY");
   const safeUserId = sanitizeText(userId, "0");
+  const cleanGuildId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
+  const serviceBase = sanitizeText(baseUrlOverride, "").replace(/\/$/, "") || getPublicServiceBaseUrl();
+  const targetScriptId = chosen ? chosen.id : "default";
 
-  if (chosen && chosen.mode === "url" && chosen.url) {
-    return {
-      scriptName,
-      code: [
-        `script_key = "${safeKey}";`,
-        `-- ${scriptName} • SADO PROTECT Loader`,
-        `loadstring(game:HttpGet("${chosen.url}"))()`
-      ].join("\n")
-    };
+  const loaderParams = new URLSearchParams({
+    key: safeKey,
+    uid: safeUserId
+  });
+  if (cleanGuildId) {
+    loaderParams.set("gid", cleanGuildId);
   }
-
-  if (chosen && chosen.code && chosen.code.trim().length > 0 && chosen.code.trim().length <= 420) {
-    return {
-      scriptName,
-      code: [
-        `script_key = "${safeKey}";`,
-        `-- ${scriptName} • Protected by SADO PROTECT`,
-        chosen.code.trim()
-      ].join("\n")
-    };
-  }
+  const loaderUrl = `${serviceBase}/loader/${encodeURIComponent(targetScriptId)}?${loaderParams.toString()}`;
 
   return {
     scriptName,
     code: [
       `script_key = "${safeKey}";`,
-      `getgenv().SadoProtect = { User = "${safeUserId}", Script = "${scriptName}", Key = "${safeKey}" };`,
-      `loadstring(game:HttpGet("https://api.sado-protect.local/loader/${encodeURIComponent(chosen ? chosen.id : "default")}?uid=${encodeURIComponent(safeUserId)}"))()`
+      `loadstring(game:HttpGet("${loaderUrl}"))()`
     ].join("\n")
   };
+};
+
+const fetchRemoteLuaText = (targetUrlStr, redirectDepth = 0) => {
+  return new Promise((resolve, reject) => {
+    if (redirectDepth > 4) {
+      reject(new Error("Həddindən artıq yönləndirmə."));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = new URL(targetUrlStr);
+    } catch (_e) {
+      reject(new Error("Script URL düzgün deyil."));
+      return;
+    }
+    const clientMod = parsed.protocol === "http:" ? http : https;
+    const req = clientMod.get(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === "http:" ? 80 : 443),
+        path: `${parsed.pathname}${parsed.search}`,
+        headers: {
+          "User-Agent": "SADO-PROTECT-Loader/2.0"
+        }
+      },
+      (res) => {
+        if (
+          res.statusCode >= 300 &&
+          res.statusCode < 400 &&
+          res.headers &&
+          res.headers.location
+        ) {
+          const nextUrl = new URL(res.headers.location, parsed).toString();
+          resolve(fetchRemoteLuaText(nextUrl, redirectDepth + 1));
+          return;
+        }
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(`Uzaq server xətası (${res.statusCode})`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(10000, () => req.destroy(new Error("Uzaq script vaxt aşımına uğradı.")));
+  });
+};
+
+const generateUniqueLicenseKeyCode = () => {
+  return `SADO-${crypto.randomBytes(2).toString("hex").toUpperCase()}-${crypto
+    .randomBytes(2)
+    .toString("hex")
+    .toUpperCase()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
 };
 
 const buildSafeCustomId = (baseId, scriptId = "") => {
@@ -933,15 +941,42 @@ const handleDiscordInteraction = async (interaction) => {
 
         const targetScriptId = sanitizeText(String(getOpt("script") || ""), "");
         const scripts = getScriptsForGuild(guildId);
-        const chosenScriptObj = scripts.find((s) => s.id === targetScriptId) || null;
+        const chosenScriptObj = scripts.find((s) => s.id === targetScriptId) || scripts[0] || null;
+        const effectiveScriptId = chosenScriptObj ? chosenScriptObj.id : targetScriptId;
 
         const wl = getWhitelistForGuild(guildId);
+        const keys = getKeysForGuild(guildId);
         const idx = wl.findIndex((w) => String(w.discordId) === targetUserId);
+
+        let existingValidKey =
+          idx >= 0 && wl[idx].keyCode && wl[idx].keyCode !== "MANUAL-WL"
+            ? keys.find(
+                (k) =>
+                  String(k.code || "").toUpperCase() === String(wl[idx].keyCode || "").toUpperCase() &&
+                  !k.revoked
+              )
+            : null;
+
+        if (!existingValidKey) {
+          const autoKeyCode = generateUniqueLicenseKeyCode();
+          existingValidKey = {
+            id: `key_${crypto.randomBytes(5).toString("hex")}`,
+            code: autoKeyCode,
+            scriptId: effectiveScriptId,
+            claimedBy: targetUserId,
+            claimedByTag: pickedUserTag,
+            claimedAt: new Date().toISOString(),
+            revoked: false,
+            createdAt: new Date().toISOString()
+          };
+          keys.push(existingValidKey);
+        }
+
         const record = {
           discordId: targetUserId,
           tag: pickedUserTag,
-          keyCode: idx >= 0 ? wl[idx].keyCode || "MANUAL-WL" : "MANUAL-WL",
-          scriptId: targetScriptId || (idx >= 0 ? wl[idx].scriptId || "" : ""),
+          keyCode: existingValidKey.code,
+          scriptId: effectiveScriptId,
           hwid: idx >= 0 ? wl[idx].hwid || "" : "",
           addedAt: new Date().toISOString()
         };
@@ -949,14 +984,22 @@ const handleDiscordInteraction = async (interaction) => {
         else wl.push(record);
 
         const tenant = guildId ? getTenantRecordByGuildId(guildId, true) : null;
-        if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
+        if (tenant) {
+          tenant.keys = keys;
+          tenant.whitelist = wl;
+          syncTenantIntoGlobalIfPrimary(tenant);
+        } else {
+          APP_STATE.keys = keys;
+          APP_STATE.whitelist = wl;
+        }
         saveAppStateToDisk();
+        appendAuditLog("AUTO_WHITELIST_KEY", `${pickedUserTag} -> ${existingValidKey.code}`, guildId);
 
         const scriptText = chosenScriptObj ? ` (**${chosenScriptObj.name}** scriptinə)` : "";
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `🛡️ <@${targetUserId}>${scriptText} Whitelist-ə əlavə olundu.`,
+            content: `🛡️ <@${targetUserId}>${scriptText} Whitelist-ə əlavə olundu!\n🔑 Avtomatik Key yaradıldı: \`${existingValidKey.code}\``,
             flags: 64
           }
         });
@@ -1075,8 +1118,31 @@ const handleDiscordInteraction = async (interaction) => {
         }
 
         const effectiveScriptId = boundScriptId || userWl.scriptId || "";
-        const activeKeyLabel =
-          userWl.keyCode === "MANUAL-WL" ? "WHITELIST-KEY" : String(userWl.keyCode || "");
+        let activeKeyLabel = String(userWl.keyCode || "");
+        if (!activeKeyLabel || activeKeyLabel === "MANUAL-WL") {
+          const autoKeyCode = generateUniqueLicenseKeyCode();
+          keys.push({
+            id: `key_${crypto.randomBytes(5).toString("hex")}`,
+            code: autoKeyCode,
+            scriptId: effectiveScriptId,
+            claimedBy: actorId,
+            claimedByTag: actorTag,
+            claimedAt: new Date().toISOString(),
+            revoked: false,
+            createdAt: new Date().toISOString()
+          });
+          userWl.keyCode = autoKeyCode;
+          activeKeyLabel = autoKeyCode;
+          if (guildId) {
+            const tenant = getTenantRecordByGuildId(guildId, true);
+            if (tenant) {
+              tenant.keys = keys;
+              tenant.whitelist = wl;
+              syncTenantIntoGlobalIfPrimary(tenant);
+            }
+          }
+          saveAppStateToDisk();
+        }
         const scriptInfo = getScriptContentForUser(
           guildId,
           actorId,
@@ -3241,34 +3307,152 @@ const renderDashboardHtml = () => {
       if (createAdminApiBtn) {
         createAdminApiBtn.onclick = async () => {
           try {
-            const planId = document.getElementById("adminApiPlanSelect").value;
-            const label = document.getElementById("adminApiLabelInput").value.trim();
-            await apiRequest("/api/admin/api-keys", "POST", { planId, label });
-            document.getElementById("adminApiLabelInput").value = "";
-            showToast("Yeni API açar yaradıldı");
-            await refreshDashboardSnapshot();
-          } catch (err) {
-            showToast(err.message);
-          }
+      if (method === "GET" && pathname.startsWith("/loader/")) {
+        const requestedScriptId = decodeURIComponent(pathname.replace("/loader/", "")).trim();
+        const providedKey = sanitizeText(reqUrl.searchParams.get("key") || "", "").toUpperCase();
+        const providedUid = sanitizeSnowflakeId(reqUrl.searchParams.get("uid") || "");
+        const providedGid = sanitizeSnowflakeId(
+          reqUrl.searchParams.get("gid") || APP_STATE.guildId || ""
+        );
+
+        const clientHwid = sanitizeText(
+          String(
+            req.headers["syn-fingerprint"] ||
+              req.headers["sw-fingerprint"] ||
+              req.headers["exploit-guid"] ||
+              req.headers["flux-fingerprint"] ||
+              req.headers["krnl-hwid"] ||
+              req.headers["x-hwid"] ||
+              reqUrl.searchParams.get("hwid") ||
+              ""
+          ),
+          ""
+        ).slice(0, 180);
+
+        const sendLuaError = (reasonText) => {
+          const safeReason = String(reasonText || "Access Denied").replace(/"/g, '\\"');
+          res.writeHead(200, {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store"
+          });
+          res.end(`game:GetService("Players").LocalPlayer:Kick("[SADO PROTECT] ${safeReason}")`);
         };
+
+        if (!providedKey) {
+          sendLuaError("Acar (script_key) tapilmadi!");
+          return;
+        }
+
+        let matchedGuildId = providedGid;
+        let matchedKey = null;
+        if (matchedGuildId) {
+          matchedKey = getKeysForGuild(matchedGuildId).find(
+            (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
+          );
+        }
+        if (!matchedKey && APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
+          for (const [gid, tRec] of Object.entries(APP_STATE.tenants)) {
+            const found = (tRec.keys || []).find(
+              (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
+            );
+            if (found) {
+              matchedGuildId = gid;
+              matchedKey = found;
+              break;
+            }
+          }
+        }
+        if (!matchedKey) {
+          matchedKey = (APP_STATE.keys || []).find(
+            (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
+          );
+        }
+
+        if (!matchedKey) {
+          sendLuaError("Yanlis ve ya etibarsiz Key!");
+          return;
+        }
+
+        const effectiveUid = providedUid || sanitizeSnowflakeId(matchedKey.claimedBy || "");
+        const blList = getBlacklistForGuild(matchedGuildId);
+        if (effectiveUid && blList.some((b) => String(b.discordId) === effectiveUid)) {
+          sendLuaError("Siz Blacklist-desiniz!");
+          return;
+        }
+
+        const wlList = getWhitelistForGuild(matchedGuildId);
+        let wlEntry = wlList.find(
+          (w) =>
+            (effectiveUid && String(w.discordId) === effectiveUid) ||
+            String(w.keyCode || "").toUpperCase() === providedKey
+        );
+
+        if (!wlEntry && effectiveUid) {
+          wlEntry = {
+            discordId: effectiveUid,
+            tag: matchedKey.claimedByTag || `User_${effectiveUid}`,
+            keyCode: matchedKey.code,
+            scriptId: matchedKey.scriptId || "",
+            hwid: clientHwid || "",
+            addedAt: new Date().toISOString()
+          };
+          wlList.push(wlEntry);
+        }
+
+        if (wlEntry && clientHwid) {
+          if (wlEntry.hwid && wlEntry.hwid !== clientHwid) {
+            sendLuaError("HWID uyusmur! Discord panelden Reset HWID edin.");
+            return;
+          }
+          if (!wlEntry.hwid) {
+            wlEntry.hwid = clientHwid;
+          }
+        }
+
+        if (matchedGuildId) {
+          const tenant = getTenantRecordByGuildId(matchedGuildId, true);
+          if (tenant) {
+            tenant.whitelist = wlList;
+            syncTenantIntoGlobalIfPrimary(tenant);
+          }
+        }
+        saveAppStateToDisk();
+
+        const scripts = getScriptsForGuild(matchedGuildId);
+        const targetScript =
+          (requestedScriptId &&
+            requestedScriptId !== "default" &&
+            scripts.find((s) => s.id === requestedScriptId)) ||
+          (matchedKey.scriptId && scripts.find((s) => s.id === matchedKey.scriptId)) ||
+          (wlEntry && wlEntry.scriptId && scripts.find((s) => s.id === wlEntry.scriptId)) ||
+          scripts[0] ||
+          null;
+
+        if (!targetScript) {
+          sendLuaError("Bu key ucun hec bir script tapilmadi!");
+          return;
+        }
+
+        let luaOutput = "";
+        if (targetScript.mode === "url" && targetScript.url) {
+          luaOutput = await fetchRemoteLuaText(targetScript.url);
+        } else {
+          luaOutput = String(targetScript.code || "");
+        }
+
+        if (!luaOutput.trim()) {
+          sendLuaError("Script kodu bosdur!");
+          return;
+        }
+
+        res.writeHead(200, {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store"
+        });
+        res.end(luaOutput);
+        return;
       }
-    };
 
-    bindDashboardEvents();
-    refreshDashboardSnapshot();
-  </script>
-</body>
-</html>`;
-};
-
-const createHttpServer = () => {
-  return http.createServer(async (req, res) => {
-    const method = req.method || "GET";
-    const baseUrl = getBaseUrlFromRequest(req);
-    const reqUrl = new URL(req.url || "/", baseUrl);
-    const pathname = reqUrl.pathname;
-
-    try {
       if (method === "GET" && (pathname === "/" || pathname === "/index.html")) {
         const html = renderDashboardHtml();
         res.writeHead(200, {
@@ -3637,12 +3821,38 @@ const createHttpServer = () => {
           return;
         }
         const wl = getWhitelistForGuild(targetGuildId);
+        const keys = getKeysForGuild(targetGuildId);
         const idx = wl.findIndex((w) => String(w.discordId) === discordId);
+        const chosenScriptId = sanitizeText(body.scriptId, "");
+
+        let keyRec =
+          idx >= 0 && wl[idx].keyCode && wl[idx].keyCode !== "MANUAL-WL"
+            ? keys.find(
+                (k) =>
+                  String(k.code || "").toUpperCase() === String(wl[idx].keyCode || "").toUpperCase() &&
+                  !k.revoked
+              )
+            : null;
+
+        if (!keyRec) {
+          keyRec = {
+            id: `key_${crypto.randomBytes(5).toString("hex")}`,
+            code: generateUniqueLicenseKeyCode(),
+            scriptId: chosenScriptId,
+            claimedBy: discordId,
+            claimedByTag: `User_${discordId}`,
+            claimedAt: new Date().toISOString(),
+            revoked: false,
+            createdAt: new Date().toISOString()
+          };
+          keys.push(keyRec);
+        }
+
         const entry = {
           discordId,
           tag: `User_${discordId}`,
-          keyCode: idx >= 0 ? wl[idx].keyCode || "MANUAL-WL" : "MANUAL-WL",
-          scriptId: sanitizeText(body.scriptId, ""),
+          keyCode: keyRec.code,
+          scriptId: chosenScriptId,
           hwid: idx >= 0 ? wl[idx].hwid || "" : "",
           addedAt: new Date().toISOString()
         };
@@ -3652,15 +3862,17 @@ const createHttpServer = () => {
         if (targetGuildId) {
           const tenant = getTenantRecordByGuildId(targetGuildId, true);
           if (tenant) {
+            tenant.keys = keys;
             tenant.whitelist = wl;
             syncTenantIntoGlobalIfPrimary(tenant);
           }
         } else {
+          APP_STATE.keys = keys;
           APP_STATE.whitelist = wl;
         }
         saveAppStateToDisk();
-        appendAuditLog("ADD_WHITELIST", discordId, targetGuildId);
-        sendJsonResponse(res, 200, { ok: true });
+        appendAuditLog("ADD_WHITELIST", `${discordId} (Key: ${keyRec.code})`, targetGuildId);
+        sendJsonResponse(res, 200, { ok: true, keyCode: keyRec.code });
         return;
       }
 
