@@ -112,58 +112,46 @@ const sanitizeHexColor = (value, fallback = "#f59e0b") => {
     const g = normalized[2];
     const b = normalized[3];
     return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+const isEntryWhitelisted = (identifier, keyObj = null, extraUserObj = null, requiredScriptName = "") => {
+  const targets = collectUserMatchTokens(identifier, keyObj);
+  if (extraUserObj) {
+    const extraTokens = collectUserMatchTokens("", {
+      owner: extraUserObj.username || "",
+      ownerId: extraUserObj.id || "",
+      key: ""
+    });
+    for (const et of extraTokens) targets.add(et);
+    if (extraUserObj.global_name) targets.add(sanitizeText(extraUserObj.global_name, "").toLowerCase());
   }
-  return fallback;
-};
 
-const hexColorToDiscordInt = (hexValue) => {
-  const cleanHex = sanitizeHexColor(hexValue, "#f59e0b").replace("#", "");
-  const parsed = parseInt(cleanHex, 16);
-  return Number.isNaN(parsed) ? 0xf59e0b : parsed;
-};
+  const reqScriptLower = sanitizeText(requiredScriptName, "").toLowerCase();
+  const isSpecificScriptRequired = reqScriptLower && reqScriptLower !== "ümumi" && reqScriptLower !== "hamısı";
 
-const generateUniqueId = (prefix = "id") => {
-  const randomPart = crypto.randomBytes(6).toString("hex");
-  const timePart = Date.now().toString(36);
-  return `${prefix}_${timePart}_${randomPart}`;
-};
-
-const generateLicenseKeyString = () => {
-  const segmentA = crypto.randomBytes(2).toString("hex").toUpperCase();
-  const segmentB = crypto.randomBytes(2).toString("hex").toUpperCase();
-  const segmentC = crypto.randomBytes(2).toString("hex").toUpperCase();
-  const segmentD = crypto.randomBytes(2).toString("hex").toUpperCase();
-  return `SADO-${segmentA}-${segmentB}-${segmentC}-${segmentD}`;
-};
-
-const normalizeAccessValue = (value) => sanitizeText(value, "").toLowerCase();
-
-const collectUserMatchTokens = (identifier, keyObj = null) => {
-  const tokens = new Set();
-  const addRaw = (raw) => {
-    const clean = sanitizeText(raw, "");
-    if (!clean) return;
-    tokens.add(clean.toLowerCase());
-    const idMatch = clean.match(/\b(\d{15,22})\b/);
-    if (idMatch && idMatch[1]) {
-      tokens.add(idMatch[1].toLowerCase());
+  const list = APP_STATE.whitelist || [];
+  return list.some((item) => {
+    if (!item) return false;
+    const itemTokens = collectUserMatchTokens(item.value, {
+      owner: item.value || "",
+      ownerId: item.userId || "",
+      key: item.generatedKey || ""
+    });
+    let userMatched = false;
+    for (const t of targets) {
+      if (t && itemTokens.has(t)) {
+        userMatched = true;
+        break;
+      }
     }
-    const atMatch = clean.match(/@([^\s•)]+)/);
-    if (atMatch && atMatch[1]) {
-      tokens.add(atMatch[1].trim().toLowerCase());
-    }
-  };
+    if (!userMatched) return false;
 
-  addRaw(identifier);
-  if (keyObj) {
-    addRaw(keyObj.owner);
-    addRaw(keyObj.ownerId);
-    addRaw(keyObj.key);
-  }
-  return tokens;
+    if (!isSpecificScriptRequired) return true;
+    const itemScriptLower = sanitizeText(item.scriptName, "").toLowerCase();
+    if (!itemScriptLower || itemScriptLower === "ümumi" || itemScriptLower === "hamısı") return true;
+    return itemScriptLower === reqScriptLower;
+  });
 };
 
-const findMatchingUserKey = (callerUser = {}, callerIdentity = "") => {
+const findMatchingUserKeyForScript = (callerUser = {}, callerIdentity = "", requiredScriptName = "") => {
   const callerTokens = collectUserMatchTokens(callerIdentity, {
     owner: callerIdentity,
     ownerId: callerUser.id || "",
@@ -174,14 +162,26 @@ const findMatchingUserKey = (callerUser = {}, callerIdentity = "") => {
   if (usernameLower) callerTokens.add(usernameLower);
   if (globalNameLower) callerTokens.add(globalNameLower);
 
+  const reqScriptLower = sanitizeText(requiredScriptName, "").toLowerCase();
+  const isSpecificScriptRequired = reqScriptLower && reqScriptLower !== "ümumi" && reqScriptLower !== "hamısı";
+
   const keysList = APP_STATE.keys || [];
   for (const k of keysList) {
     if (!k || k.active === false) continue;
     const keyTokens = collectUserMatchTokens("", k);
+    let userMatched = false;
     for (const tok of callerTokens) {
       if (tok && keyTokens.has(tok)) {
-        return k;
+        userMatched = true;
+        break;
       }
+    }
+    if (!userMatched) continue;
+
+    if (!isSpecificScriptRequired) return k;
+    const keyScriptLower = sanitizeText(k.scriptName, "").toLowerCase();
+    if (!keyScriptLower || keyScriptLower === "ümumi" || keyScriptLower === "hamısı" || keyScriptLower === reqScriptLower) {
+      return k;
     }
   }
   return null;
@@ -1114,14 +1114,15 @@ const buildSlashCommandsPayload = () => {
     },
     {
       name: "unwhitelist",
-      description: "Sunucudakı istifadəçini Whitelist-dən çıxarır və girişini bağlayır",
+      description: "Sunucudakı istifadəçini seçilən script üzrə Whitelist-dən çıxarır və girişini bağlayır",
       options: [
         {
           name: "user",
           description: "Sunucudakı istifadəçini seçin",
           type: 6,
           required: true
-        }
+        },
+        whitelistScriptOption
       ]
     },
     {
@@ -1448,6 +1449,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
 
     if (cmdName === "unwhitelist") {
       const userOpt = rawOptions.find((o) => o && o.name === "user");
+      const scriptOpt = rawOptions.find((o) => o && o.name === "script");
       const manualOpt = rawOptions.find((o) => o && o.name === "istifadeci");
       const resolvedUserObj =
         (userOpt &&
@@ -1459,6 +1461,8 @@ const handleDiscordInteractionCreate = async (interaction) => {
         null;
       const targetUserId = sanitizeSnowflakeId(userOpt && userOpt.value);
       const targetUser = targetUserId || sanitizeText(manualOpt && manualOpt.value, "");
+      const chosenScriptName = sanitizeText(scriptOpt && scriptOpt.value, "");
+      const chosenScriptLower = chosenScriptName.toLowerCase();
 
       if (!targetUser) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
@@ -1478,27 +1482,36 @@ const handleDiscordInteractionCreate = async (interaction) => {
 
       const normTarget = normalizeAccessValue(targetUser);
       const normLabel = normalizeAccessValue(resolvedProfileLabel);
-      APP_STATE.whitelist = (APP_STATE.whitelist || []).filter(
-        (w) =>
-          w &&
-          normalizeAccessValue(w.value) !== normTarget &&
-          normalizeAccessValue(w.value) !== normLabel &&
-          normalizeAccessValue(w.userId) !== normTarget
-      );
-      APP_STATE.keys = (APP_STATE.keys || []).filter(
-        (k) =>
-          k &&
-          normalizeAccessValue(k.owner) !== normTarget &&
-          normalizeAccessValue(k.owner) !== normLabel &&
-          normalizeAccessValue(k.ownerId) !== normTarget
-      );
+      const matchesUserRecord = (recOwner, recOwnerId) =>
+        normalizeAccessValue(recOwner) === normTarget ||
+        normalizeAccessValue(recOwner) === normLabel ||
+        normalizeAccessValue(recOwnerId) === normTarget;
+
+      APP_STATE.whitelist = (APP_STATE.whitelist || []).filter((w) => {
+        if (!w || !matchesUserRecord(w.value, w.userId)) return true;
+        if (!chosenScriptLower) return false;
+        const wScriptLower = sanitizeText(w.scriptName, "").toLowerCase();
+        return wScriptLower !== chosenScriptLower;
+      });
+      APP_STATE.keys = (APP_STATE.keys || []).filter((k) => {
+        if (!k || !matchesUserRecord(k.owner, k.ownerId)) return true;
+        if (!chosenScriptLower) return false;
+        const kScriptLower = sanitizeText(k.scriptName, "").toLowerCase();
+        return kScriptLower !== chosenScriptLower;
+      });
       saveAppStateToDisk();
-      appendAuditLog("UNWHITELIST_CMD", `/unwhitelist: ${resolvedProfileLabel}`, "Discord");
+      appendAuditLog(
+        "UNWHITELIST_CMD",
+        `/unwhitelist: ${resolvedProfileLabel}${chosenScriptName ? ` | Script: ${chosenScriptName}` : " (Hamısı)"}`,
+        "Discord"
+      );
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🚫 **Unwhitelist edildi:** **${resolvedProfileLabel}** — girişi və key-i deaktiv edildi, artıq script verilməyəcək.`,
+          content: chosenScriptName
+            ? `🚫 **Unwhitelist edildi:** **${resolvedProfileLabel}**\n📜 **Script:** **${chosenScriptName}** — bu script üzrə girişi və key-i silindi.`
+            : `🚫 **Unwhitelist edildi:** **${resolvedProfileLabel}** — bütün scriptlər üzrə girişi və key-i deaktiv edildi.`,
           flags: 64
         }
       });
@@ -1689,8 +1702,8 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     if (customId.includes("btn_get_script")) {
-      const firstScript = (APP_STATE.scripts || [])[0] || null;
-      if (!firstScript) {
+      const targetScriptMatch = (APP_STATE.scripts || []).find((s) => s && customId.includes(`_${s.id}_`)) || (APP_STATE.scripts || [])[0] || null;
+      if (!targetScriptMatch) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
           data: {
@@ -1701,15 +1714,15 @@ const handleDiscordInteractionCreate = async (interaction) => {
         return;
       }
 
-      const userKey = findMatchingUserKey(discordUser, callerIdentity);
-      const whitelisted = isEntryWhitelisted(callerIdentity, userKey, discordUser);
+      const userKey = findMatchingUserKeyForScript(discordUser, callerIdentity, targetScriptMatch.name);
+      const whitelisted = isEntryWhitelisted(callerIdentity, userKey, discordUser, targetScriptMatch.name);
       const blacklisted = isEntryBlacklisted(callerIdentity, userKey, discordUser);
 
       if (blacklisted || (!whitelisted && !userKey)) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
           data: {
-            content: "⛔ **Giriş Qadağandır:** Script əldə etmək üçün Whitelist-də olmalı və ya aktiv Key-iniz olmalıdır.",
+            content: `⛔ **Giriş Qadağandır:** **${targetScriptMatch.name}** scripti üçün Whitelist-də deyilsiniz və ya aktiv Key-iniz yoxdur.`,
             flags: 64
           }
         });
@@ -1724,7 +1737,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
             key: activeKeyCode,
             owner: formatDiscordUserDisplay(discordUser, callerIdentity),
             ownerId: callerUserId,
-            scriptName: firstScript.name,
+            scriptName: targetScriptMatch.name,
             days: 0,
             hwid: "",
             hwidResetCount: 0,
@@ -1736,7 +1749,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
         saveAppStateToDisk();
       }
 
-      const shortLoader = buildShortLoaderString(firstScript, activeKeyCode);
+      const shortLoader = buildShortLoaderString(targetScriptMatch, activeKeyCode);
 
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
@@ -1751,7 +1764,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
                   style: 1,
                   label: "Scripti Kopyala",
                   emoji: { name: "📋" },
-                  custom_id: `sado_copy_script_${activeKeyCode}`
+                  custom_id: `sado_copy_script_${targetScriptMatch.id}_${activeKeyCode}`
                 }
               ]
             }
@@ -1763,12 +1776,16 @@ const handleDiscordInteractionCreate = async (interaction) => {
     }
 
     if (customId.startsWith("sado_copy_script_")) {
-      const firstScript = (APP_STATE.scripts || [])[0] || null;
-      const userKey = findMatchingUserKey(discordUser, callerIdentity);
-      const whitelisted = isEntryWhitelisted(callerIdentity, userKey, discordUser);
+      const matchedScriptFromCopy = (APP_STATE.scripts || []).find((s) => s && customId.includes(`_${s.id}_`)) || (APP_STATE.scripts || [])[0] || null;
+      const userKey = matchedScriptFromCopy
+        ? findMatchingUserKeyForScript(discordUser, callerIdentity, matchedScriptFromCopy.name)
+        : findMatchingUserKey(discordUser, callerIdentity);
+      const whitelisted = matchedScriptFromCopy
+        ? isEntryWhitelisted(callerIdentity, userKey, discordUser, matchedScriptFromCopy.name)
+        : isEntryWhitelisted(callerIdentity, userKey, discordUser);
       const blacklisted = isEntryBlacklisted(callerIdentity, userKey, discordUser);
 
-      if (!firstScript || blacklisted || (!whitelisted && !userKey)) {
+      if (!matchedScriptFromCopy || blacklisted || (!whitelisted && !userKey)) {
         await respondToDiscordInteraction(interaction.id, interaction.token, {
           type: 4,
           data: {
@@ -1780,7 +1797,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
       }
 
       const cleanKeyStr = userKey ? userKey.key : generateLicenseKeyString();
-      const cleanLoaderStr = buildShortLoaderString(firstScript, cleanKeyStr);
+      const cleanLoaderStr = buildShortLoaderString(matchedScriptFromCopy, cleanKeyStr);
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
@@ -2707,6 +2724,10 @@ const buildDashboardHtmlDocument = () => {
               <option value="blacklist">Blacklist</option>
             </select>
           </div>
+          <div id="accessScriptGroup" class="form-group">
+            <label class="form-label" for="accessScriptSelect">Script Seçimi (Whitelist hansı scriptə aid olsun)</label>
+            <select id="accessScriptSelect" class="form-select"></select>
+          </div>
           <div class="form-group">
             <label class="form-label" for="accessValueInput">İstifadəçi ID / HWID / Nick</label>
             <input id="accessValueInput" class="form-control" type="text" placeholder="Məsələn: 987654321098765432" />
@@ -2828,6 +2849,7 @@ const buildDashboardHtmlDocument = () => {
     const renderScriptsSection = (scriptsArr) => {
       const container = document.getElementById("scriptsListContainer");
       const keySelect = document.getElementById("keyScriptSelect");
+      const accessScriptSelect = document.getElementById("accessScriptSelect");
       if (!container) return;
 
       if (keySelect) {
@@ -2839,6 +2861,18 @@ const buildDashboardHtmlDocument = () => {
           opt.textContent = sc.name;
           if (prevVal === sc.name) opt.selected = true;
           keySelect.appendChild(opt);
+        });
+      }
+
+      if (accessScriptSelect) {
+        const prevAccessVal = accessScriptSelect.value;
+        accessScriptSelect.innerHTML = '<option value="Ümumi">Ümumi (Bütün Scriptlər)</option>';
+        (scriptsArr || []).forEach((sc) => {
+          const opt = document.createElement("option");
+          opt.value = sc.name;
+          opt.textContent = sc.name;
+          if (prevAccessVal === sc.name) opt.selected = true;
+          accessScriptSelect.appendChild(opt);
         });
       }
 
@@ -2914,6 +2948,14 @@ const buildDashboardHtmlDocument = () => {
           editNameInput.style.marginBottom = "8px";
           editNameInput.value = sc.name || "";
 
+          const editTypeSelect = document.createElement("select");
+          editTypeSelect.className = "form-select";
+          editTypeSelect.style.marginBottom = "8px";
+          editTypeSelect.innerHTML =
+            '<option value="url">URL ilə (HttpGet / Raw link)</option>' +
+            '<option value="file">Fayl ilə (.lua / .txt)</option>';
+          editTypeSelect.value = sc.sourceType === "file" ? "file" : "url";
+
           const editUrlOrCodeInput = document.createElement("textarea");
           editUrlOrCodeInput.className = "form-textarea";
           editUrlOrCodeInput.style.marginBottom = "8px";
@@ -2921,15 +2963,40 @@ const buildDashboardHtmlDocument = () => {
             ? (sc.scriptContent || "")
             : (sc.scriptUrl || "");
 
+          const editFileInput = document.createElement("input");
+          editFileInput.className = "form-control";
+          editFileInput.type = "file";
+          editFileInput.accept = ".lua,.txt,text/plain";
+          editFileInput.style.marginBottom = "8px";
+          editFileInput.style.display = editTypeSelect.value === "file" ? "block" : "none";
+
+          editTypeSelect.addEventListener("change", () => {
+            const isFileMode = editTypeSelect.value === "file";
+            editFileInput.style.display = isFileMode ? "block" : "none";
+          });
+
           const saveInlineBtn = document.createElement("button");
           saveInlineBtn.type = "button";
           saveInlineBtn.className = "btn btn-primary btn-sm";
           saveInlineBtn.textContent = "Yadda Saxla";
           saveInlineBtn.addEventListener("click", async () => {
             try {
-              const payload = { name: editNameInput.value };
-              if (sc.sourceType === "file") payload.scriptContent = editUrlOrCodeInput.value;
-              else payload.scriptUrl = editUrlOrCodeInput.value;
+              const selectedType = editTypeSelect.value === "file" ? "file" : "url";
+              const payload = {
+                name: editNameInput.value,
+                sourceType: selectedType
+              };
+              if (selectedType === "file") {
+                const pickedFile = editFileInput.files && editFileInput.files[0];
+                if (pickedFile) {
+                  payload.fileName = pickedFile.name;
+                  payload.scriptContent = await pickedFile.text();
+                } else {
+                  payload.scriptContent = editUrlOrCodeInput.value;
+                }
+              } else {
+                payload.scriptUrl = editUrlOrCodeInput.value;
+              }
               await apiRequest("/api/scripts/" + encodeURIComponent(sc.id), "PUT", payload);
               clientState.editingScriptId = "";
               showToast("Script yeniləndi");
@@ -2954,6 +3021,8 @@ const buildDashboardHtmlDocument = () => {
           inlineBtns.appendChild(cancelInlineBtn);
 
           inlineBox.appendChild(editNameInput);
+          inlineBox.appendChild(editTypeSelect);
+          inlineBox.appendChild(editFileInput);
           inlineBox.appendChild(editUrlOrCodeInput);
           inlineBox.appendChild(inlineBtns);
           card.appendChild(inlineBox);
@@ -3085,12 +3154,12 @@ const buildDashboardHtmlDocument = () => {
         rightBox.appendChild(removeBtn);
 
         top.appendChild(valEl);
-        top.appendChild(rightBox);
-
-        if (entry.generatedKey) {
+        if (entry.generatedKey || entry.scriptName) {
           const keyInfo = document.createElement("div");
           keyInfo.className = "item-meta";
-          keyInfo.textContent = "Avto Key: " + entry.generatedKey;
+          const scriptPart = entry.scriptName ? ("Script: " + entry.scriptName) : "";
+          const keyPart = entry.generatedKey ? ("Avto Key: " + entry.generatedKey) : "";
+          keyInfo.textContent = [scriptPart, keyPart].filter(Boolean).join(" | ");
           card.appendChild(top);
           card.appendChild(keyInfo);
         } else {
@@ -3368,13 +3437,18 @@ const buildDashboardHtmlDocument = () => {
       if (addAccessBtn) {
         addAccessBtn.addEventListener("click", async () => {
           const listTypeVal = ((document.getElementById("accessListTypeSelect") || {}).value || "whitelist");
+          const scriptNameVal = ((document.getElementById("accessScriptSelect") || {}).value || "Ümumi");
           const entryVal = (((document.getElementById("accessValueInput") || {}).value || "")).trim();
           if (!entryVal) {
             showToast("Dəyər daxil edin");
             return;
           }
           try {
-            await apiRequest("/api/access", "POST", { listType: listTypeVal, value: entryVal });
+            await apiRequest("/api/access", "POST", {
+              listType: listTypeVal,
+              scriptName: scriptNameVal,
+              value: entryVal
+            });
             document.getElementById("accessValueInput").value = "";
             showToast("Siyahıya əlavə olundu");
             await refreshDashboardSnapshot();
@@ -3588,9 +3662,14 @@ const handleHttpRequest = async (req, res) => {
       }
 
       const currentItem = APP_STATE.scripts[index];
+      const nextSourceType = body.sourceType === "file" ? "file" : body.sourceType === "url" ? "url" : currentItem.sourceType;
       const updatedItem = {
         ...currentItem,
         name: sanitizeText(body.name, currentItem.name),
+        sourceType: nextSourceType,
+        fileName: body.fileName !== undefined
+          ? sanitizeText(body.fileName, currentItem.fileName)
+          : (nextSourceType === "file" && !currentItem.fileName ? `${sanitizeText(body.name, currentItem.name).toLowerCase().replace(/\s+/g, "_")}.lua` : currentItem.fileName),
         scriptUrl: body.scriptUrl !== undefined ? sanitizeText(body.scriptUrl, "") : currentItem.scriptUrl,
         scriptContent: body.scriptContent !== undefined ? String(body.scriptContent) : currentItem.scriptContent,
         description: body.description !== undefined ? sanitizeText(body.description, "") : currentItem.description,
@@ -3670,6 +3749,7 @@ const handleHttpRequest = async (req, res) => {
       const body = await parseRequestJsonBody(req);
       const listType = sanitizeText(body.listType, "whitelist") === "blacklist" ? "blacklist" : "whitelist";
       const val = sanitizeText(body.value, "");
+      const chosenScriptName = sanitizeText(body.scriptName, "Ümumi");
 
       if (!val) {
         sendJsonResponse(res, 400, { error: "Dəyər daxil edilməlidir" });
@@ -3683,7 +3763,7 @@ const handleHttpRequest = async (req, res) => {
           id: generateUniqueId("key"),
           key: generatedKeyValue,
           owner: val,
-          scriptName: (APP_STATE.scripts[0] && APP_STATE.scripts[0].name) || "Ümumi",
+          scriptName: chosenScriptName,
           days: 0,
           hwid: "",
           hwidResetCount: 0,
@@ -3706,6 +3786,7 @@ const handleHttpRequest = async (req, res) => {
       const entry = {
         id: generateUniqueId("acc"),
         value: val,
+        scriptName: listType === "whitelist" ? chosenScriptName : "",
         generatedKey: generatedKeyValue,
         createdAt: new Date().toISOString()
       };
@@ -3714,7 +3795,7 @@ const handleHttpRequest = async (req, res) => {
       saveAppStateToDisk();
       appendAuditLog(
         "ACCESS_ADDED",
-        `${listType.toUpperCase()} əlavə edildi: ${val}${generatedKeyValue ? ` | Key: ${generatedKeyValue}` : ""}`,
+        `${listType.toUpperCase()} əlavə edildi: ${val}${listType === "whitelist" ? ` | Script: ${chosenScriptName}` : ""}${generatedKeyValue ? ` | Key: ${generatedKeyValue}` : ""}`,
         "Dashboard"
       );
 
@@ -3822,32 +3903,23 @@ const handleHttpRequest = async (req, res) => {
         return;
       }
 
-      const rawScriptCode = targetScript.sourceType === "file"
-        ? (targetScript.scriptContent || "")
-        : `loadstring(game:HttpGet("${targetScript.scriptUrl || ""}"))()`;
-
-      const scriptPayload = wrapScriptWithAntiLeakProtection(rawScriptCode, matchedKey.key, targetScript.name, matchedKey.hwid || "", targetScript.id);
-
-      sendJsonResponse(res, 200, {
-        allowed: true,
-        action: "allow",
-        key: matchedKey.key,
-        hwid: matchedKey.hwid || "",
-        scriptName: targetScript.name,
-        script: scriptPayload
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname.startsWith("/raw/")) {
-      if (!isRobloxExecutorRequest(req)) {
-        appendAuditLog("ANTI_LEAK_BLOCK", `Brauzer/kənar sorğu bloklandı (${pathname})`, "Anti-Leak");
-        res.writeHead(403, {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store, no-cache, must-revalidate",
-          "X-Robots-Tag": "noindex, nofollow"
+      const keyScriptLower = sanitizeText(matchedKey.scriptName, "").toLowerCase();
+      if (keyScriptLower && keyScriptLower !== "ümumi" && keyScriptLower !== "hamısı" && keyScriptLower !== sanitizeText(targetScript.name, "").toLowerCase()) {
+        sendJsonResponse(res, 403, {
+          allowed: false,
+          action: "kick",
+          reason: `Bu Key yalnız "${matchedKey.scriptName}" scripti üçündür — Kick edildi`
         });
-        res.end("-- [[ SADO PROTECT: Giriş qadağandır! Bu link yalnız Roblox Executor daxilində işləyir. ]]");
+        return;
+      }
+
+      const whitelisted = isEntryWhitelisted(identityCheck, matchedKey, null, targetScript.name);
+      if (!whitelisted && (APP_STATE.whitelist || []).length > 0) {
+        sendJsonResponse(res, 403, {
+          allowed: false,
+          action: "kick",
+          reason: `"${targetScript.name}" scripti üçün Whitelist-də deyilsiniz — Kick edildi`
+        });
         return;
       }
 
@@ -3869,10 +3941,17 @@ const handleHttpRequest = async (req, res) => {
         return;
       }
 
-      const whitelisted = isEntryWhitelisted(identityCheck, matchedKey);
+      const rawKeyScriptLower = sanitizeText(matchedKey.scriptName, "").toLowerCase();
+      if (rawKeyScriptLower && rawKeyScriptLower !== "ümumi" && rawKeyScriptLower !== "hamısı" && rawKeyScriptLower !== sanitizeText(found.name, "").toLowerCase()) {
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(buildDeviceKickLuaPayload(`Bu Key yalnız ${matchedKey.scriptName} scripti ucundur — Kick edildi`));
+        return;
+      }
+
+      const whitelisted = isEntryWhitelisted(identityCheck, matchedKey, null, found.name);
       if (!whitelisted && (APP_STATE.whitelist || []).length > 0) {
         res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(buildDeviceKickLuaPayload("Whitelist-də deyilsiniz — Kick edildi"));
+        res.end(buildDeviceKickLuaPayload(`${found.name} scripti ucun Whitelist-de deyilsiniz — Kick edildi`));
         return;
       }
 
