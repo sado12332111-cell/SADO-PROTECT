@@ -2439,14 +2439,14 @@ const renderDashboardHtml = () => {
       if (!previewEl || !clientState.draftDesign) return;
       const d = clientState.draftDesign;
       const btnsHtml = (d.buttons || [])
-        .map((b) => `<span class="btn btn-ghost btn-sm">${escapeHtml(b.emoji || "")} ${escapeHtml(b.label)}</span>`)
+        .map((b) => `<span class='btn btn-ghost btn-sm'>${escapeHtml(b.emoji || "")} ${escapeHtml(b.label)}</span>`)
         .join("");
 
       previewEl.innerHTML = `
-        <div style="font-weight:700;font-size:15px;">${escapeHtml(d.title)}</div>
-        <div style="font-size:13px;color:#cbd5e1;">${escapeHtml(d.description)}</div>
-        <div class="preview-btns">${btnsHtml}</div>
-        <div style="font-size:11px;color:#94a3b8;">${escapeHtml(d.footerText)}</div>
+        <div style='font-weight:700;font-size:15px;'>${escapeHtml(d.title)}</div>
+        <div style='font-size:13px;color:#cbd5e1;'>${escapeHtml(d.description)}</div>
+        <div class='preview-btns'>${btnsHtml}</div>
+        <div style='font-size:11px;color:#94a3b8;'>${escapeHtml(d.footerText)}</div>
       `;
     };
 
