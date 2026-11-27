@@ -2726,6 +2726,29 @@ const renderDashboardHtml = () => {
               (ak.revoked ? "Ləğv edilib" : "Aktiv") +
               "</td>" +
               "<td><button class='btn btn-danger btn-sm' data-revoke-api='" +
+              escapeHtml(ak.id) +
+              "'>Sil</button></td>" +
+              "</tr>"
+            );
+          })
+          .join("");
+
+        document.querySelectorAll("[data-revoke-api]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            try {
+              await apiRequest(
+                "/api/admin/api-keys/" + encodeURIComponent(btn.getAttribute("data-revoke-api")),
+                "DELETE"
+              );
+              showToast("API açar silindi");
+              await refreshDashboardSnapshot();
+            } catch (err) {
+              showToast(err.message);
+            }
+          });
+        });
+      }
+
       const defaultDesignFallback = {
         title: "SADO PROTECT • Lisenziya & Script Paneli",
         description:
