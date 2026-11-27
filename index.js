@@ -643,6 +643,16 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
       const realName = sanitizeText(res.data.name, "");
       if (realName) {
         return {
+          id: String(res.data.id),
+          name: realName,
+          icon: res.data.icon || ""
+        };
+      }
+    }
+  } catch (_err) {}
+  return null;
+};
+
 const getScriptContentForUser = (
   guildId = "",
   userId = "",
@@ -3307,6 +3317,36 @@ const renderDashboardHtml = () => {
       if (createAdminApiBtn) {
         createAdminApiBtn.onclick = async () => {
           try {
+            const planId = document.getElementById("adminApiPlanSelect").value;
+            const label = document.getElementById("adminApiLabelInput").value.trim();
+            await apiRequest("/api/admin/api-keys", "POST", { planId, label });
+            document.getElementById("adminApiLabelInput").value = "";
+            showToast("Yeni API açar yaradıldı");
+            await refreshDashboardSnapshot();
+          } catch (err) {
+            showToast(err.message);
+          }
+        };
+      }
+    };
+
+    document.addEventListener("DOMContentLoaded", () => {
+      bindDashboardEvents();
+      refreshDashboardSnapshot();
+    });
+  </script>
+</body>
+</html>`;
+};
+
+const createHttpServer = () => {
+  return http.createServer(async (req, res) => {
+    try {
+      const baseUrl = getBaseUrlFromRequest(req);
+      const reqUrl = new URL(req.url || "/", baseUrl);
+      const pathname = reqUrl.pathname;
+      const method = String(req.method || "GET").toUpperCase();
+
       if (method === "GET" && pathname.startsWith("/loader/")) {
         const requestedScriptId = decodeURIComponent(pathname.replace("/loader/", "")).trim();
         const providedKey = sanitizeText(reqUrl.searchParams.get("key") || "", "").toUpperCase();
