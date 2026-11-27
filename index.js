@@ -2542,21 +2542,27 @@ const renderDashboardHtml = () => {
       document.getElementById("wlScriptSelect").innerHTML = scriptOptionsHtml;
 
       document.getElementById("scriptsTableBody").innerHTML = scripts
-        .map(
-          (s) => `
-          <tr>
-            <td>${escapeHtml(s.name)}</td>
-            <td>${escapeHtml(s.mode === "url" ? "URL" : "Kod")}</td>
-            <td><button class="btn btn-danger btn-sm" data-del-script="${escapeHtml(s.id)}">Sil</button></td>
-          </tr>
-        `
-        )
+        .map(function (s) {
+          return (
+            "<tr>" +
+            "<td>" +
+            escapeHtml(s.name) +
+            "</td>" +
+            "<td>" +
+            escapeHtml(s.mode === "url" ? "URL" : "Kod") +
+            "</td>" +
+            "<td><button class='btn btn-danger btn-sm' data-del-script='" +
+            escapeHtml(s.id) +
+            "'>Sil</button></td>" +
+            "</tr>"
+          );
+        })
         .join("");
 
       document.querySelectorAll("[data-del-script]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await apiRequest(`/api/scripts/${encodeURIComponent(btn.getAttribute("data-del-script"))}`, "DELETE");
+            await apiRequest("/api/scripts/" + encodeURIComponent(btn.getAttribute("data-del-script")), "DELETE");
             showToast("Script silindi");
             await refreshDashboardSnapshot();
           } catch (err) {
@@ -2566,22 +2572,30 @@ const renderDashboardHtml = () => {
       });
 
       document.getElementById("keysTableBody").innerHTML = keys
-        .map(
-          (k) => `
-          <tr>
-            <td><code>${escapeHtml(k.code)}</code></td>
-            <td>${escapeHtml(k.scriptId || "Default")}</td>
-            <td>${escapeHtml(k.claimedByTag || "Gözləyir")}</td>
-            <td><button class="btn btn-danger btn-sm" data-del-key="${escapeHtml(k.id)}">Sil</button></td>
-          </tr>
-        `
-        )
+        .map(function (k) {
+          return (
+            "<tr>" +
+            "<td><code>" +
+            escapeHtml(k.code) +
+            "</code></td>" +
+            "<td>" +
+            escapeHtml(k.scriptId || "Default") +
+            "</td>" +
+            "<td>" +
+            escapeHtml(k.claimedByTag || "Gözləyir") +
+            "</td>" +
+            "<td><button class='btn btn-danger btn-sm' data-del-key='" +
+            escapeHtml(k.id) +
+            "'>Sil</button></td>" +
+            "</tr>"
+          );
+        })
         .join("");
 
       document.querySelectorAll("[data-del-key]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await apiRequest(`/api/keys/${encodeURIComponent(btn.getAttribute("data-del-key"))}`, "DELETE");
+            await apiRequest("/api/keys/" + encodeURIComponent(btn.getAttribute("data-del-key")), "DELETE");
             showToast("Key silindi");
             await refreshDashboardSnapshot();
           } catch (err) {
@@ -2591,21 +2605,27 @@ const renderDashboardHtml = () => {
       });
 
       document.getElementById("whitelistTableBody").innerHTML = wl
-        .map(
-          (w) => `
-          <tr>
-            <td>${escapeHtml(w.discordId)}</td>
-            <td>${escapeHtml(w.scriptId || "Default")}</td>
-            <td><button class="btn btn-danger btn-sm" data-del-wl="${escapeHtml(w.discordId)}">Sil</button></td>
-          </tr>
-        `
-        )
+        .map(function (w) {
+          return (
+            "<tr>" +
+            "<td>" +
+            escapeHtml(w.discordId) +
+            "</td>" +
+            "<td>" +
+            escapeHtml(w.scriptId || "Default") +
+            "</td>" +
+            "<td><button class='btn btn-danger btn-sm' data-del-wl='" +
+            escapeHtml(w.discordId) +
+            "'>Sil</button></td>" +
+            "</tr>"
+          );
+        })
         .join("");
 
       document.querySelectorAll("[data-del-wl]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await apiRequest(`/api/whitelist/${encodeURIComponent(btn.getAttribute("data-del-wl"))}`, "DELETE");
+            await apiRequest("/api/whitelist/" + encodeURIComponent(btn.getAttribute("data-del-wl")), "DELETE");
             showToast("Whitelist-dən silindi");
             await refreshDashboardSnapshot();
           } catch (err) {
@@ -2615,20 +2635,24 @@ const renderDashboardHtml = () => {
       });
 
       document.getElementById("blacklistTableBody").innerHTML = bl
-        .map(
-          (b) => `
-          <tr>
-            <td>${escapeHtml(b.discordId)}</td>
-            <td><button class="btn btn-danger btn-sm" data-del-bl="${escapeHtml(b.discordId)}">Sil</button></td>
-          </tr>
-        `
-        )
+        .map(function (b) {
+          return (
+            "<tr>" +
+            "<td>" +
+            escapeHtml(b.discordId) +
+            "</td>" +
+            "<td><button class='btn btn-danger btn-sm' data-del-bl='" +
+            escapeHtml(b.discordId) +
+            "'>Sil</button></td>" +
+            "</tr>"
+          );
+        })
         .join("");
 
       document.querySelectorAll("[data-del-bl]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await apiRequest(`/api/blacklist/${encodeURIComponent(btn.getAttribute("data-del-bl"))}`, "DELETE");
+            await apiRequest("/api/blacklist/" + encodeURIComponent(btn.getAttribute("data-del-bl")), "DELETE");
             showToast("Blacklist-dən silindi");
             await refreshDashboardSnapshot();
           } catch (err) {
@@ -2639,15 +2663,21 @@ const renderDashboardHtml = () => {
 
       document.getElementById("auditLogsBody").innerHTML = (snap.auditLogs || [])
         .slice(0, 12)
-        .map(
-          (l) => `
-          <tr>
-            <td>${escapeHtml(l.action)}</td>
-            <td>${escapeHtml(l.details)}</td>
-            <td>${escapeHtml(l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : "")}</td>
-          </tr>
-        `
-        )
+        .map(function (l) {
+          return (
+            "<tr>" +
+            "<td>" +
+            escapeHtml(l.action) +
+            "</td>" +
+            "<td>" +
+            escapeHtml(l.details) +
+            "</td>" +
+            "<td>" +
+            escapeHtml(l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : "") +
+            "</td>" +
+            "</tr>"
+          );
+        })
         .join("");
 
       const adminSection = document.getElementById("adminApiKeySection");
@@ -2656,27 +2686,39 @@ const renderDashboardHtml = () => {
       }
       if (snap.isAdminView) {
         document.getElementById("adminApiKeysBody").innerHTML = (snap.apiKeys || [])
-          .map((ak) => {
+          .map(function (ak) {
             const whoUsed = ak.usedByUser
-              ? `${ak.usedByUser.displayName || ak.usedByUser.username || ak.usedByUser.userId || ""}`
+              ? ak.usedByUser.displayName || ak.usedByUser.username || ak.usedByUser.userId || ""
               : "Hələ işlədilməyib";
-            return `
-              <tr>
-                <td><code>${escapeHtml(ak.code)}</code></td>
-                <td>${escapeHtml(ak.planName)}</td>
-                <td>${escapeHtml(ak.label || "-")}</td>
-                <td>${escapeHtml(whoUsed)}</td>
-                <td>${ak.revoked ? "Ləğv edilib" : "Aktiv"}</td>
-                <td><button class="btn btn-danger btn-sm" data-revoke-api="${escapeHtml(ak.id)}">Sil</button></td>
-              </tr>
-            `;
+            return (
+              "<tr>" +
+              "<td><code>" +
+              escapeHtml(ak.code) +
+              "</code></td>" +
+              "<td>" +
+              escapeHtml(ak.planName) +
+              "</td>" +
+              "<td>" +
+              escapeHtml(ak.label || "-") +
+              "</td>" +
+              "<td>" +
+              escapeHtml(whoUsed) +
+              "</td>" +
+              "<td>" +
+              (ak.revoked ? "Ləğv edilib" : "Aktiv") +
+              "</td>" +
+              "<td><button class='btn btn-danger btn-sm' data-revoke-api='" +
+              escapeHtml(ak.id) +
+              "'>Sil</button></td>" +
+              "</tr>"
+            );
           })
           .join("");
 
         document.querySelectorAll("[data-revoke-api]").forEach((btn) => {
           btn.addEventListener("click", async () => {
             try {
-              await apiRequest(`/api/admin/api-keys/${encodeURIComponent(btn.getAttribute("data-revoke-api"))}`, "DELETE");
+              await apiRequest("/api/admin/api-keys/" + encodeURIComponent(btn.getAttribute("data-revoke-api")), "DELETE");
               showToast("API açar silindi");
               await refreshDashboardSnapshot();
             } catch (err) {
