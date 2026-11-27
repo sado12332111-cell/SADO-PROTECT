@@ -1551,21 +1551,26 @@ const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
     : "";
   if (fromHeader) return fromHeader;
 
-  if (APP_STATE.latestJoinedGuildId && APP_STATE.tenants && APP_STATE.tenants[APP_STATE.latestJoinedGuildId]) {
-    if (!APP_STATE.guildId) {
-      return APP_STATE.latestJoinedGuildId;
-    }
+  if (APP_STATE.guildId) {
+    return sanitizeSnowflakeId(APP_STATE.guildId);
   }
 
-  return sanitizeSnowflakeId(APP_STATE.guildId || "");
+  if (APP_STATE.latestJoinedGuildId && APP_STATE.tenants && APP_STATE.tenants[APP_STATE.latestJoinedGuildId]) {
+    return sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId);
+  }
+
+  return "";
 };
 
 const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = false, baseUrl = "") => {
   const tokenPresent = Boolean(resolveDiscordBotToken());
-  const cleanGuildId = sanitizeSnowflakeId(requestedGuildId);
+  const cleanGuildId = sanitizeSnowflakeId(requestedGuildId || APP_STATE.guildId || "");
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
+  if (!resolvedGuildName && cleanGuildId && APP_STATE.guildId === cleanGuildId) {
+    resolvedGuildName = sanitizeText(APP_STATE.guildName, "");
+  }
   if (resolvedGuildName && /^Sunucu\s*\(/i.test(resolvedGuildName)) {
     resolvedGuildName = "";
   }
@@ -1581,7 +1586,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     }
   }
 
-  // Əgər ID daxil edilib, amma Discord API tokeni hələ qurulmadığı üçün adı API-dən çəkilə bilməyibsə:
+  // Əgər ID daxil edilib, amma Discord API bu ID-ni qaytarmayıbsa, sunucunun adını göstəririk
   if (cleanGuildId && !resolvedGuildName) {
     resolvedGuildName =
       (APP_STATE.guildName && !/^Sunucu\s*\(/i.test(APP_STATE.guildName)
@@ -3173,9 +3178,15 @@ const createHttpServer = () => {
             const info = await fetchGuildInfoFromDiscord(guildId);
             if (info && info.name) {
               resolvedName = info.name;
-              tenant.guildName = resolvedName;
-              APP_STATE.guildName = resolvedName;
+            } else {
+              resolvedName =
+                (tenant.guildName && !/^Sunucu\s*\(/i.test(tenant.guildName)
+                  ? sanitizeText(tenant.guildName, "")
+                  : "") ||
+                `Discord Sunucusu ${guildId.slice(-4)}`;
             }
+            tenant.guildName = resolvedName;
+            APP_STATE.guildName = resolvedName;
             syncTenantIntoGlobalIfPrimary(tenant);
           }
         }
@@ -3188,7 +3199,7 @@ const createHttpServer = () => {
           `Guild=${resolvedName || guildId || "-"} Channel=${panelChannelId || "-"}`,
           guildId
         );
-        sendJsonResponse(res, 200, { ok: true, guildName: resolvedName });
+        sendJsonResponse(res, 200, { ok: true, guildId, guildName: resolvedName });
         return;
       }
 
