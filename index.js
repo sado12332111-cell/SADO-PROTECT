@@ -2536,8 +2536,8 @@ const renderDashboardHtml = () => {
       document.getElementById("statBlCount").textContent = String(bl.length);
 
       const scriptOptionsHtml =
-        `<option value="">Default / İlk Script</option>` +
-        scripts.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join("");
+        '<option value="">Default / İlk Script</option>' +
+        scripts.map((s) => '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + "</option>").join("");
       document.getElementById("keyScriptSelect").innerHTML = scriptOptionsHtml;
       document.getElementById("wlScriptSelect").innerHTML = scriptOptionsHtml;
 
