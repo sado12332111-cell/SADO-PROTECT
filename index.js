@@ -8,6 +8,8 @@ const WebSocket = require("ws");
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const STATE_FILE_PATH = path.join(DATA_DIR, "sado_protect_state.json");
+const DISCORD_INVITE_URL =
+  "https://discord.com/oauth2/authorize?client_id=1562080654282199121&permissions=2147600384&integration_type=0&scope=applications.commands+bot";
 
 const DEFAULT_PANEL_DESIGN = {
   title: "SADO PROTECT • Lisenziya & Script Paneli",
@@ -57,6 +59,57 @@ const ensureStorageDirectory = () => {
   } catch (_err) {}
 };
 
+const sanitizeText = (value, fallback = "") => {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+};
+
+const sanitizeSnowflakeId = (value) => {
+  const str = String(value || "").trim();
+  return /^\d{15,22}$/.test(str) ? str : "";
+};
+
+const normalizeColorHex = (value) => {
+  const raw = String(value || "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toUpperCase();
+  if (/^[0-9a-fA-F]{6}$/.test(raw)) return `#${raw.toUpperCase()}`;
+  return "#5865F2";
+};
+
+const hexColorToInt = (hexStr) => {
+  const clean = normalizeColorHex(hexStr).replace("#", "");
+  const parsed = parseInt(clean, 16);
+  return Number.isNaN(parsed) ? 5793266 : parsed;
+};
+
+const normalizePanelDesign = (rawDesign) => {
+  const src = rawDesign && typeof rawDesign === "object" ? rawDesign : {};
+  const rawButtons = Array.isArray(src.buttons) ? src.buttons : DEFAULT_PANEL_DESIGN.buttons;
+  const normalizedButtons = rawButtons.slice(0, 5).map((btn, idx) => {
+    const safeBtn = btn && typeof btn === "object" ? btn : {};
+    const styleNum = Number(safeBtn.style);
+    const validStyle = [1, 2, 3, 4].includes(styleNum) ? styleNum : 1;
+    return {
+      id: sanitizeText(safeBtn.id, `custom_btn_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60),
+      label: sanitizeText(safeBtn.label, `Düymə ${idx + 1}`).slice(0, 40),
+      style: validStyle,
+      emoji: sanitizeText(safeBtn.emoji, "").slice(0, 12),
+      responseText: sanitizeText(safeBtn.responseText, "Əməliyyat icra edildi.").slice(0, 400)
+    };
+  });
+
+  return {
+    title: sanitizeText(src.title, DEFAULT_PANEL_DESIGN.title).slice(0, 180),
+    description: sanitizeText(src.description, DEFAULT_PANEL_DESIGN.description).slice(0, 2000),
+    colorHex: normalizeColorHex(src.colorHex),
+    footerText: sanitizeText(src.footerText, DEFAULT_PANEL_DESIGN.footerText).slice(0, 150),
+    thumbnailUrl: sanitizeText(src.thumbnailUrl, "").slice(0, 500),
+    imageUrl: sanitizeText(src.imageUrl, "").slice(0, 500),
+    buttons: normalizedButtons.length > 0 ? normalizedButtons : [...DEFAULT_PANEL_DESIGN.buttons]
+  };
+};
+
 const loadInitialAppState = () => {
   ensureStorageDirectory();
   const baseState = {
@@ -96,58 +149,7 @@ const loadInitialAppState = () => {
   return baseState;
 };
 
-const sanitizeText = (value, fallback = "") => {
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : fallback;
-};
-
-const sanitizeSnowflakeId = (value) => {
-  const str = String(value || "").trim();
-  return /^\d{15,22}$/.test(str) ? str : "";
-};
-
-const normalizeColorHex = (value) => {
-  const raw = String(value || "").trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toUpperCase();
-  if (/^[0-9a-fA-F]{6}$/.test(raw)) return `#${raw.toUpperCase()}`;
-  return "#5865F2";
-};
-
-const hexColorToInt = (hexStr) => {
-  const clean = normalizeColorHex(hexStr).replace("#", "");
-  const parsed = parseInt(clean, 16);
-  return Number.isNaN(parsed) ? 5793266 : parsed;
-};
-
-const normalizePanelDesign = (rawDesign) => {
-  const src = rawDesign && typeof rawDesign === "object" ? rawDesign : {};
-  const rawButtons = Array.isArray(src.buttons) ? src.buttons : DEFAULT_PANEL_DESIGN.buttons;
-  const normalizedButtons = rawButtons
-    .slice(0, 5)
-    .map((btn, idx) => {
-      const safeBtn = btn && typeof btn === "object" ? btn : {};
-      const styleNum = Number(safeBtn.style);
-      const validStyle = [1, 2, 3, 4].includes(styleNum) ? styleNum : 1;
-      return {
-        id: sanitizeText(safeBtn.id, `custom_btn_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60),
-        label: sanitizeText(safeBtn.label, `Düymə ${idx + 1}`).slice(0, 40),
-        style: validStyle,
-        emoji: sanitizeText(safeBtn.emoji, "").slice(0, 12),
-        responseText: sanitizeText(safeBtn.responseText, "Əməliyyat icra edildi.").slice(0, 400)
-      };
-    });
-
-  return {
-    title: sanitizeText(src.title, DEFAULT_PANEL_DESIGN.title).slice(0, 180),
-    description: sanitizeText(src.description, DEFAULT_PANEL_DESIGN.description).slice(0, 2000),
-    colorHex: normalizeColorHex(src.colorHex),
-    footerText: sanitizeText(src.footerText, DEFAULT_PANEL_DESIGN.footerText).slice(0, 150),
-    thumbnailUrl: sanitizeText(src.thumbnailUrl, "").slice(0, 500),
-    imageUrl: sanitizeText(src.imageUrl, "").slice(0, 500),
-    buttons: normalizedButtons.length > 0 ? normalizedButtons : [...DEFAULT_PANEL_DESIGN.buttons]
-  };
-};
+const APP_STATE = loadInitialAppState();
 
 const generateUniqueId = (prefix = "id") => {
   const rand = crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -228,47 +230,6 @@ const collectUserMatchTokens = (rawStr, extraUserObj = null) => {
   return tokens;
 };
 
-const isEntryWhitelisted = (identifier, keyObj = null, extraUserObj = null) => {
-  const queryTokens = collectUserMatchTokens(identifier, {
-    ...(keyObj || {}),
-    ...(extraUserObj || {})
-  });
-  if (queryTokens.size === 0) return false;
-
-  return (APP_STATE.whitelist || []).some((item) => {
-    if (!item) return false;
-    const itemTokens = collectUserMatchTokens(item.value, {
-      owner: item.value,
-      ownerId: item.userId || "",
-      key: item.generatedKey || ""
-    });
-    for (const tk of queryTokens) {
-      if (itemTokens.has(tk)) return true;
-    }
-    return false;
-  });
-};
-
-const isEntryBlacklisted = (identifier, keyObj = null, extraUserObj = null) => {
-  const queryTokens = collectUserMatchTokens(identifier, {
-    ...(keyObj || {}),
-    ...(extraUserObj || {})
-  });
-  if (queryTokens.size === 0) return false;
-
-  return (APP_STATE.blacklist || []).some((item) => {
-    if (!item) return false;
-    const itemTokens = collectUserMatchTokens(item.value, {
-      owner: item.value,
-      ownerId: item.userId || ""
-    });
-    for (const tk of queryTokens) {
-      if (itemTokens.has(tk)) return true;
-    }
-    return false;
-  });
-};
-
 const buildShortLoaderString = (rawEndpointUrl) => {
   const cleanUrl = sanitizeText(rawEndpointUrl, "");
   return `local u="${cleanUrl}" loadstring(game:HttpGet(u))()`;
@@ -295,7 +256,14 @@ const isRobloxExecutorRequest = (req) => {
   if (accept.includes("text/html") && !ua.includes("roblox")) {
     return false;
   }
-  if ((ua.includes("mozilla/5.0") || ua.includes("chrome/") || ua.includes("safari/") || ua.includes("firefox/") || ua.includes("edg/")) && !ua.includes("roblox")) {
+  if (
+    (ua.includes("mozilla/5.0") ||
+      ua.includes("chrome/") ||
+      ua.includes("safari/") ||
+      ua.includes("firefox/") ||
+      ua.includes("edg/")) &&
+    !ua.includes("roblox")
+  ) {
     return false;
   }
   if (!ua || ua.includes("curl/") || ua.includes("wget/") || ua.includes("python-requests") || ua.includes("postman")) {
@@ -380,8 +348,6 @@ const wrapScriptWithAntiLeakProtection = (rawLuaCode, boundHwid = "", rawEndpoin
     `end`
   ].join("\n");
 };
-
-const APP_STATE = loadInitialAppState();
 
 const ensureTenantStore = () => {
   if (!APP_STATE.tenants || typeof APP_STATE.tenants !== "object") {
@@ -567,7 +533,7 @@ const resolveGuildDisplayName = async (guildId, fallbackName = "") => {
 
 const buildSlashCommandsPayloadForGuild = (guildIdInput = "") => {
   const tenant = getTenantRecordByGuildId(guildIdInput);
-  const scriptsSource = tenant ? (tenant.scripts || []) : (APP_STATE.scripts || []);
+  const scriptsSource = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
   const hasScripts = Array.isArray(scriptsSource) && scriptsSource.length > 0;
 
   const scriptOption = hasScripts
@@ -711,29 +677,22 @@ const syncSlashCommandsWithDiscord = async (specificGuildId = "") => {
 
   for (const gId of guildIdsToSync) {
     const guildPayload = buildSlashCommandsPayloadForGuild(gId);
-    await callDiscordRestApi(
-      `/applications/${appId}/guilds/${gId}/commands`,
-      "PUT",
-      guildPayload,
-      token
-    );
+    await callDiscordRestApi(`/applications/${appId}/guilds/${gId}/commands`, "PUT", guildPayload, token);
   }
 };
 
 const buildDiscordPanelMessagePayload = (selectedScriptName = "", guildIdInput = "") => {
   const tenant = getTenantRecordByGuildId(guildIdInput);
   const design = normalizePanelDesign(tenant ? tenant.panelDesign : APP_STATE.panelDesign);
-  const scriptsPool = tenant ? (tenant.scripts || []) : (APP_STATE.scripts || []);
-  const keysPool = tenant ? (tenant.keys || []) : (APP_STATE.keys || []);
-  const whitelistPool = tenant ? (tenant.whitelist || []) : (APP_STATE.whitelist || []);
-  const blacklistPool = tenant ? (tenant.blacklist || []) : (APP_STATE.blacklist || []);
+  const scriptsPool = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
+  const keysPool = tenant ? tenant.keys || [] : APP_STATE.keys || [];
+  const whitelistPool = tenant ? tenant.whitelist || [] : APP_STATE.whitelist || [];
+  const blacklistPool = tenant ? tenant.blacklist || [] : APP_STATE.blacklist || [];
   const activeGuildName = tenant ? tenant.guildName : APP_STATE.guildName;
   const cleanQuery = sanitizeText(selectedScriptName, "");
 
   const matchedScript = cleanQuery
-    ? scriptsPool.find(
-        (s) => sanitizeText(s && s.name, "").toLowerCase() === cleanQuery.toLowerCase()
-      ) || null
+    ? scriptsPool.find((s) => sanitizeText(s && s.name, "").toLowerCase() === cleanQuery.toLowerCase()) || null
     : scriptsPool[0] || null;
 
   const fields = [];
@@ -754,9 +713,10 @@ const buildDiscordPanelMessagePayload = (selectedScriptName = "", guildIdInput =
     });
     fields.push({
       name: "🔗 Script Mənbəyi",
-      value: matchedScript.sourceType === "file"
-        ? `Fayl (${sanitizeText(matchedScript.fileName, "script.lua")})`
-        : sanitizeText(matchedScript.scriptUrl, "Daxili Script"),
+      value:
+        matchedScript.sourceType === "file"
+          ? `Fayl (${sanitizeText(matchedScript.fileName, "script.lua")})`
+          : sanitizeText(matchedScript.scriptUrl, "Daxili Script"),
       inline: true
     });
   } else {
@@ -874,11 +834,7 @@ const publishPanelToDiscordChannel = async (channelIdInput, scriptNameInput = ""
 };
 
 const respondToDiscordInteraction = async (interactionId, interactionToken, responseBody) => {
-  await callDiscordRestApi(
-    `/interactions/${interactionId}/${interactionToken}/callback`,
-    "POST",
-    responseBody
-  );
+  await callDiscordRestApi(`/interactions/${interactionId}/${interactionToken}/callback`, "POST", responseBody);
 };
 
 const handleDiscordInteractionCreate = async (interaction) => {
@@ -1101,7 +1057,9 @@ const handleDiscordInteractionCreate = async (interaction) => {
       commitCtxState();
       appendAuditLog(
         "UNWHITELIST_CMD",
-        `/unwhitelist: ${resolvedProfileLabel}${selectedScriptFilter ? ` | Script: ${selectedScriptFilter}` : ""} (Whitelist: -${removedWlCount}, Key: -${removedKeysCount})`,
+        `/unwhitelist: ${resolvedProfileLabel}${
+          selectedScriptFilter ? ` | Script: ${selectedScriptFilter}` : ""
+        } (Whitelist: -${removedWlCount}, Key: -${removedKeysCount})`,
         "Discord",
         interactionGuildId
       );
@@ -1115,9 +1073,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
               color: 15548997,
               description: [
                 `**İstifadəçi:** <@${targetUserId}> • ${resolvedProfileLabel}`,
-                selectedScriptFilter
-                  ? `**Script:** \`${selectedScriptFilter}\``
-                  : "**Script:** Bütün scriptlər",
+                selectedScriptFilter ? `**Script:** \`${selectedScriptFilter}\`` : "**Script:** Bütün scriptlər",
                 `**Silinən Whitelist qeydi:** ${removedWlCount} ədəd`,
                 `**Ləğv edilən Key:** ${removedKeysCount} ədəd`,
                 selectedScriptFilter
@@ -1224,7 +1180,9 @@ const handleDiscordInteractionCreate = async (interaction) => {
       await respondToDiscordInteraction(interaction.id, interaction.token, {
         type: 4,
         data: {
-          content: `🔑 **Key:** \`${foundKey.key}\`\n📜 **Script:** ${foundKey.scriptName}\n💻 **HWID:** ${foundKey.hwid || "Təyin edilməyib"}\n📌 **Status:** ${foundKey.active ? "Aktiv" : "Deaktiv"}`,
+          content: `🔑 **Key:** \`${foundKey.key}\`\n📜 **Script:** ${foundKey.scriptName}\n💻 **HWID:** ${
+            foundKey.hwid || "Təyin edilməyib"
+          }\n📌 **Status:** ${foundKey.active ? "Aktiv" : "Deaktiv"}`,
           flags: 64
         }
       });
@@ -1440,7 +1398,10 @@ const handleDiscordInteractionCreate = async (interaction) => {
         commitCtxState();
       }
 
-      const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(/\/+$/, "");
+      const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(
+        /\/+$/,
+        ""
+      );
       const rawScriptLink = matchedScript
         ? `${basePublicUrl}/raw/${matchedScript.id}?key=${encodeURIComponent(userKeyRecord.key)}`
         : `${basePublicUrl}/raw/default?key=${encodeURIComponent(userKeyRecord.key)}`;
@@ -1690,24 +1651,23 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "") => {
   }
 
   const botIsActive = Boolean(BOT_RUNTIME.connected || (tokenPresent && BOT_RUNTIME.botUserId));
-  const scriptsList = tenant ? (tenant.scripts || []) : [];
-  const keysList = tenant ? (tenant.keys || []) : [];
-  const whitelistList = tenant ? (tenant.whitelist || []) : [];
-  const blacklistList = tenant ? (tenant.blacklist || []) : [];
+  const scriptsList = tenant ? tenant.scripts || [] : [];
+  const keysList = tenant ? tenant.keys || [] : [];
+  const whitelistList = tenant ? tenant.whitelist || [] : [];
+  const blacklistList = tenant ? tenant.blacklist || [] : [];
   const designObj = tenant
     ? normalizePanelDesign(tenant.panelDesign)
     : normalizePanelDesign(APP_STATE.panelDesign);
-  const logsList = tenant ? (tenant.auditLogs || []) : [];
+  const logsList = tenant ? tenant.auditLogs || [] : [];
 
   return {
     bot: {
       active: botIsActive,
-      statusText: botIsActive
-        ? "Bot: Aktivdir"
-        : "Bot: Aktiv deyil — Gözləmədədir",
+      statusText: botIsActive ? "Bot: Aktivdir" : "Bot: Aktiv deyil — Gözləmədədir",
       tokenConfigured: tokenPresent,
       username: BOT_RUNTIME.botUsername || "SADO PROTECT",
       botUserId: BOT_RUNTIME.botUserId || "",
+      inviteUrl: DISCORD_INVITE_URL,
       lastError: BOT_RUNTIME.lastError || "",
       lastConnectedAt: BOT_RUNTIME.lastConnectedAt || ""
     },
@@ -2025,6 +1985,7 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
       align-items: center;
       justify-content: center;
       gap: 7px;
+      text-decoration: none;
       transition: all 0.15s ease;
     }
 
@@ -2223,6 +2184,13 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
         </div>
       </div>
       <div class="row">
+        <a
+          id="joinDiscordTopBtn"
+          href="${DISCORD_INVITE_URL}"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn btn-primary btn-sm"
+        >➕ Join Discord</a>
         <button id="refreshSnapshotBtn" class="btn btn-secondary btn-sm">🔄 Yenilə</button>
       </div>
     </header>
@@ -2252,19 +2220,26 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
           <div class="card">
             <div class="card-title">🤖 Sunucu Bağlantısı (Bu Cihaz Üçün)</div>
             <div class="card-sub">
-              Bot tokeni Render Environment-dən (<code>DISCORD_BOT_TOKEN</code>) oxunur. Hər cihaz öz <strong>Sunucu ID</strong>-sini buraya yazaraq yalnız öz sunucusunu idarə edə bilər.
+              Əvvəlcə <strong>Join Discord</strong> düyməsi ilə botu serverinizə əlavə edin, sonra aşağıya öz <strong>Sunucu ID</strong>-nizi yazın.
             </div>
             <div class="form-group">
               <label>Sunucu ID (Guild ID)</label>
-              <input id="guildIdInput" type="text" placeholder="Məs: 123456789012345678" />
+              <input id="guildIdInput" type="text" placeholder="Sunucu ID-ni buraya yazın (Məs: 123456789012345678)" />
             </div>
             <div class="form-group">
               <label>Panel Kanal ID (İstəyə bağlı)</label>
               <input id="panelChannelIdInput" type="text" placeholder="Məs: 123456789012345678" />
             </div>
             <div class="row">
-              <button id="connectBotBtn" class="btn btn-primary">🔗 Sunucunu Bağla</button>
-              <button id="sendPanelQuickBtn" class="btn btn-success">📨 Paneli Kanala Göndər</button>
+              <a
+                id="joinDiscordCardBtn"
+                href="${DISCORD_INVITE_URL}"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-primary"
+              >➕ Join Discord</a>
+              <button id="connectBotBtn" class="btn btn-success">🔗 Sunucunu Bağla</button>
+              <button id="sendPanelQuickBtn" class="btn btn-secondary">📨 Paneli Kanala Göndər</button>
             </div>
           </div>
 
@@ -2644,6 +2619,12 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
     const applySnapshotToUi = (snap) => {
       clientState.snapshot = snap;
 
+      const inviteHref = (snap.bot && snap.bot.inviteUrl) || "${DISCORD_INVITE_URL}";
+      const topJoinBtn = document.getElementById("joinDiscordTopBtn");
+      const cardJoinBtn = document.getElementById("joinDiscordCardBtn");
+      if (topJoinBtn) topJoinBtn.href = inviteHref;
+      if (cardJoinBtn) cardJoinBtn.href = inviteHref;
+
       const dotEl = document.getElementById("botStatusDot");
       const labelEl = document.getElementById("botStatusLabel");
       if (snap.bot && snap.bot.active) {
@@ -2840,7 +2821,7 @@ const renderDashboardHtmlPage = () => `<!DOCTYPE html>
     const refreshDashboardSnapshot = async () => {
       try {
         const querySuffix = clientState.deviceGuildId
-          ? ("?guildId=" + encodeURIComponent(clientState.deviceGuildId))
+          ? "?guildId=" + encodeURIComponent(clientState.deviceGuildId)
           : "";
         const snap = await apiRequest("/api/snapshot" + querySuffix, "GET");
         applySnapshotToUi(snap);
@@ -3173,7 +3154,7 @@ const server = http.createServer(async (req, res) => {
 
       const resolvedName = await resolveGuildDisplayName(cleanGuildId, body.guildName || "");
       const tenant = getTenantRecordByGuildId(cleanGuildId);
-      tenant.guildName = resolvedName || (sanitizeText(body.guildName, "") || "Bağlı Sunucu");
+      tenant.guildName = resolvedName || sanitizeText(body.guildName, "") || "Bağlı Sunucu";
       if (cleanChannelId) {
         tenant.panelChannelId = cleanChannelId;
       }
@@ -3278,7 +3259,7 @@ const server = http.createServer(async (req, res) => {
       const body = await parseRequestJsonBody(req);
       const reqGuildId = resolveRequestGuildId(req, reqUrl, body);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const scriptsTarget = tenant ? (tenant.scripts || []) : (APP_STATE.scripts || []);
+      const scriptsTarget = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
       const index = scriptsTarget.findIndex((s) => s && s.id === targetId);
 
       if (index === -1) {
@@ -3326,7 +3307,7 @@ const server = http.createServer(async (req, res) => {
       const targetId = sanitizeText(pathname.replace("/api/scripts/", ""), "");
       const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const scriptsTarget = tenant ? (tenant.scripts || []) : (APP_STATE.scripts || []);
+      const scriptsTarget = tenant ? tenant.scripts || [] : APP_STATE.scripts || [];
       const beforeCount = scriptsTarget.length;
       const filteredScripts = scriptsTarget.filter((s) => s && s.id !== targetId);
 
@@ -3496,7 +3477,7 @@ const server = http.createServer(async (req, res) => {
       const entryId = sanitizeText(parts[1] || "", "");
       const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
       const tenant = getTenantRecordByGuildId(reqGuildId);
-      const listArr = tenant ? (tenant[listType] || []) : (APP_STATE[listType] || []);
+      const listArr = tenant ? tenant[listType] || [] : APP_STATE[listType] || [];
       const targetEntry = listArr.find((item) => item && item.id === entryId);
       const updatedListArr = listArr.filter((item) => item && item.id !== entryId);
 
@@ -3509,11 +3490,9 @@ const server = http.createServer(async (req, res) => {
       if (listType === "whitelist" && targetEntry && targetEntry.value) {
         const targetNorm = normalizeAccessValue(targetEntry.value);
         const wlCheck = tenant ? tenant.whitelist : APP_STATE.whitelist;
-        const stillWhitelisted = (wlCheck || []).some(
-          (w) => w && normalizeAccessValue(w.value) === targetNorm
-        );
+        const stillWhitelisted = (wlCheck || []).some((w) => w && normalizeAccessValue(w.value) === targetNorm);
         if (!stillWhitelisted) {
-          const keysArr = tenant ? (tenant.keys || []) : (APP_STATE.keys || []);
+          const keysArr = tenant ? tenant.keys || [] : APP_STATE.keys || [];
           const filteredKeys = keysArr.filter(
             (k) =>
               k &&
@@ -3570,9 +3549,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const activeKeysPool = ownerTenant ? (ownerTenant.keys || []) : (APP_STATE.keys || []);
-      const activeWhitelistPool = ownerTenant ? (ownerTenant.whitelist || []) : (APP_STATE.whitelist || []);
-      const activeBlacklistPool = ownerTenant ? (ownerTenant.blacklist || []) : (APP_STATE.blacklist || []);
+      const activeKeysPool = ownerTenant ? ownerTenant.keys || [] : APP_STATE.keys || [];
+      const activeWhitelistPool = ownerTenant ? ownerTenant.whitelist || [] : APP_STATE.whitelist || [];
+      const activeBlacklistPool = ownerTenant ? ownerTenant.blacklist || [] : APP_STATE.blacklist || [];
 
       const providedKeyQuery = sanitizeText(reqUrl.searchParams.get("key") || req.headers["x-sado-key"], "");
       const cleanLowerQuery = providedKeyQuery.toLowerCase();
