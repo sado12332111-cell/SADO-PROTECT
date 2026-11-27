@@ -620,6 +620,8 @@ const exchangeOAuthCodeForDiscordAccount = async (code, redirectUri) => {
 const fetchGuildInfoFromDiscord = async (guildId) => {
   const cleanId = sanitizeSnowflakeId(guildId);
   if (!cleanId) return null;
+
+  // 1. Discord Bot API üzərindən birbaşa sunucu məlumatını çəkməyə çalışırıq
   try {
     const res = await discordApiRequest(`/guilds/${cleanId}`, "GET");
     if (res && res.data && res.data.id) {
@@ -632,6 +634,8 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
       }
     }
   } catch (_err) {}
+
+  // 2. Əgər birbaşa /guilds/{id} alınmadısa, istifadəçi/bot sunucu siyahısından axtarırıq
   try {
     const gListRes = await discordApiRequest(`/users/@me/guilds?limit=200`, "GET");
     const guildArr = Array.isArray(gListRes && gListRes.data) ? gListRes.data : [];
@@ -643,6 +647,17 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
       };
     }
   } catch (_err2) {}
+
+  // 3. Əgər APP_STATE və ya tenants içində həmin ID üçün yadda saxlanmış ad varsa onu qaytarırıq
+  const existingTenant =
+    APP_STATE.tenants && typeof APP_STATE.tenants === "object" ? APP_STATE.tenants[cleanId] : null;
+  if (existingTenant && sanitizeText(existingTenant.guildName, "")) {
+    return {
+      id: cleanId,
+      name: sanitizeText(existingTenant.guildName, "")
+    };
+  }
+
   return null;
 };
 
@@ -1554,9 +1569,6 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   if (resolvedGuildName && /^Sunucu\s*\(/i.test(resolvedGuildName)) {
     resolvedGuildName = "";
   }
-  if (!resolvedGuildName && APP_STATE.guildName && !/^Sunucu\s*\(/i.test(APP_STATE.guildName)) {
-    resolvedGuildName = sanitizeText(APP_STATE.guildName, "");
-  }
   if (cleanGuildId) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
@@ -1566,6 +1578,20 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
         syncTenantIntoGlobalIfPrimary(tenant);
         saveAppStateToDisk();
       }
+    }
+  }
+
+  // Əgər ID daxil edilib, amma Discord API tokeni hələ qurulmadığı üçün adı API-dən çəkilə bilməyibsə:
+  if (cleanGuildId && !resolvedGuildName) {
+    resolvedGuildName =
+      (APP_STATE.guildName && !/^Sunucu\s*\(/i.test(APP_STATE.guildName)
+        ? sanitizeText(APP_STATE.guildName, "")
+        : "") ||
+      `Discord Sunucusu ${cleanGuildId.slice(-4)}`;
+    if (tenant) {
+      tenant.guildName = resolvedGuildName;
+      syncTenantIntoGlobalIfPrimary(tenant);
+      saveAppStateToDisk();
     }
   }
 
