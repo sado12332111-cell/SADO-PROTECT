@@ -761,12 +761,9 @@ const wrapLuaWithUltraProtection = (rawLuaCode, meta = {}) => {
   const byteArrayLiteral = encryptedBytes.join(",");
 
   return [
-    "-- [[ SADO PROTECT ULTRA GUARD v3.0 • ANTI-DUMP / ANTI-SPY / ANTI-TAMPER ]]",
+    "-- [[ SADO PROTECT ULTRA GUARD v3.1 • SAFE RUNTIME ]]",
     "(function()",
     "  local _G_ENV = (getgenv and getgenv()) or _G",
-    "  if _G_ENV.__SADO_GUARD_RUNNING then return end",
-    "  _G_ENV.__SADO_GUARD_RUNNING = true",
-    "",
     "  local Players = game:GetService('Players')",
     "  local LocalPlayer = Players.LocalPlayer",
     "",
@@ -780,13 +777,11 @@ const wrapLuaWithUltraProtection = (rawLuaCode, meta = {}) => {
     "    end)",
     "    pcall(function()",
     "      if LocalPlayer then",
-    "        LocalPlayer:Kick('[SADO ULTRA PROTECT] Sizdirma / Anti-Cheat Pozuntusu: ' .. tostring(reason))",
+    "        LocalPlayer:Kick('[SADO ULTRA PROTECT] ' .. tostring(reason))",
     "      end",
     "    end)",
-    "    while true do end",
     "  end",
     "",
-    "  -- 1. Core Function Integrity & Anti-Hook Yoxlamasi",
     "  local _pcall = pcall",
     "  local _type = type",
     "  local _tostring = tostring",
@@ -807,47 +802,34 @@ const wrapLuaWithUltraProtection = (rawLuaCode, meta = {}) => {
     "  end",
     "",
     "  if _type(_loadstring) ~= 'function' or _type(_pcall) ~= 'function' then",
-    "    _tripSecurity('HOOK_DETECTED_CORE')",
+    "    _tripSecurity('MISSING_LOADSTRING_OR_PCALL')",
+    "    return",
     "  end",
     "",
-    "  if iscclosure then",
-    "    if not iscclosure(_pcall) or not iscclosure(_string_char) or not iscclosure(_string_byte) then",
-    "      _tripSecurity('CCLOSURE_TAMPER')",
-    "    end",
-    "  end",
-    "",
-    "  if isfunctionhooked then",
-    "    if isfunctionhooked(_loadstring) or isfunctionhooked(_pcall) or (game.HttpGet and isfunctionhooked(game.HttpGet)) then",
-    "      _tripSecurity('HTTPSPY_HOOK_DETECTED')",
-    "    end",
-    "  end",
-    "",
-    "  -- 2. Anti-HttpSpy / Anti-RemoteSpy / Anti-SaveInstance GUI Taramasi",
-    "  pcall(function()",
+    "  -- Yalniz asikar spy/dump alətləri tapildiqda blokla",
+    "  _pcall(function()",
     "    local CoreGui = game:GetService('CoreGui')",
-    "    local blockedNames = {'httpspy', 'simplespy', 'remotespy', 'hydro', 'dex', 'darkdex', 'saveinstance', 'hydroxide'}",
+    "    local blockedExact = {'httpspy', 'simplespy', 'remotespy', 'darkdex'}",
     "    for _, obj in ipairs(CoreGui:GetChildren()) do",
     "      local n = string.lower(_tostring(obj.Name))",
-    "      for _, bad in ipairs(blockedNames) do",
-    "        if string.find(n, bad, 1, true) then",
-    "          _tripSecurity('SPY_GUI_' .. bad)",
+    "      for _, bad in ipairs(blockedExact) do",
+    "        if n == bad then",
+    "          _tripSecurity('SPY_TOOL_' .. bad)",
+    "          return",
     "        end",
     "      end",
     "    end",
     "  end)",
     "",
-    "  -- 3. Anti-Dump / Yaddas Qorumasi",
     "  if getgenv then",
-    "    local g = getgenv()",
-    "    g.saveinstance = function() _tripSecurity('SAVEINSTANCE_BLOCKED') end",
-    "    if g.decompile then",
-    "      g.decompile = function() _tripSecurity('DECOMPILE_BLOCKED') end",
-    "    end",
+    "    _pcall(function()",
+    "      local g = getgenv()",
+    "      g.saveinstance = function() _tripSecurity('SAVEINSTANCE_BLOCKED') end",
+    "    end)",
     "  end",
     "",
-    "  -- 4. Dinamik XOR + Rolling Key Desifrasi",
-    `  local _k = "${xorSecret}"`,
-    `  local _b = {${byteArrayLiteral}}`,
+    "  local _k = \"" + xorSecret + "\"",
+    "  local _b = {" + byteArrayLiteral + "}",
     "  local _kLen = #_k",
     "  local _out = table.create(#_b)",
     "  for i = 1, #_b do",
@@ -863,12 +845,12 @@ const wrapLuaWithUltraProtection = (rawLuaCode, meta = {}) => {
     "  local _fn, _compileErr = _loadstring(_finalSrc)",
     "  _finalSrc = nil",
     "  if not _fn then",
-    "    _tripSecurity('RUNTIME_COMPILE_FAIL')",
+    "    warn('[SADO PROTECT] Compile xetasi: ' .. _tostring(_compileErr))",
+    "    return",
     "  end",
-    "  _G_ENV.__SADO_GUARD_RUNNING = nil",
     "  local _ok, _runErr = _pcall(_fn)",
     "  if not _ok then",
-    "    warn('[SADO PROTECT] Script icra xetasi: ' .. _tostring(_runErr))",
+    "    warn('[SADO PROTECT] Runtime xetasi: ' .. _tostring(_runErr))",
     "  end",
     "end)()"
   ].join("\n");
@@ -3521,12 +3503,11 @@ const createHttpServer = () => {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store"
           });
-          res.end(`game:GetService("Players").LocalPlayer:Kick("[SADO PROTECT] ${safeReason}")`);
+          res.end(`warn("[SADO PROTECT] ${safeReason}")`);
         };
 
-        // Brauzer, curl, python və scraper sorğularını blokla (yalnız Roblox Executor)
-        if (
-          !userAgent ||
+        // Yalnız açıq brauzer / curl / python sorğularını blokla; executor User-Agent-lərinə icazə ver
+        const isBrowserOrScraper =
           userAgent.includes("mozilla/") ||
           userAgent.includes("chrome/") ||
           userAgent.includes("safari/") ||
@@ -3534,8 +3515,9 @@ const createHttpServer = () => {
           userAgent.includes("curl/") ||
           userAgent.includes("wget/") ||
           userAgent.includes("python") ||
-          userAgent.includes("postman")
-        ) {
+          userAgent.includes("postman");
+
+        if (isBrowserOrScraper) {
           res.writeHead(403, {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store"
