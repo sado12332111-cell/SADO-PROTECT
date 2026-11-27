@@ -20,14 +20,8 @@ const DISCORD_INVITE_URL =
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 
-const buildDiscordAuthorizeUrl = (redirectUri = "") => {
-  const baseUrl = new URL(DISCORD_INVITE_URL);
-  if (redirectUri) {
-    baseUrl.searchParams.set("response_type", "code");
-    baseUrl.searchParams.set("redirect_uri", redirectUri);
-    baseUrl.searchParams.set("scope", "applications.commands bot identify guilds");
-  }
-  return baseUrl.toString();
+const buildDiscordAuthorizeUrl = () => {
+  return DISCORD_INVITE_URL;
 };
 
 const PLAN_CONFIGS = {
