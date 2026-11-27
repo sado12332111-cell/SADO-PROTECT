@@ -3496,7 +3496,6 @@ const createHttpServer = () => {
         const providedGid = sanitizeSnowflakeId(
           reqUrl.searchParams.get("gid") || APP_STATE.guildId || ""
         );
-        const userAgent = String(req.headers["user-agent"] || "").toLowerCase();
 
         const sendLuaError = (reasonText) => {
           const safeReason = String(reasonText || "Access Denied").replace(/"/g, '\\"');
@@ -3506,26 +3505,6 @@ const createHttpServer = () => {
           });
           res.end(`warn("[SADO PROTECT] ${safeReason}")`);
         };
-
-        // Yalnız açıq brauzer / curl / python sorğularını blokla; executor User-Agent-lərinə icazə ver
-        const isBrowserOrScraper =
-          userAgent.includes("mozilla/") ||
-          userAgent.includes("chrome/") ||
-          userAgent.includes("safari/") ||
-          userAgent.includes("firefox/") ||
-          userAgent.includes("curl/") ||
-          userAgent.includes("wget/") ||
-          userAgent.includes("python") ||
-          userAgent.includes("postman");
-
-        if (isBrowserOrScraper) {
-          res.writeHead(403, {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-store"
-          });
-          res.end("-- [SADO ULTRA PROTECT] Browser / Scraper erisimi qadagandir!");
-          return;
-        }
 
         const clientHwid = sanitizeText(
           String(
@@ -3541,23 +3520,30 @@ const createHttpServer = () => {
           ""
         ).slice(0, 180);
 
-        if (!providedKey) {
-          sendLuaError("Acar (script_key) tapilmadi!");
-          return;
-        }
-
         let matchedGuildId = providedGid;
         let matchedKey = null;
+
+        const searchKeyInList = (list = [], gid = "") => {
+          if (!Array.isArray(list)) return null;
+          if (providedKey) {
+            return list.find(
+              (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
+            );
+          }
+          if (providedUid) {
+            return list.find(
+              (k) => String(k.claimedBy || "") === providedUid && !k.revoked
+            );
+          }
+          return null;
+        };
+
         if (matchedGuildId) {
-          matchedKey = getKeysForGuild(matchedGuildId).find(
-            (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
-          );
+          matchedKey = searchKeyInList(getKeysForGuild(matchedGuildId), matchedGuildId);
         }
         if (!matchedKey && APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
           for (const [gid, tRec] of Object.entries(APP_STATE.tenants)) {
-            const found = (tRec.keys || []).find(
-              (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
-            );
+            const found = searchKeyInList(tRec.keys || [], gid);
             if (found) {
               matchedGuildId = gid;
               matchedKey = found;
@@ -3566,40 +3552,50 @@ const createHttpServer = () => {
           }
         }
         if (!matchedKey) {
-          matchedKey = (APP_STATE.keys || []).find(
-            (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
-          );
+          matchedKey = searchKeyInList(APP_STATE.keys || [], "");
         }
 
-        if (!matchedKey) {
-          sendLuaError("Yanlis ve ya etibarsiz Key!");
+        const wlList = getWhitelistForGuild(matchedGuildId);
+        let wlEntry = wlList.find(
+          (w) =>
+            (providedUid && String(w.discordId) === providedUid) ||
+            (providedKey && String(w.keyCode || "").toUpperCase() === providedKey) ||
+            (matchedKey && String(w.keyCode || "").toUpperCase() === String(matchedKey.code || "").toUpperCase())
+        );
+
+        if (!matchedKey && !wlEntry) {
+          sendLuaError("Acar ve ya Whitelist tapilmadi!");
           return;
         }
 
-        const effectiveUid = providedUid || sanitizeSnowflakeId(matchedKey.claimedBy || "");
+        const effectiveKey =
+          providedKey ||
+          (matchedKey && matchedKey.code) ||
+          (wlEntry && wlEntry.keyCode && wlEntry.keyCode !== "MANUAL-WL"
+            ? wlEntry.keyCode
+            : "SADO-ACTIVE-KEY");
+        const effectiveUid =
+          providedUid ||
+          sanitizeSnowflakeId((matchedKey && matchedKey.claimedBy) || (wlEntry && wlEntry.discordId) || "");
+
         const blList = getBlacklistForGuild(matchedGuildId);
         if (effectiveUid && blList.some((b) => String(b.discordId) === effectiveUid)) {
           sendLuaError("Siz Blacklist-desiniz!");
           return;
         }
 
-        const wlList = getWhitelistForGuild(matchedGuildId);
-        let wlEntry = wlList.find(
-          (w) =>
-            (effectiveUid && String(w.discordId) === effectiveUid) ||
-            String(w.keyCode || "").toUpperCase() === providedKey
-        );
-
         if (!wlEntry && effectiveUid) {
           wlEntry = {
             discordId: effectiveUid,
-            tag: matchedKey.claimedByTag || `User_${effectiveUid}`,
-            keyCode: matchedKey.code,
-            scriptId: matchedKey.scriptId || "",
+            tag: (matchedKey && matchedKey.claimedByTag) || `User_${effectiveUid}`,
+            keyCode: effectiveKey,
+            scriptId: (matchedKey && matchedKey.scriptId) || "",
             hwid: clientHwid || "",
             addedAt: new Date().toISOString()
           };
           wlList.push(wlEntry);
+        } else if (wlEntry && clientHwid && !wlEntry.hwid) {
+          wlEntry.hwid = clientHwid;
         }
 
         if (matchedGuildId) {
@@ -3616,7 +3612,7 @@ const createHttpServer = () => {
           (requestedScriptId &&
             requestedScriptId !== "default" &&
             scripts.find((s) => s.id === requestedScriptId)) ||
-          (matchedKey.scriptId && scripts.find((s) => s.id === matchedKey.scriptId)) ||
+          (matchedKey && matchedKey.scriptId && scripts.find((s) => s.id === matchedKey.scriptId)) ||
           (wlEntry && wlEntry.scriptId && scripts.find((s) => s.id === wlEntry.scriptId)) ||
           scripts[0] ||
           null;
@@ -3626,7 +3622,7 @@ const createHttpServer = () => {
           return;
         }
 
-        const safeKeyEsc = providedKey.replace(/"/g, '\\"');
+        const safeKeyEsc = String(effectiveKey).replace(/"/g, '\\"');
         let bodyText = "";
         if (targetScript.mode === "url" && targetScript.url) {
           try {
@@ -3645,10 +3641,7 @@ const createHttpServer = () => {
         const protectedPayload = [
           `script_key="${safeKeyEsc}"`,
           `if getgenv then getgenv().script_key="${safeKeyEsc}" end`,
-          `local _ok, _err = pcall(function()`,
-          bodyText,
-          `end)`,
-          `if not _ok then warn("[SADO PROTECT] " .. tostring(_err)) end`
+          bodyText
         ].join("\n");
 
         res.writeHead(200, {
