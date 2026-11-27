@@ -675,7 +675,7 @@ const getScriptContentForUser = (
       ? chosen.code.trim()
       : `print("${scriptName.replace(/"/g, '\\"')} OK")`;
 
-  const shortLocalCode = `script_key="${safeKey}"\npcall(function()\n${rawBody}\nend)`;
+  const shortLocalCode = `script_key="${safeKey}"\n${rawBody}`;
 
   return {
     scriptName,
