@@ -632,13 +632,6 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
   } catch (_err) {}
   return null;
 };
-    }
-  } catch (_err) {}
-  return {
-    id: cleanId,
-    name: `Sunucu (${cleanId})`
-  };
-};
 
 const buildPanelComponents = (designObj) => {
   const design = normalizePanelDesign(designObj);
