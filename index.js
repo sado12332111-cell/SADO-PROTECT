@@ -1153,19 +1153,32 @@ const handleDiscordInteraction = async (interaction) => {
 
       if (cmdName === "resethwid") {
         const wl = getWhitelistForGuild(guildId);
+        const keys = getKeysForGuild(guildId);
         const entry = wl.find((w) => String(w.discordId) === actorId);
         if (entry) {
           entry.hwid = "";
-          if (guildId) {
-            const tenant = getTenantRecordByGuildId(guildId, true);
-            if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
-          }
-          saveAppStateToDisk();
+          entry.lockedHwid = "";
         }
+        for (const k of keys) {
+          if (String(k.claimedBy || "") === actorId) {
+            k.hwid = "";
+            k.lockedHwid = "";
+          }
+        }
+        if (guildId) {
+          const tenant = getTenantRecordByGuildId(guildId, true);
+          if (tenant) {
+            tenant.keys = keys;
+            tenant.whitelist = wl;
+            syncTenantIntoGlobalIfPrimary(tenant);
+          }
+        }
+        saveAppStateToDisk();
+        appendAuditLog("RESET_HWID_CMD", actorTag, guildId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⚙️ **${actorTag}** üçün HWID sıfırlandı.`,
+            content: `⚙️ **${actorTag}** üçün HWID sıfırlandı! Növbəti dəfə ilk açdığınız cihaza kilidlənəcək.`,
             flags: 64
           }
         });
@@ -1319,19 +1332,32 @@ const handleDiscordInteraction = async (interaction) => {
 
       if (customId === "btn_reset_hwid") {
         const wl = getWhitelistForGuild(guildId);
+        const keys = getKeysForGuild(guildId);
         const entry = wl.find((w) => String(w.discordId) === actorId);
         if (entry) {
           entry.hwid = "";
-          if (guildId) {
-            const tenant = getTenantRecordByGuildId(guildId, true);
-            if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
-          }
-          saveAppStateToDisk();
+          entry.lockedHwid = "";
         }
+        for (const k of keys) {
+          if (String(k.claimedBy || "") === actorId) {
+            k.hwid = "";
+            k.lockedHwid = "";
+          }
+        }
+        if (guildId) {
+          const tenant = getTenantRecordByGuildId(guildId, true);
+          if (tenant) {
+            tenant.keys = keys;
+            tenant.whitelist = wl;
+            syncTenantIntoGlobalIfPrimary(tenant);
+          }
+        }
+        saveAppStateToDisk();
+        appendAuditLog("RESET_HWID_BTN", actorTag, guildId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⚙️ **${actorTag}** üçün HWID uğurla sıfırlandı.`,
+            content: `⚙️ **${actorTag}** üçün HWID sıfırlandı! İlk hansı cihazda işlətsəniz, həmin cihaza kilidlənəcək.`,
             flags: 64
           }
         });
@@ -3522,7 +3548,39 @@ const createHttpServer = () => {
           res.end(`warn("[SADO PROTECT] ${safeReason}")`);
         };
 
-        const clientHwid = sanitizeText(
+        const sendLuaKick = (kickReason) => {
+          const safeKick = String(kickReason || "HWID basqa cihaza baglidir!")
+            .replace(/\\/g, "\\\\")
+            .replace(/"/g, '\\"');
+          const luaKickCode = [
+            "(function()",
+            "  local Players = game:GetService('Players')",
+            "  local lp = Players.LocalPlayer",
+            `  local msg = "[SADO PROTECT] ${safeKick}"`,
+            "  local function _doKick(p)",
+            "    if p then pcall(function() p:Kick(msg) end) end",
+            "  end",
+            "  if lp then _doKick(lp) end",
+            "  Players.PlayerAdded:Connect(function(p)",
+            "    if p == Players.LocalPlayer then _doKick(p) end",
+            "  end)",
+            "  task.spawn(function()",
+            "    for _ = 1, 20 do",
+            "      lp = Players.LocalPlayer",
+            "      if lp then _doKick(lp) end",
+            "      task.wait(0.25)",
+            "    end",
+            "  end)",
+            "end)()"
+          ].join("\n");
+          res.writeHead(200, {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store"
+          });
+          res.end(luaKickCode);
+        };
+
+        const rawHeaderHwid = sanitizeText(
           String(
             req.headers["syn-fingerprint"] ||
               req.headers["sw-fingerprint"] ||
@@ -3530,11 +3588,29 @@ const createHttpServer = () => {
               req.headers["flux-fingerprint"] ||
               req.headers["krnl-hwid"] ||
               req.headers["x-hwid"] ||
+              req.headers["fingerprint"] ||
               reqUrl.searchParams.get("hwid") ||
               ""
           ),
           ""
         ).slice(0, 180);
+
+        const clientIp = sanitizeText(
+          String(
+            req.headers["x-forwarded-for"] ||
+              (req.socket && req.socket.remoteAddress) ||
+              ""
+          )
+            .split(",")[0]
+            .trim(),
+          ""
+        );
+
+        const effectiveHwid =
+          rawHeaderHwid ||
+          (clientIp
+            ? `NET-${crypto.createHash("sha256").update(`${clientIp}|${uaHeader}`).digest("hex").slice(0, 24)}`
+            : "");
 
         let matchedGuildId = providedGid;
         let matchedKey = null;
@@ -3606,12 +3682,36 @@ const createHttpServer = () => {
             tag: (matchedKey && matchedKey.claimedByTag) || `User_${effectiveUid}`,
             keyCode: effectiveKey,
             scriptId: (matchedKey && matchedKey.scriptId) || "",
-            hwid: clientHwid || "",
+            hwid: "",
+            lockedHwid: "",
             addedAt: new Date().toISOString()
           };
           wlList.push(wlEntry);
-        } else if (wlEntry && clientHwid && !wlEntry.hwid) {
-          wlEntry.hwid = clientHwid;
+        }
+
+        const boundHwid = sanitizeText(
+          (wlEntry && (wlEntry.lockedHwid || wlEntry.hwid)) ||
+            (matchedKey && (matchedKey.lockedHwid || matchedKey.hwid)) ||
+            "",
+          ""
+        );
+
+        if (effectiveHwid) {
+          if (!boundHwid) {
+            if (wlEntry) {
+              wlEntry.hwid = effectiveHwid;
+              wlEntry.lockedHwid = effectiveHwid;
+            }
+            if (matchedKey) {
+              matchedKey.hwid = effectiveHwid;
+              matchedKey.lockedHwid = effectiveHwid;
+            }
+            appendAuditLog("HWID_LOCKED", `${effectiveUid || effectiveKey} -> ${effectiveHwid.slice(0, 14)}`, matchedGuildId);
+          } else if (boundHwid !== effectiveHwid) {
+            appendAuditLog("HWID_MISMATCH_KICK", `${effectiveUid || effectiveKey} blocked on another device`, matchedGuildId);
+            sendLuaKick("HWID basqa cihaza kilidlenib! Yeniden baglamaq ucun Reset HWID edin.");
+            return;
+          }
         }
 
         if (matchedGuildId) {
