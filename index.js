@@ -646,13 +646,15 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     }
   } catch (_err2) {}
 
+  // Discord botu o sunucuya qoşulmayıbsa və ya API adını qaytarmırsa, sunucunu aktiv kimi tanıyıb adlandırırıq
   const existingTenant =
     APP_STATE.tenants && typeof APP_STATE.tenants === "object" ? APP_STATE.tenants[cleanId] : null;
   if (existingTenant && sanitizeText(existingTenant.guildName, "")) {
     const cachedName = sanitizeText(existingTenant.guildName, "");
     if (
       !/^Discord Sunucusu/i.test(cachedName) &&
-      !/^Sunucu\s*\(/i.test(cachedName)
+      !/^Sunucu\s*\(/i.test(cachedName) &&
+      !/^Sunucu$/i.test(cachedName)
     ) {
       return {
         id: cleanId,
@@ -666,7 +668,8 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     APP_STATE.guildId === cleanId &&
     globalName &&
     !/^Discord Sunucusu/i.test(globalName) &&
-    !/^Sunucu\s*\(/i.test(globalName)
+    !/^Sunucu\s*\(/i.test(globalName) &&
+    !/^Sunucu$/i.test(globalName)
   ) {
     return {
       id: cleanId,
@@ -674,154 +677,9 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
     };
   }
 
-  return null;
-};
-
-const buildPanelComponents = (designObj) => {
-  const design = normalizePanelDesign(designObj);
-  const rows = [];
-  let currentRow = [];
-
-  for (const btn of design.buttons) {
-    const component = {
-      type: 2,
-      custom_id: btn.id,
-      label: btn.label,
-      style: btn.style
-    };
-    if (btn.emoji) {
-      component.emoji = { name: btn.emoji };
-    }
-    currentRow.push(component);
-    if (currentRow.length === 2) {
-      rows.push({ type: 1, components: currentRow });
-      currentRow = [];
-    }
-  }
-
-  if (currentRow.length > 0) {
-    rows.push({ type: 1, components: currentRow });
-  }
-
-  return rows;
-};
-
-const buildPanelEmbed = (guildId, designObj) => {
-  const design = normalizePanelDesign(designObj);
-  const cleanGuildId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
-  const rawTenantName = sanitizeText(tenant && tenant.guildName, "");
-  const rawGlobalName = sanitizeText(APP_STATE.guildName, "");
-  const guildLabel =
-    (rawTenantName && !/^Sunucu\s*\(/i.test(rawTenantName) ? rawTenantName : "") ||
-    (rawGlobalName && !/^Sunucu\s*\(/i.test(rawGlobalName) ? rawGlobalName : "") ||
-    "Discord Sunucusu";
-  const scriptsList = getScriptsForGuild(cleanGuildId);
-  const keysList = getKeysForGuild(cleanGuildId);
-  const wlList = getWhitelistForGuild(cleanGuildId);
-  const blList = getBlacklistForGuild(cleanGuildId);
-  const firstScript = scriptsList[0] || null;
-  const scriptSourceLabel = firstScript
-    ? firstScript.mode === "url"
-      ? `URL (${firstScript.url || "Link"})`
-      : firstScript.mode === "file"
-      ? `Dosya (${firstScript.fileName || `${firstScript.name}.lua`})`
-      : `Kod (${firstScript.fileName || `${firstScript.name}.lua`})`
-    : "Təyin edilməyib";
-
-  const embed = {
-    title: `${design.title} — ${guildLabel}`,
-    description: design.description,
-    color: design.color,
-    fields: [
-      { name: "🏰 Bağlanan Sunucu", value: guildLabel, inline: false },
-      { name: "📜 Seçilmiş Script", value: firstScript ? firstScript.name : guildLabel, inline: false },
-      { name: "🔗 Script Mənbəyi", value: scriptSourceLabel, inline: false },
-      { name: "🔑 Aktiv Keylər", value: `${keysList.length} ədəd`, inline: false },
-      { name: "🛡️ Whitelist / Blacklist", value: `${wlList.length} / ${blList.length}`, inline: false }
-    ],
-    footer: {
-      text: design.footerText || DEFAULT_PANEL_DESIGN.footerText
-    },
-    timestamp: new Date().toISOString()
-  };
-
-  if (design.imageUrl && /^https?:\/\//i.test(design.imageUrl)) {
-    embed.image = { url: design.imageUrl };
-  }
-
-  return embed;
-};
-
-const sendPanelMessageToChannel = async (channelId, guildId = "") => {
-  const cleanChannelId = sanitizeSnowflakeId(channelId);
-  if (!cleanChannelId) {
-    throw new Error("Düzgün Kanal ID daxil edin.");
-  }
-  const cleanGuildId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  const design = getPanelDesignForGuild(cleanGuildId);
-  const embed = buildPanelEmbed(cleanGuildId, design);
-  const components = buildPanelComponents(design);
-
-  const result = await discordApiRequest(`/channels/${cleanChannelId}/messages`, "POST", {
-    embeds: [embed],
-    components
-  });
-
-  if (cleanGuildId) {
-    const tenant = getTenantRecordByGuildId(cleanGuildId, true);
-    if (tenant) {
-      tenant.panelChannelId = cleanChannelId;
-      syncTenantIntoGlobalIfPrimary(tenant);
-      saveAppStateToDisk();
-    }
-  } else {
-    APP_STATE.panelChannelId = cleanChannelId;
-    saveAppStateToDisk();
-  }
-
-  return result.data;
-};
-
-const getScriptContentForUser = (guildId, discordUserId, scriptId = "") => {
-  const scripts = getScriptsForGuild(guildId);
-  let targetScript = null;
-
-  if (scriptId) {
-    targetScript = scripts.find((s) => s.id === scriptId) || null;
-  }
-
-  if (!targetScript) {
-    const wl = getWhitelistForGuild(guildId);
-    const userEntry = wl.find((w) => String(w.discordId) === String(discordUserId));
-    if (userEntry && userEntry.scriptId) {
-      targetScript = scripts.find((s) => s.id === userEntry.scriptId) || null;
-    }
-  }
-
-  if (!targetScript && scripts.length > 0) {
-    targetScript = scripts[0];
-  }
-
-  if (!targetScript) {
-    return {
-      scriptName: "SADO HUB",
-      code: `-- SADO PROTECT Loader\nloadstring(game:HttpGet("https://raw.githubusercontent.com/sado-protect/loader/main/main.lua"))()`
-    };
-  }
-
-  if (targetScript.mode === "url" && targetScript.url) {
-    return {
-      scriptName: targetScript.name,
-      code: `-- ${targetScript.name} (${targetScript.id})\nloadstring(game:HttpGet("${targetScript.url.replace(/"/g, '\\"')}"))()`
-    };
-  }
-
   return {
-    scriptName: targetScript.name,
-    code:
-      targetScript.code ||
-      `-- ${targetScript.name}\nprint("SADO PROTECT Active - ${targetScript.name}")`
+    id: cleanId,
+    name: `Sunucu #${cleanId.slice(-4)}`
   };
 };
 
@@ -2571,10 +2429,12 @@ const renderDashboardHtml = () => {
 
       if (document.getElementById("headerGuildName")) {
         const gText =
-          guild.guildName && !/^Discord Sunucusu$/i.test(guild.guildName)
+          guild.guildName &&
+          !/^Discord Sunucusu$/i.test(guild.guildName) &&
+          !/^Sunucu$/i.test(guild.guildName)
             ? guild.guildName
             : guild.guildId
-            ? "Sunucu"
+            ? `Sunucu #${String(guild.guildId).slice(-4)}`
             : "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
@@ -3201,7 +3061,7 @@ const createHttpServer = () => {
                 !/^Discord Sunucusu/i.test(prevName) &&
                 !/^Sunucu$/i.test(prevName)
                   ? prevName
-                  : "";
+                  : `Sunucu #${guildId.slice(-4)}`;
             }
             if (resolvedName) {
               tenant.guildName = resolvedName;
