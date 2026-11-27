@@ -2434,7 +2434,7 @@ const renderDashboardHtml = () => {
           !/^Sunucu$/i.test(guild.guildName)
             ? guild.guildName
             : guild.guildId
-            ? `Sunucu #${String(guild.guildId).slice(-4)}`
+            ? "Sunucu #" + String(guild.guildId).slice(-4)
             : "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
