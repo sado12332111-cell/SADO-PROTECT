@@ -3004,6 +3004,7 @@ const createHttpServer = () => {
         if (!name) {
           sendJsonResponse(res, 400, { error: "Script adı daxil edin." });
           return;
+        }
         const mode = body.mode === "url" ? "url" : body.mode === "file" ? "file" : "code";
         const url = sanitizeText(body.url, "");
         const code = typeof body.code === "string" ? body.code : "";
