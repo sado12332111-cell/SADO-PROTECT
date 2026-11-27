@@ -1373,7 +1373,7 @@ const handleDiscordInteractionCreate = async (interaction) => {
         return;
       }
 
-      let userKeyRecord =
+      const userKeyRecord =
         ctxKeys.find((k) => {
           if (!k || k.active === false) return false;
           const kScriptLower = sanitizeText(k.scriptName, "").toLowerCase();
@@ -1394,22 +1394,39 @@ const handleDiscordInteractionCreate = async (interaction) => {
         }) || null;
 
       if (!userKeyRecord) {
-        const autoKeyVal = generateLicenseKeyString();
-        userKeyRecord = {
-          id: generateUniqueId("key"),
-          key: autoKeyVal,
-          owner: userDisplayLabel,
-          ownerId: userId,
-          scriptName: matchedScript ? matchedScript.name : "Ümumi",
-          guildId: interactionGuildId,
-          days: 0,
-          hwid: "",
-          hwidResetCount: 0,
-          active: true,
-          createdAt: new Date().toISOString()
-        };
-        ctxKeys.unshift(userKeyRecord);
+        const updatedWl = ctxWhitelist.filter((item) => {
+          if (!item) return false;
+          const itemScriptLower = sanitizeText(item.scriptName, "").toLowerCase();
+          if (
+            matchedScript &&
+            itemScriptLower &&
+            itemScriptLower !== "ümumi" &&
+            itemScriptLower !== "hamısı" &&
+            itemScriptLower !== sanitizeText(matchedScript.name, "").toLowerCase()
+          ) {
+            return true;
+          }
+          const itemTokens = collectUserMatchTokens(item.value, {
+            owner: item.value,
+            ownerId: item.userId || "",
+            key: item.generatedKey || ""
+          });
+          for (const tk of userTokens) {
+            if (itemTokens.has(tk)) return false;
+          }
+          return true;
+        });
+        ctxWhitelist.splice(0, ctxWhitelist.length, ...updatedWl);
         commitCtxState();
+
+        await respondToDiscordInteraction(interaction.id, interaction.token, {
+          type: 4,
+          data: {
+            content: "❌ Aktiv lisenziya açarınız silinib və ya mövcud deyil. Yeni açarınız varsa **Reedem Key** düyməsi ilə aktiv edin.",
+            flags: 64
+          }
+        });
+        return;
       }
 
       const basePublicUrl = sanitizeText(process.env.RENDER_EXTERNAL_URL, `http://localhost:${PORT}`).replace(
@@ -3643,13 +3660,79 @@ const server = http.createServer(async (req, res) => {
       const keyId = sanitizeText(pathname.replace("/api/keys/", ""), "");
       const reqGuildId = resolveRequestGuildId(req, reqUrl, null);
       const tenant = getTenantRecordByGuildId(reqGuildId);
+      const keysArr = tenant ? tenant.keys || [] : APP_STATE.keys || [];
+      const targetKeyObj = keysArr.find((k) => k && k.id === keyId) || null;
+      const filteredKeys = keysArr.filter((k) => k && k.id !== keyId);
+
       if (tenant) {
-        tenant.keys = (tenant.keys || []).filter((k) => k && k.id !== keyId);
-        syncTenantIntoGlobalIfPrimary(tenant);
+        tenant.keys = filteredKeys;
       } else {
-        APP_STATE.keys = (APP_STATE.keys || []).filter((k) => k && k.id !== keyId);
+        APP_STATE.keys = filteredKeys;
       }
+
+      if (targetKeyObj) {
+        const targetKeyCode = sanitizeText(targetKeyObj.key, "");
+        const targetOwnerTokens = collectUserMatchTokens(targetKeyObj.owner, targetKeyObj);
+        const targetScriptLower = sanitizeText(targetKeyObj.scriptName, "").toLowerCase();
+        const wlArr = tenant ? tenant.whitelist || [] : APP_STATE.whitelist || [];
+
+        const cleanedWl = wlArr.filter((w) => {
+          if (!w) return false;
+          if (targetKeyCode && sanitizeText(w.generatedKey, "") === targetKeyCode) {
+            return false;
+          }
+          const wScriptLower = sanitizeText(w.scriptName, "").toLowerCase();
+          const sameScript =
+            !targetScriptLower ||
+            targetScriptLower === "ümumi" ||
+            !wScriptLower ||
+            wScriptLower === "ümumi" ||
+            wScriptLower === targetScriptLower;
+          if (!sameScript) return true;
+
+          const wTokens = collectUserMatchTokens(w.value, {
+            owner: w.value,
+            ownerId: w.userId || "",
+            key: w.generatedKey || ""
+          });
+          for (const tk of targetOwnerTokens) {
+            if (wTokens.has(tk)) {
+              const hasAnotherActiveKey = filteredKeys.some((otherK) => {
+                if (!otherK || otherK.active === false) return false;
+                const otherScriptLower = sanitizeText(otherK.scriptName, "").toLowerCase();
+                if (
+                  wScriptLower &&
+                  wScriptLower !== "ümumi" &&
+                  otherScriptLower &&
+                  otherScriptLower !== "ümumi" &&
+                  otherScriptLower !== wScriptLower
+                ) {
+                  return false;
+                }
+                const otherTokens = collectUserMatchTokens(otherK.owner, otherK);
+                return otherTokens.has(tk);
+              });
+              if (!hasAnotherActiveKey) return false;
+            }
+          }
+          return true;
+        });
+
+        if (tenant) {
+          tenant.whitelist = cleanedWl;
+        } else {
+          APP_STATE.whitelist = cleanedWl;
+        }
+      }
+
+      if (tenant) syncTenantIntoGlobalIfPrimary(tenant);
       saveAppStateToDisk();
+      appendAuditLog(
+        "KEY_DELETED",
+        `Key silindi: ${targetKeyObj ? targetKeyObj.key : keyId}`,
+        "Dashboard",
+        tenant ? tenant.guildId : ""
+      );
       sendJsonResponse(res, 200, { ok: true });
       return;
     }
