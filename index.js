@@ -621,10 +621,17 @@ const fetchGuildInfoFromDiscord = async (guildId) => {
   try {
     const res = await discordApiRequest(`/guilds/${cleanId}`, "GET");
     if (res && res.data && res.data.id) {
-      return {
-        id: String(res.data.id),
-        name: sanitizeText(res.data.name, `Sunucu (${cleanId})`)
-      };
+      const realName = sanitizeText(res.data.name, "");
+      if (realName) {
+        return {
+          id: String(res.data.id),
+          name: realName
+        };
+      }
+    }
+  } catch (_err) {}
+  return null;
+};
     }
   } catch (_err) {}
   return {
@@ -1412,13 +1419,11 @@ const startDiscordGatewayListener = () => {
             const gid = sanitizeSnowflakeId(g && g.id);
             if (gid) {
               const tRec = getTenantRecordByGuildId(gid, true);
-              if (tRec && !tRec.guildName) {
-                const gInfo = await fetchGuildInfoFromDiscord(gid);
-                if (gInfo && gInfo.name) {
-                  tRec.guildName = gInfo.name;
-                  if (APP_STATE.guildId === gid) {
-                    APP_STATE.guildName = gInfo.name;
-                  }
+              const gInfo = await fetchGuildInfoFromDiscord(gid);
+              if (tRec && gInfo && gInfo.name) {
+                tRec.guildName = gInfo.name;
+                if (APP_STATE.guildId === gid) {
+                  APP_STATE.guildName = gInfo.name;
                 }
               }
             }
@@ -1433,10 +1438,12 @@ const startDiscordGatewayListener = () => {
       if (eventName === "GUILD_CREATE") {
         const gid = sanitizeSnowflakeId(eventData.id);
         if (gid) {
-          const gName = sanitizeText(eventData.name, `Sunucu (${gid})`);
+          const gName = sanitizeText(eventData.name, "");
           const tRec = getTenantRecordByGuildId(gid, true);
           if (tRec) {
-            tRec.guildName = gName;
+            if (gName) {
+              tRec.guildName = gName;
+            }
             if (!tRec.botAddedBy) {
               const adder = await tryResolveBotAdderFromAuditLog(gid);
               if (adder) {
@@ -1450,7 +1457,7 @@ const startDiscordGatewayListener = () => {
             }
             if (!APP_STATE.guildId) {
               APP_STATE.guildId = gid;
-              APP_STATE.guildName = gName;
+              if (gName) APP_STATE.guildName = gName;
             }
             syncTenantIntoGlobalIfPrimary(tRec);
             saveAppStateToDisk();
@@ -1534,7 +1541,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
 
   let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
-  if (cleanGuildId) {
+  if (cleanGuildId && tokenPresent) {
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
       resolvedGuildName = info.name;
@@ -1607,7 +1614,7 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     guild: {
       guildId: cleanGuildId,
       guildName: resolvedGuildName,
-      displayName: resolvedGuildName || (cleanGuildId ? `Sunucu (${cleanGuildId})` : "Bağlı Sunucu Yoxdur"),
+      displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
       panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
       botAddedBy: botAddedByInfo
     },
@@ -2040,6 +2047,10 @@ const renderDashboardHtml = () => {
             <div class="field-group">
               <label for="guildIdInput">Sunucu ID (Guild ID)</label>
               <input id="guildIdInput" type="text" placeholder="Məsələn: 123456789012345678" />
+            </div>
+            <div class="field-group">
+              <label for="guildNameInput">Sunucu Adı (avtomatik gəlir və ya əl ilə yazın)</label>
+              <input id="guildNameInput" type="text" placeholder="Məsələn: SADO SERVER" />
             </div>
             <div class="field-group">
               <label for="panelChannelInput">Panel Kanal ID</label>
@@ -2511,9 +2522,7 @@ const renderDashboardHtml = () => {
       }
 
       if (document.getElementById("headerGuildName")) {
-        const gText =
-          guild.guildName ||
-          (guild.guildId ? "Sunucu (" + guild.guildId + ")" : "Bağlı Sunucu Yoxdur");
+        const gText = guild.guildName || "Bağlı Sunucu Yoxdur";
         document.getElementById("headerGuildName").textContent = gText;
       }
       if (document.getElementById("headerPlanName")) {
@@ -2540,11 +2549,12 @@ const renderDashboardHtml = () => {
         }
         if (connBox) connBox.style.display = "block";
         if (guestBox) guestBox.style.display = "none";
+        const displayAcctName = accInfo.user.displayName || accInfo.user.username || guild.guildName || "Discord Hesabı";
         if (document.getElementById("popoverUserName")) {
-          document.getElementById("popoverUserName").textContent = accInfo.user.displayName || accInfo.user.username;
+          document.getElementById("popoverUserName").textContent = displayAcctName;
         }
         if (document.getElementById("popoverUserId")) {
-          document.getElementById("popoverUserId").textContent = "ID: " + (accInfo.user.userId || "");
+          document.getElementById("popoverUserId").textContent = accInfo.user.username ? "@" + accInfo.user.username : "";
         }
         const avImg = document.getElementById("popoverUserAvatar");
         if (avImg) {
@@ -2564,6 +2574,10 @@ const renderDashboardHtml = () => {
       const guildInp = document.getElementById("guildIdInput");
       if (guildInp && document.activeElement !== guildInp) {
         guildInp.value = guild.guildId || "";
+      }
+      const gNameInp = document.getElementById("guildNameInput");
+      if (gNameInp && document.activeElement !== gNameInp) {
+        gNameInp.value = guild.guildName || "";
       }
       const chInp = document.getElementById("panelChannelInput");
       if (chInp && document.activeElement !== chInp) {
@@ -2856,8 +2870,9 @@ const renderDashboardHtml = () => {
     document.getElementById("saveGuildSettingsBtn").addEventListener("click", async () => {
       try {
         const guildId = document.getElementById("guildIdInput").value.trim();
+        const guildName = document.getElementById("guildNameInput").value.trim();
         const panelChannelId = document.getElementById("panelChannelInput").value.trim();
-        await apiRequest("/api/guild/settings", "POST", { guildId, panelChannelId });
+        await apiRequest("/api/guild/settings", "POST", { guildId, guildName, panelChannelId });
         showToast("Sunucu və kanal yadda saxlandı");
         await refreshDashboardSnapshot();
       } catch (err) {
@@ -3037,7 +3052,7 @@ const createHttpServer = () => {
             (APP_STATE.guildName && APP_STATE.guildName.trim()) ||
             "Discord Hesabı";
           APP_STATE.connectedDiscordUser = {
-            userId: APP_STATE.guildId || DEFAULT_CLIENT_ID,
+            userId: fallbackName,
             username: fallbackName,
             displayName: fallbackName,
             avatarUrl: "",
@@ -3048,8 +3063,11 @@ const createHttpServer = () => {
           res.end();
           return;
         }
-        const authUrl = buildDiscordLoginUrl(callbackUrl);
-        res.writeHead(302, { Location: authUrl || "/" });
+        const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
+        const directOauthUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
+          clientId
+        )}&response_type=code&scope=identify&redirect_uri=${encodeURIComponent(callbackUrl)}`;
+        res.writeHead(302, { Location: directOauthUrl });
         res.end();
         return;
       }
@@ -3100,8 +3118,9 @@ const createHttpServer = () => {
       if (method === "POST" && pathname === "/api/guild/settings") {
         const body = await readJsonBody(req);
         const guildId = sanitizeSnowflakeId(body.guildId || "");
+        const manualGuildName = sanitizeText(body.guildName || "", "");
         const panelChannelId = sanitizeSnowflakeId(body.panelChannelId || "");
-        let resolvedName = "";
+        let resolvedName = manualGuildName;
         if (guildId) {
           APP_STATE.guildId = guildId;
           const tenant = getTenantRecordByGuildId(guildId, true);
@@ -3110,16 +3129,18 @@ const createHttpServer = () => {
             if (resolveDiscordBotToken()) {
               const info = await fetchGuildInfoFromDiscord(guildId);
               if (info && info.name) {
-                tenant.guildName = info.name;
                 resolvedName = info.name;
               }
             }
-            if (!resolvedName) {
-              resolvedName = tenant.guildName || `Sunucu (${guildId})`;
+            if (resolvedName) {
               tenant.guildName = resolvedName;
+              APP_STATE.guildName = resolvedName;
             }
             syncTenantIntoGlobalIfPrimary(tenant);
           }
+        } else if (manualGuildName) {
+          APP_STATE.guildName = manualGuildName;
+          resolvedName = manualGuildName;
         }
         if (panelChannelId) {
           APP_STATE.panelChannelId = panelChannelId;
