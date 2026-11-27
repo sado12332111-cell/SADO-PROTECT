@@ -356,6 +356,14 @@ const discordApiRequest = (endpointPath, method = "GET", bodyPayload = null, ove
   });
 };
 
+const respondToDiscordInteraction = async (interactionId, interactionToken, responseBody) => {
+  return await discordApiRequest(
+    `/interactions/${encodeURIComponent(interactionId)}/${encodeURIComponent(interactionToken)}/callback`,
+    "POST",
+    responseBody
+  );
+};
+
 const httpsJsonRequest = (urlStr, method = "GET", bodyObj = null, extraHeaders = {}) => {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(urlStr);
@@ -699,7 +707,7 @@ const getScriptContentForUser = (guildId = "", userId = "", preferredScriptId = 
       scriptName,
       code: [
         `script_key = "${safeKey}";`,
-        `-- ${scriptName} • SADO PROTECT Loader (Junkie / LuaArmor / LuaProtect style)`,
+        `-- ${scriptName} • SADO PROTECT Loader`,
         `loadstring(game:HttpGet("${chosen.url}"))()`
       ].join("\n")
     };
@@ -828,17 +836,14 @@ const handleDiscordInteraction = async (interaction) => {
             APP_STATE.panelChannelId ||
             ""
         );
-        await sendPanelMessageToChannel(targetCh, guildId, chosenScriptId);
-        const scripts = getScriptsForGuild(guildId);
-        const sObj = scripts.find((s) => s.id === chosenScriptId);
-        const labelText = sObj ? ` (**${sObj.name}**)` : "";
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `✅ Panel${labelText} <#${targetCh}> kanalına göndərildi.`,
+            content: `⏳ Panel <#${targetCh}> kanalına göndərilir...`,
             flags: 64
           }
         });
+        await sendPanelMessageToChannel(targetCh, guildId, chosenScriptId);
         return;
       }
 
