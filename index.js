@@ -277,6 +277,71 @@ const isGuildAuthorized = (guildId = "", userId = "") => {
   return !ownerId || ownerId === uid;
 };
 
+const formatDurationStatusText = (recordObj = null) => {
+  if (!recordObj || typeof recordObj !== "object") return "Yoxdur";
+  const rawExpires = recordObj.expiresAt || recordObj.expireAt || recordObj.expires_at || "";
+  const rawDays = Number(recordObj.durationDays || recordObj.days || 0);
+
+  if (rawExpires) {
+    const expMs = Date.parse(String(rawExpires));
+    if (Number.isFinite(expMs)) {
+      const diffMs = expMs - Date.now();
+      if (diffMs <= 0) return "Müddəti bitib ❌";
+      const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+      if (daysLeft >= 36500) return "Ömürlük (Lifetime) ♾️";
+      return `${daysLeft} gün qalıb`;
+    }
+  }
+
+  if (Number.isFinite(rawDays) && rawDays > 0) {
+    if (rawDays >= 36500) return "Ömürlük (Lifetime) ♾️";
+    return `${Math.ceil(rawDays)} günlük`;
+  }
+
+  return "Ömürlük (Lifetime) ♾️";
+};
+
+const getUserAccessSummary = (guildId = "", userId = "") => {
+  const uid = sanitizeSnowflakeId(userId || "");
+  const wl = getWhitelistForGuild(guildId);
+  const keys = getKeysForGuild(guildId);
+  const userWl = wl.find((w) => String(w.discordId) === uid) || null;
+  const userKeyObj =
+    keys.find(
+      (k) =>
+        !k.revoked &&
+        ((userWl &&
+          userWl.keyCode &&
+          userWl.keyCode !== "MANUAL-WL" &&
+          String(k.code || "").toUpperCase() === String(userWl.keyCode || "").toUpperCase()) ||
+          String(k.claimedBy || "") === uid)
+    ) || null;
+
+  const hasValidWl = Boolean(
+    userWl &&
+      (userWl.keyCode === "MANUAL-WL" ||
+        userKeyObj ||
+        (userWl.keyCode && String(userWl.keyCode).trim().length > 0))
+  );
+  const hasAccess = Boolean(userKeyObj || hasValidWl);
+  const activeKeyCode =
+    (userKeyObj && userKeyObj.code) ||
+    (userWl && userWl.keyCode && userWl.keyCode !== "MANUAL-WL" ? userWl.keyCode : "");
+  const resetCount = Number(
+    (userWl && userWl.resetCount) || (userKeyObj && userKeyObj.resetCount) || 0
+  );
+  const durationLabel = formatDurationStatusText(userKeyObj || userWl);
+
+  return {
+    hasAccess,
+    userWl,
+    userKeyObj,
+    activeKeyCode,
+    resetCount: Number.isFinite(resetCount) && resetCount >= 0 ? Math.floor(resetCount) : 0,
+    durationLabel
+  };
+};
+
 const syncTenantIntoGlobalIfPrimary = (tenant) => {
   if (!tenant || !tenant.guildId) return;
   if (!APP_STATE.guildId) {
@@ -1115,6 +1180,7 @@ const handleDiscordInteraction = async (interaction) => {
           scriptId: foundKey.scriptId || "",
           hwid: existingIdx >= 0 ? wl[existingIdx].hwid || "" : "",
           lockedHwid: existingIdx >= 0 ? wl[existingIdx].lockedHwid || "" : "",
+          resetCount: existingIdx >= 0 ? Number(wl[existingIdx].resetCount || 0) : 0,
           addedAt: new Date().toISOString()
         };
         if (existingIdx >= 0) {
@@ -1228,6 +1294,7 @@ const handleDiscordInteraction = async (interaction) => {
           scriptId: effectiveScriptId,
           hwid: "",
           lockedHwid: "",
+          resetCount: idx >= 0 ? Number(wl[idx].resetCount || 0) : 0,
           addedAt: new Date().toISOString()
         };
         if (idx >= 0) wl[idx] = record;
@@ -1308,17 +1375,36 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
+        const access = getUserAccessSummary(guildId, actorId);
+        if (!access.hasAccess) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ HWID sıfırlamaq üçün əvvəlcə aktiv **Key** və ya **Whitelist**-iniz olmalıdır!",
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const wl = getWhitelistForGuild(guildId);
         const keys = getKeysForGuild(guildId);
+        const nextResetCount = access.resetCount + 1;
         const entry = wl.find((w) => String(w.discordId) === actorId);
         if (entry) {
           entry.hwid = "";
           entry.lockedHwid = "";
+          entry.resetCount = nextResetCount;
         }
         for (const k of keys) {
-          if (String(k.claimedBy || "") === actorId) {
+          if (
+            String(k.claimedBy || "") === actorId ||
+            (access.activeKeyCode &&
+              String(k.code || "").toUpperCase() === String(access.activeKeyCode).toUpperCase())
+          ) {
             k.hwid = "";
             k.lockedHwid = "";
+            k.resetCount = nextResetCount;
           }
         }
         if (guildId) {
@@ -1330,11 +1416,11 @@ const handleDiscordInteraction = async (interaction) => {
           }
         }
         saveAppStateToDisk();
-        appendAuditLog("RESET_HWID_CMD", `UserID=${actorId} (${actorTag})`, guildId);
+        appendAuditLog("RESET_HWID_CMD", `UserID=${actorId} Count=${nextResetCount}`, guildId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⚙️ **${actorTag}** (\`ID: ${actorId}\`) üçün HWID sıfırlandı! Növbəti dəfə ilk açdığınız cihaza kilidlənəcək.`,
+            content: `⚙️ **${actorTag}** (\`ID: ${actorId}\`) üçün HWID sıfırlandı! (Ümumi Reset: **${nextResetCount}**)\nNövbəti dəfə ilk açdığınız cihaza kilidlənəcək.`,
             flags: 64
           }
         });
@@ -1510,17 +1596,47 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_reset_hwid") {
+        if (!actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const access = getUserAccessSummary(guildId, actorId);
+        if (!access.hasAccess) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ HWID sıfırlamaq üçün əvvəlcə aktiv **Key** və ya **Whitelist**-iniz olmalıdır!",
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const wl = getWhitelistForGuild(guildId);
         const keys = getKeysForGuild(guildId);
+        const nextResetCount = access.resetCount + 1;
         const entry = wl.find((w) => String(w.discordId) === actorId);
         if (entry) {
           entry.hwid = "";
           entry.lockedHwid = "";
+          entry.resetCount = nextResetCount;
         }
         for (const k of keys) {
-          if (String(k.claimedBy || "") === actorId) {
+          if (
+            String(k.claimedBy || "") === actorId ||
+            (access.activeKeyCode &&
+              String(k.code || "").toUpperCase() === String(access.activeKeyCode).toUpperCase())
+          ) {
             k.hwid = "";
             k.lockedHwid = "";
+            k.resetCount = nextResetCount;
           }
         }
         if (guildId) {
@@ -1532,11 +1648,11 @@ const handleDiscordInteraction = async (interaction) => {
           }
         }
         saveAppStateToDisk();
-        appendAuditLog("RESET_HWID_BTN", actorTag, guildId);
+        appendAuditLog("RESET_HWID_BTN", `${actorTag} (Count: ${nextResetCount})`, guildId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⚙️ **${actorTag}** üçün HWID sıfırlandı! İlk hansı cihazda işlətsəniz, həmin cihaza kilidlənəcək.`,
+            content: `⚙️ **${actorTag}** üçün HWID sıfırlandı! (Reset sayı: **${nextResetCount}**)\nİlk hansı cihazda işlətsəniz, həmin cihaza kilidlənəcək.`,
             flags: 64
           }
         });
@@ -1544,10 +1660,7 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_stats") {
-        const wl = getWhitelistForGuild(guildId);
-        const keys = getKeysForGuild(guildId);
-        const userWl = wl.find((w) => String(w.discordId) === actorId);
-        const userKeys = keys.filter((k) => String(k.claimedBy || "") === actorId && !k.revoked);
+        const access = getUserAccessSummary(guildId, actorId);
         const planMeta = getPlanMeta(getEffectivePlanForGuild(guildId));
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1556,10 +1669,12 @@ const handleDiscordInteraction = async (interaction) => {
             content: [
               `📊 **${actorTag}** Statistikası`,
               `• Discord ID: \`${actorId}\``,
-              `• Sunucu Planı: **${planMeta.name}**`,
-              `• Whitelist Statusu: **${userWl ? "Aktiv ✅" : "Deaktiv ❌"}**`,
-              `• Aktiv Açarlar: **${userKeys.length}**`,
-              `• HWID Vəziyyəti: **${userWl && userWl.hwid ? "Bağlıdır 🔒" : "Boşdur 🔓"}**`
+              `• Key: **${access.activeKeyCode ? `\`${access.activeKeyCode}\`` : "Yoxdur ❌"}**`,
+              `• Whitelist Statusu: **${access.userWl ? "Aktiv ✅" : "Deaktiv ❌"}**`,
+              `• Müddət: **${access.hasAccess ? access.durationLabel : "Aktiv deyil ❌"}**`,
+              `• HWID Reset Sayı: **${access.resetCount}**`,
+              `• HWID Vəziyyəti: **${access.userWl && access.userWl.hwid ? "Bağlıdır 🔒" : "Boşdur 🔓"}**`,
+              `• Sunucu Planı: **${planMeta.name}**`
             ].join("\n"),
             flags: 64
           }
@@ -1614,6 +1729,7 @@ const handleDiscordInteraction = async (interaction) => {
           scriptId: boundScriptId || foundKey.scriptId || "",
           hwid: existingIdx >= 0 ? wl[existingIdx].hwid || "" : "",
           lockedHwid: existingIdx >= 0 ? wl[existingIdx].lockedHwid || "" : "",
+          resetCount: existingIdx >= 0 ? Number(wl[existingIdx].resetCount || 0) : 0,
           addedAt: new Date().toISOString()
         };
         if (existingIdx >= 0) {
@@ -3883,6 +3999,7 @@ const createHttpServer = () => {
             scriptId: (matchedKey && matchedKey.scriptId) || "",
             hwid: "",
             lockedHwid: "",
+            resetCount: 0,
             addedAt: new Date().toISOString()
           };
           wlList.push(wlEntry);
@@ -4297,6 +4414,7 @@ const createHttpServer = () => {
           scriptId: sanitizeText(body.scriptId, ""),
           claimedBy: "",
           claimedByTag: "",
+          resetCount: 0,
           revoked: false,
           createdAt: new Date().toISOString()
         };
@@ -4397,6 +4515,7 @@ const createHttpServer = () => {
             claimedBy: discordId,
             claimedByTag: `User_${discordId}`,
             claimedAt: new Date().toISOString(),
+            resetCount: 0,
             revoked: false,
             createdAt: new Date().toISOString()
           };
@@ -4410,6 +4529,7 @@ const createHttpServer = () => {
           scriptId: chosenScriptId,
           hwid: idx >= 0 ? wl[idx].hwid || "" : "",
           lockedHwid: idx >= 0 ? wl[idx].lockedHwid || "" : "",
+          resetCount: idx >= 0 ? Number(wl[idx].resetCount || 0) : 0,
           addedAt: new Date().toISOString()
         };
         if (idx >= 0) wl[idx] = entry;
