@@ -1292,7 +1292,17 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const chosenScriptId = sanitizeText(String(getOpt("script") || ""), "");
+        const rawScriptOpt = sanitizeText(String(getOpt("script") || ""), "");
+        const allKnownScripts = getAllKnownScriptsAcrossState(guildId, effectiveOwnerId);
+        const matchedScript = rawScriptOpt
+          ? allKnownScripts.find(
+              (s) =>
+                s &&
+                (s.id === rawScriptOpt ||
+                  sanitizeText(s.name, "").toLowerCase() === rawScriptOpt.toLowerCase())
+            )
+          : null;
+        const chosenScriptId = matchedScript ? matchedScript.id : rawScriptOpt;
         const scoped = resolveScopedWorkspace(guildId, effectiveOwnerId);
         const targetCh = sanitizeSnowflakeId(
           interaction.channel_id ||
@@ -2108,7 +2118,6 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Mövcud scriptlərdən birini seçin",
       type: 3,
       required: true,
-      autocomplete: true,
       ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
     }
   ];
@@ -2131,7 +2140,6 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Hansı scriptdən silinsin (istəyə bağlı)",
       type: 3,
       required: false,
-      autocomplete: true,
       ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
     }
   ];
@@ -2142,7 +2150,6 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Mövcud scriptlərdən birini seçin",
       type: 3,
       required: false,
-      autocomplete: true,
       ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
     }
   ];
@@ -2202,6 +2209,14 @@ const syncSlashCommandsWithDiscord = async (guildId = "", ownerDiscordId = "") =
     const guildIdsToSync = new Set();
     const cleanGid = sanitizeSnowflakeId(guildId || "");
     if (cleanGid) guildIdsToSync.add(cleanGid);
+    if (APP_STATE.guildId) {
+      const mainGid = sanitizeSnowflakeId(APP_STATE.guildId);
+      if (mainGid) guildIdsToSync.add(mainGid);
+    }
+    if (APP_STATE.latestJoinedGuildId) {
+      const latestGid = sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId);
+      if (latestGid) guildIdsToSync.add(latestGid);
+    }
     if (APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
       for (const gid of Object.keys(APP_STATE.tenants)) {
         const cleanTenantGid = sanitizeSnowflakeId(gid);
