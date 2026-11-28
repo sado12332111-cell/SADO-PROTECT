@@ -2361,12 +2361,14 @@ const startDiscordGatewayListener = () => {
         }
 
         const guildsArr = Array.isArray(eventData.guilds) ? eventData.guilds : [];
+        const guildIdsToSync = [];
         let firstGid = "";
         let firstOwnerId = "";
         if (guildsArr.length > 0) {
           for (const g of guildsArr) {
             const gid = sanitizeSnowflakeId(g && g.id);
             if (gid) {
+              guildIdsToSync.push(gid);
               if (!firstGid) firstGid = gid;
               const tRec = getTenantRecordByGuildId(gid, true, "");
               if (!firstOwnerId && tRec && tRec.ownerDiscordId) {
@@ -2386,37 +2388,12 @@ const startDiscordGatewayListener = () => {
         }
 
         await syncSlashCommandsWithDiscord(firstGid, firstOwnerId);
-        return;
-      }
-
-      if (eventName === "GUILD_CREATE") {
-        const gid = sanitizeSnowflakeId(eventData.id);
-        if (gid) {
-          const gName = sanitizeText(eventData.name, "");
-          const tRec = getTenantRecordByGuildId(gid, true, "");
-          if (tRec) {
-            if (gName) {
-              tRec.guildName = gName;
-            }
-            if (!tRec.botAddedBy) {
-              const adder = await tryResolveBotAdderFromAuditLog(gid);
-              if (adder && adder.userId) {
-                tRec.botAddedBy = adder;
-                if (!tRec.ownerDiscordId) {
-                  tRec.ownerDiscordId = sanitizeSnowflakeId(adder.userId);
-                }
-              }
-            }
-            if (!APP_STATE.latestJoinedGuildId || APP_STATE.latestJoinedGuildId !== gid) {
-              APP_STATE.latestJoinedGuildId = gid;
-            }
-            if (tRec.ownerDiscordId) {
-              const acc = getAccountWorkspace(tRec.ownerDiscordId, gid, true);
-              if (acc && gName) acc.guildName = gName;
-            }
-            saveAppStateToDisk();
-          }
-          await syncSlashCommandsWithDiscord(gid, tRec ? tRec.ownerDiscordId : "");
+        for (const gIdItem of guildIdsToSync) {
+          const tRecItem = getTenantRecordByGuildId(gIdItem, false, "");
+          await syncSlashCommandsWithDiscord(
+            gIdItem,
+            (tRecItem && tRecItem.ownerDiscordId) || firstOwnerId
+          );
         }
         return;
       }
