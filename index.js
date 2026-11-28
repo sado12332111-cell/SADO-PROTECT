@@ -806,11 +806,60 @@ const getScriptsForGuild = (guildId = "", ownerDiscordId = "") => {
     }
   }
 
+  if (collected.length === 0 && APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+    for (const accRec of Object.values(APP_STATE.accounts)) {
+      if (accRec) {
+        addScriptsFrom(accRec.scripts);
+      }
+    }
+  }
+
+  if (collected.length === 0 && APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
+    for (const tRec of Object.values(APP_STATE.tenants)) {
+      if (tRec) {
+        addScriptsFrom(tRec.scripts);
+      }
+    }
+  }
+
   if (collected.length === 0 && Array.isArray(APP_STATE.scripts)) {
     addScriptsFrom(APP_STATE.scripts);
   }
 
   return collected;
+};
+
+const getAllKnownScriptsAcrossState = (guildId = "", ownerDiscordId = "") => {
+  const combined = [];
+  const seenIds = new Set();
+
+  const pushUnique = (list) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (!item || typeof item !== "object") continue;
+      const sid = sanitizeText(item.id, "");
+      const sname = sanitizeText(item.name, "");
+      if (!sid || !sname || seenIds.has(sid)) continue;
+      seenIds.add(sid);
+      combined.push(item);
+    }
+  };
+
+  pushUnique(getScriptsForGuild(guildId, ownerDiscordId));
+  if (APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+    for (const accRec of Object.values(APP_STATE.accounts)) {
+      if (accRec) pushUnique(accRec.scripts);
+    }
+  }
+  if (APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
+    for (const tRec of Object.values(APP_STATE.tenants)) {
+      if (tRec) pushUnique(tRec.scripts);
+    }
+  }
+  if (Array.isArray(APP_STATE.scripts)) {
+    pushUnique(APP_STATE.scripts);
+  }
+  return combined;
 };
 
 const getKeysForGuild = (guildId = "", ownerDiscordId = "") => {
@@ -968,7 +1017,12 @@ const getScriptContentForUser = (
 ) => {
   const scripts = getScriptsForGuild(guildId, ownerDiscordId);
   const chosen =
-    (preferredScriptId && scripts.find((s) => s.id === preferredScriptId)) ||
+    (preferredScriptId &&
+      scripts.find(
+        (s) =>
+          s.id === preferredScriptId ||
+          sanitizeText(s.name, "").toLowerCase() === sanitizeText(preferredScriptId, "").toLowerCase()
+      )) ||
     scripts[0] ||
     null;
 
@@ -1067,8 +1121,14 @@ const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "",
   }
 
   const design = getPanelDesignForGuild(guildId, ownerDiscordId);
-  const scripts = getScriptsForGuild(guildId, ownerDiscordId);
-  const selectedScript = scriptId ? scripts.find((s) => s.id === scriptId) : null;
+  const scripts = getAllKnownScriptsAcrossState(guildId, ownerDiscordId);
+  const selectedScript = scriptId
+    ? scripts.find(
+        (s) =>
+          s.id === scriptId ||
+          sanitizeText(s.name, "").toLowerCase() === sanitizeText(scriptId, "").toLowerCase()
+      )
+    : null;
 
   const rowsMap = new Map();
   (design.buttons || []).forEach((btn, index) => {
@@ -1148,6 +1208,34 @@ const handleDiscordInteraction = async (interaction) => {
   }
 
   try {
+    if (interactionType === 4) {
+      const focusedOption = Array.isArray(interaction.data && interaction.data.options)
+        ? interaction.data.options.find((o) => o && o.focused)
+        : null;
+      const typedQuery = focusedOption ? String(focusedOption.value || "").trim().toLowerCase() : "";
+      const allScripts = getAllKnownScriptsAcrossState(guildId, effectiveOwnerId);
+      const filteredChoices = allScripts
+        .filter((s) => s && s.id && sanitizeText(s.name, ""))
+        .filter((s) => {
+          if (!typedQuery) return true;
+          const n = sanitizeText(s.name, "").toLowerCase();
+          return n.includes(typedQuery) || String(s.id).toLowerCase().includes(typedQuery);
+        })
+        .slice(0, 25)
+        .map((s) => ({
+          name: sanitizeText(s.name, "").slice(0, 100),
+          value: s.id
+        }));
+
+      await respondToDiscordInteraction(interactionId, interactionToken, {
+        type: 8,
+        data: {
+          choices: filteredChoices
+        }
+      });
+      return;
+    }
+
     if (interactionType === 2) {
       const cmdName = sanitizeText(interaction.data && interaction.data.name, "").toLowerCase();
       const optionsArr = Array.isArray(interaction.data && interaction.data.options)
@@ -1340,8 +1428,15 @@ const handleDiscordInteraction = async (interaction) => {
         }
 
         const targetScriptId = sanitizeText(String(getOpt("script") || ""), "");
-        const scripts = getScriptsForGuild(guildId, effectiveOwnerId);
-        const chosenScriptObj = scripts.find((s) => s.id === targetScriptId) || scripts[0] || null;
+        const scripts = getAllKnownScriptsAcrossState(guildId, effectiveOwnerId);
+        const chosenScriptObj =
+          scripts.find(
+            (s) =>
+              s.id === targetScriptId ||
+              sanitizeText(s.name, "").toLowerCase() === targetScriptId.toLowerCase()
+          ) ||
+          scripts[0] ||
+          null;
         const effectiveScriptId = chosenScriptObj ? chosenScriptObj.id : targetScriptId;
 
         const resolvedUsersMap =
@@ -1609,52 +1704,6 @@ const handleDiscordInteraction = async (interaction) => {
               removedCount > 0
                 ? `🗑️ **${removedCount}** istifadəçi${scriptInfo} Whitelist-dən çıxarıldı.`
                 : `ℹ️ Seçilən meyar üzrə Whitelist-də uyğun ID tapılmadı.`,
-            flags: 64
-          }
-        });
-        return;
-      }
-
-      if (cmdName === "unwhitelist") {
-        if (!isAdminOrOwnerUser(guildId, actorId)) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: `⛔ Whitelist-dən silmək yalnız hesab/sunucu sahibi ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
-              flags: 64
-            }
-          });
-          return;
-        }
-
-        const targetUserId = sanitizeSnowflakeId(String(getOpt("user") || ""));
-        if (!targetUserId) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: "❌ Zəhmət olmasa silinəcək istifadəçinin düzgün User ID-sini seçin.",
-              flags: 64
-            }
-          });
-          return;
-        }
-
-        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
-        const existed = wl.some((w) => String(w.discordId) === targetUserId);
-        const nextWl = wl.filter((w) => String(w.discordId) !== targetUserId);
-        const { acc, tenant } = resolveScopedWorkspace(guildId, effectiveOwnerId);
-        if (acc) acc.whitelist = nextWl;
-        if (tenant) tenant.whitelist = nextWl;
-        syncAccountAndTenant(effectiveOwnerId, guildId);
-        saveAppStateToDisk();
-        appendAuditLog("CMD_UNWHITELIST", `TargetID=${targetUserId} ByID=${actorId}`, guildId, effectiveOwnerId);
-
-        await respondToDiscordInteraction(interactionId, interactionToken, {
-          type: 4,
-          data: {
-            content: existed
-              ? `🗑️ <@${targetUserId}> (\`ID: ${targetUserId}\`) Whitelist-dən çıxarıldı.`
-              : `ℹ️ \`ID: ${targetUserId}\` artıq Whitelist-də deyildi.`,
             flags: 64
           }
         });
@@ -2032,7 +2081,7 @@ const handleDiscordInteraction = async (interaction) => {
 };
 
 const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
-  const scripts = getScriptsForGuild(guildId, ownerDiscordId);
+  const scripts = getAllKnownScriptsAcrossState(guildId, ownerDiscordId);
   const scriptChoices = scripts
     .filter((s) => s && s.id && sanitizeText(s.name, ""))
     .slice(0, 25)
@@ -2053,18 +2102,16 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Rol seçin (istəyə bağlı — roldakı hər kəs ID ilə əlavə olunur)",
       type: 8,
       required: false
-    }
-  ];
-
-  if (scriptChoices.length > 0) {
-    whitelistOptions.push({
+    },
+    {
       name: "script",
-      description: "Whitelist veriləcək scripti seçin",
+      description: "Mövcud scriptlərdən birini seçin",
       type: 3,
       required: true,
-      choices: scriptChoices
-    });
-  }
+      autocomplete: true,
+      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+    }
+  ];
 
   const unwhitelistOptions = [
     {
@@ -2078,38 +2125,27 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Silinəcək rol (istəyə bağlı)",
       type: 8,
       required: false
-    }
-  ];
-
-  if (scriptChoices.length > 0) {
-    unwhitelistOptions.push({
+    },
+    {
       name: "script",
       description: "Hansı scriptdən silinsin (istəyə bağlı)",
       type: 3,
       required: false,
-      choices: scriptChoices
-    });
-  }
+      autocomplete: true,
+      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+    }
+  ];
 
-  const panelOptions =
-    scriptChoices.length > 0
-      ? [
-          {
-            name: "script",
-            description: "Mövcud scriptlərdən birini seçin",
-            type: 3,
-            required: true,
-            choices: scriptChoices
-          }
-        ]
-      : [
-          {
-            name: "script",
-            description: "Script adını yazın və ya paneldən script yaradın",
-            type: 3,
-            required: false
-          }
-        ];
+  const panelOptions = [
+    {
+      name: "script",
+      description: "Mövcud scriptlərdən birini seçin",
+      type: 3,
+      required: false,
+      autocomplete: true,
+      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+    }
+  ];
 
   return [
     {
@@ -2163,10 +2199,18 @@ const syncSlashCommandsWithDiscord = async (guildId = "", ownerDiscordId = "") =
   const commands = buildSlashCommandsPayload(guildId, ownerDiscordId);
   try {
     await discordApiRequest(`/applications/${BOT_RUNTIME.botUserId}/commands`, "PUT", commands);
+    const guildIdsToSync = new Set();
     const cleanGid = sanitizeSnowflakeId(guildId || "");
-    if (cleanGid) {
+    if (cleanGid) guildIdsToSync.add(cleanGid);
+    if (APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
+      for (const gid of Object.keys(APP_STATE.tenants)) {
+        const cleanTenantGid = sanitizeSnowflakeId(gid);
+        if (cleanTenantGid) guildIdsToSync.add(cleanTenantGid);
+      }
+    }
+    for (const targetGid of guildIdsToSync) {
       await discordApiRequest(
-        `/applications/${BOT_RUNTIME.botUserId}/guilds/${cleanGid}/commands`,
+        `/applications/${BOT_RUNTIME.botUserId}/guilds/${targetGid}/commands`,
         "PUT",
         commands
       ).catch(() => {});
@@ -2357,6 +2401,7 @@ const startDiscordGatewayListener = () => {
             }
             saveAppStateToDisk();
           }
+          await syncSlashCommandsWithDiscord(gid, tRec ? tRec.ownerDiscordId : "");
         }
         return;
       }
@@ -4362,7 +4407,7 @@ const createHttpServer = () => {
         syncAccountAndTenant(matchedOwnerId, matchedGuildId);
         saveAppStateToDisk();
 
-        const scripts = getScriptsForGuild(matchedGuildId, matchedOwnerId);
+        const scripts = getAllKnownScriptsAcrossState(matchedGuildId, matchedOwnerId);
         const targetScript =
           (requestedScriptId &&
             requestedScriptId !== "default" &&
