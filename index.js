@@ -288,14 +288,6 @@ const isAdminOrOwnerUser = (guildId = "", userId = "") => {
   return !ownerId;
 };
 
-const isGuildAuthorized = (guildId = "", userId = "") => {
-  const gid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  const uid = sanitizeSnowflakeId(userId || "");
-  if (!gid || !uid) return false;
-  const ownerId = getGuildOwnerId(gid);
-  return !ownerId || ownerId === uid;
-};
-
 const formatDurationStatusText = (recordObj = null) => {
   if (!recordObj || typeof recordObj !== "object") return "Yoxdur";
   const rawExpires = recordObj.expiresAt || recordObj.expireAt || recordObj.expires_at || "";
@@ -896,122 +888,6 @@ const fetchRemoteLuaText = (targetUrlStr, redirectDepth = 0) => {
   });
 };
 
-const wrapLuaWithUltraProtection = (rawLuaCode, meta = {}) => {
-  const xorSecret = crypto.randomBytes(16).toString("hex");
-  const sourceBuf = Buffer.from(String(rawLuaCode || ""), "utf8");
-  const encryptedBytes = new Array(sourceBuf.length);
-  for (let i = 0; i < sourceBuf.length; i++) {
-    const kByte = xorSecret.charCodeAt(i % xorSecret.length);
-    encryptedBytes[i] = (sourceBuf[i] ^ kByte ^ ((i * 13 + 7) & 255)) & 255;
-  }
-
-  const reportUrl = sanitizeText(meta.reportUrl || "", "").replace(/"/g, '\\"');
-  const safeKey = sanitizeText(meta.key || "", "").replace(/"/g, '\\"');
-  const safeUid = sanitizeText(meta.uid || "", "").replace(/"/g, '\\"');
-  const safeGid = sanitizeText(meta.gid || "", "").replace(/"/g, '\\"');
-  const byteArrayLiteral = encryptedBytes.join(",");
-
-  return [
-    "-- [[ SADO PROTECT ULTRA GUARD v3.2 • EXECUTOR COMPATIBLE ]]",
-    "(function()",
-    "  local _G_ENV = (getgenv and getgenv()) or _G",
-    `  if "${safeKey}" ~= "" then`,
-    `    _G_ENV.script_key = "${safeKey}"`,
-    `    script_key = "${safeKey}"`,
-    "  end",
-    "",
-    "  local Players = game:GetService('Players')",
-    "  local LocalPlayer = Players.LocalPlayer",
-    "",
-    "  local function _tripSecurity(reason)",
-    "    pcall(function()",
-    `      local rUrl = "${reportUrl}"`,
-    "      if rUrl ~= '' and game and game.HttpGet then",
-    `        local q = rUrl .. "?key=${safeKey}&uid=${safeUid}&gid=${safeGid}&reason=" .. tostring(reason or "tamper")`,
-    "        pcall(function() game:HttpGet(q) end)",
-    "      end",
-    "    end)",
-    "    pcall(function()",
-    "      if LocalPlayer then",
-    "        LocalPlayer:Kick('[SADO ULTRA PROTECT] ' .. tostring(reason))",
-    "      end",
-    "    end)",
-    "  end",
-    "",
-    "  local _pcall = pcall",
-    "  local _type = type",
-    "  local _tostring = tostring",
-    "  local _loadstring = loadstring",
-    "  local _string_char = string.char",
-    "  local _string_byte = string.byte",
-    "  local _table_concat = table.concat",
-    "  local _create_tbl = table.create or function() return {} end",
-    "  local _bit_bxor = (bit32 and bit32.bxor) or function(a, b)",
-    "    local res, bit = 0, 1",
-    "    while a > 0 or b > 0 do",
-    "      local aa, bb = a % 2, b % 2",
-    "      if aa ~= bb then res = res + bit end",
-    "      a = (a - aa) / 2",
-    "      b = (b - bb) / 2",
-    "      bit = bit * 2",
-    "    end",
-    "    return res",
-    "  end",
-    "",
-    "  if _type(_loadstring) ~= 'function' or _type(_pcall) ~= 'function' then",
-    "    _tripSecurity('MISSING_LOADSTRING_OR_PCALL')",
-    "    return",
-    "  end",
-    "",
-    "  _pcall(function()",
-    "    local CoreGui = game:GetService('CoreGui')",
-    "    local blockedExact = {'httpspy', 'simplespy', 'remotespy', 'darkdex'}",
-    "    for _, obj in ipairs(CoreGui:GetChildren()) do",
-    "      local n = string.lower(_tostring(obj.Name))",
-    "      for _, bad in ipairs(blockedExact) do",
-    "        if n == bad then",
-    "          _tripSecurity('SPY_TOOL_' .. bad)",
-    "          return",
-    "        end",
-    "      end",
-    "    end",
-    "  end)",
-    "",
-    "  if getgenv then",
-    "    _pcall(function()",
-    "      local g = getgenv()",
-    "      g.saveinstance = function() _tripSecurity('SAVEINSTANCE_BLOCKED') end",
-    "    end)",
-    "  end",
-    "",
-    "  local _k = \"" + xorSecret + "\"",
-    "  local _b = {" + byteArrayLiteral + "}",
-    "  local _kLen = #_k",
-    "  local _out = _create_tbl(#_b)",
-    "  for i = 1, #_b do",
-    "    local kByte = _string_byte(_k, ((i - 1) % _kLen) + 1)",
-    "    local roll = ((i - 1) * 13 + 7) % 256",
-    "    local dec = _bit_bxor(_bit_bxor(_b[i], kByte), roll)",
-    "    _out[i] = _string_char(dec)",
-    "  end",
-    "  local _finalSrc = _table_concat(_out)",
-    "  _b = nil",
-    "  _out = nil",
-    "",
-    "  local _fn, _compileErr = _loadstring(_finalSrc)",
-    "  _finalSrc = nil",
-    "  if not _fn then",
-    "    warn('[SADO PROTECT] Compile xetasi: ' .. _tostring(_compileErr))",
-    "    return",
-    "  end",
-    "  local _ok, _runErr = _pcall(_fn)",
-    "  if not _ok then",
-    "    warn('[SADO PROTECT] Runtime xetasi: ' .. _tostring(_runErr))",
-    "  end",
-    "end)()"
-  ].join("\n");
-};
-
 const generateUniqueLicenseKeyCode = () => {
   return `SADO-${crypto.randomBytes(2).toString("hex").toUpperCase()}-${crypto
     .randomBytes(2)
@@ -1199,18 +1075,6 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "key") {
-        const bl = getBlacklistForGuild(guildId);
-        if (bl.some((b) => String(b.discordId) === actorId)) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: `⛔ ID \`${actorId}\` Blacklist-dədir! Açar aktivləşdirilə bilməz.`,
-              flags: 64
-            }
-          });
-          return;
-        }
-
         const inputKey = sanitizeText(String(getOpt("key") || ""), "").toUpperCase();
         if (!inputKey) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1315,8 +1179,8 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const bl = getBlacklistForGuild(guildId);
-        if (bl.some((b) => String(b.discordId) === targetUserId)) {
+        const blCheck = getBlacklistForGuild(guildId);
+        if (blCheck.some((b) => String(b.discordId) === targetUserId)) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
@@ -1468,17 +1332,6 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "resethwid") {
-        if (!actorId) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
-              flags: 64
-            }
-          });
-          return;
-        }
-
         const access = getUserAccessSummary(guildId, actorId);
         if (!access.hasAccess) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1587,29 +1440,6 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_get_script") {
-        if (!actorId) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
-              flags: 64
-            }
-          });
-          return;
-        }
-
-        const bl = getBlacklistForGuild(guildId);
-        if (bl.some((b) => String(b.discordId) === actorId)) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: `⛔ ID \`${actorId}\` Blacklist-dədir, script verilmir.`,
-              flags: 64
-            }
-          });
-          return;
-        }
-
         const wl = getWhitelistForGuild(guildId);
         const keys = getKeysForGuild(guildId);
         const userWl = wl.find(
@@ -1723,17 +1553,6 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_reset_hwid") {
-        if (!actorId) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
-              flags: 64
-            }
-          });
-          return;
-        }
-
         const access = getUserAccessSummary(guildId, actorId);
         if (!access.hasAccess) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1843,6 +1662,17 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
+        if (foundKey.claimedBy && String(foundKey.claimedBy) !== actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Bu açar artıq başqa istifadəçi ID-sinə (\`${foundKey.claimedBy}\`) bağlıdır.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
         foundKey.claimedBy = actorId;
         foundKey.claimedByTag = actorTag;
         foundKey.claimedAt = new Date().toISOString();
@@ -1878,7 +1708,7 @@ const handleDiscordInteraction = async (interaction) => {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `✅ **${actorTag}**, \`${foundKey.code}\` açarı uğurla aktivləşdirildi! İndi **Get Script** düyməsinə basıb scriptinizi ala bilərsiniz.`,
+            content: `✅ **${actorTag}** (\`ID: ${actorId}\`), \`${foundKey.code}\` açarı uğurla aktivləşdirildi! İndi **Get Script** düyməsinə basıb scriptinizi ala bilərsiniz.`,
             flags: 64
           }
         });
