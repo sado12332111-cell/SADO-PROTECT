@@ -263,10 +263,29 @@ const getGuildOwnerId = (guildId = "") => {
   if (!gid) return "";
   const t = getTenantRecordByGuildId(gid, false);
   return sanitizeSnowflakeId(
-    (t && (t.ownerDiscordId || (t.botAddedBy && t.botAddedBy.userId))) ||
-      (APP_STATE.connectedDiscordUser && APP_STATE.connectedDiscordUser.userId) ||
-      ""
+    (t && (t.ownerDiscordId || (t.botAddedBy && t.botAddedBy.userId))) || ""
   );
+};
+
+const isGuildAuthorized = (guildId = "", userId = "") => {
+  const gid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
+  const uid = sanitizeSnowflakeId(userId || "");
+  if (!gid || !uid) return false;
+  const ownerId = getGuildOwnerId(gid);
+  return !ownerId || ownerId === uid;
+};
+
+const isAdminOrOwnerUser = (guildId = "", userId = "") => {
+  const uid = sanitizeSnowflakeId(userId || "");
+  if (!uid) return false;
+  const ownerId = getGuildOwnerId(guildId);
+  if (ownerId && ownerId === uid) return true;
+  const envAdmins = String(process.env.ADMIN_DISCORD_IDS || process.env.ADMIN_USER_ID || "")
+    .split(",")
+    .map((x) => sanitizeSnowflakeId(x))
+    .filter(Boolean);
+  if (envAdmins.includes(uid)) return true;
+  return !ownerId;
 };
 
 const isGuildAuthorized = (guildId = "", userId = "") => {
@@ -1113,6 +1132,18 @@ const handleDiscordInteraction = async (interaction) => {
         return;
       }
 
+      const bl = getBlacklistForGuild(guildId);
+      if (bl.some((b) => String(b.discordId) === actorId)) {
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `⛔ Sizin ID (\`${actorId}\`) Blacklist-dədir, bütün əmrlər bloklandı.`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
       if (!isGuildAuthorized(guildId, actorId)) {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1125,12 +1156,11 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "panel") {
-        const bl = getBlacklistForGuild(guildId);
-        if (bl.some((b) => String(b.discordId) === actorId)) {
+        if (!isAdminOrOwnerUser(guildId, actorId)) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: `⛔ Sizin ID (\`${actorId}\`) Blacklist-dədir, panel əmri bloklandı.`,
+              content: `⛔ Bu əmr yalnız sunucu sahibi / admin ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
               flags: 64
             }
           });
@@ -1261,6 +1291,17 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "whitelist") {
+        if (!isAdminOrOwnerUser(guildId, actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ Whitelist əlavə etmək yalnız sunucu sahibi / admin ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const rawUserVal = getOpt("user");
         const targetUserId = sanitizeSnowflakeId(rawUserVal || "");
         if (!targetUserId) {
@@ -1376,6 +1417,17 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "unwhitelist") {
+        if (!isAdminOrOwnerUser(guildId, actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ Whitelist-dən silmək yalnız sunucu sahibi / admin ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
         const targetUserId = sanitizeSnowflakeId(String(getOpt("user") || ""));
         if (!targetUserId) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1483,6 +1535,29 @@ const handleDiscordInteraction = async (interaction) => {
     if (interactionType === 3) {
       const rawCustomId = sanitizeText(interaction.data && interaction.data.custom_id, "");
       const { baseId: customId, boundScriptId } = parseCustomIdAndScript(rawCustomId);
+
+      if (!actorId) {
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const blBtn = getBlacklistForGuild(guildId);
+      if (blBtn.some((b) => String(b.discordId) === actorId)) {
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `⛔ Sizin ID (\`${actorId}\`) Blacklist-dədir, düymələr bloklandı.`,
+            flags: 64
+          }
+        });
+        return;
+      }
 
       if (customId === "btn_redeem_key") {
         await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -4046,6 +4121,16 @@ const createHttpServer = () => {
         const blList = getBlacklistForGuild(matchedGuildId);
         if (effectiveUid && blList.some((b) => String(b.discordId) === effectiveUid)) {
           sendLuaError("Siz Blacklist-desiniz!");
+          return;
+        }
+
+        if (matchedKey && matchedKey.claimedBy && effectiveUid && String(matchedKey.claimedBy) !== effectiveUid) {
+          sendLuaKick("Bu Key basqa Discord ID-sine baglidir!");
+          return;
+        }
+
+        if (wlEntry && wlEntry.discordId && effectiveUid && String(wlEntry.discordId) !== effectiveUid) {
+          sendLuaKick("Bu Whitelist basqa Discord ID-sine aiddir!");
           return;
         }
 
