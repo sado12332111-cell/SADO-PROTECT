@@ -376,6 +376,58 @@ const resolveDiscordBotToken = () => {
   return sanitizeText(process.env.DISCORD_BOT_TOKEN || process.env.BOT_TOKEN || "", "");
 };
 
+const parseRequestCookies = (req) => {
+  const header = String((req && req.headers && req.headers.cookie) || "");
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const k = part.slice(0, eqIdx).trim();
+    const v = part.slice(eqIdx + 1).trim();
+    if (k) {
+      try {
+        out[k] = decodeURIComponent(v);
+      } catch (_e) {
+        out[k] = v;
+      }
+    }
+  }
+  return out;
+};
+
+const DISCORD_SESSION_COOKIE = "sado_discord_user";
+
+const getSessionDiscordUserFromRequest = (req) => {
+  const cookies = parseRequestCookies(req);
+  const raw = cookies[DISCORD_SESSION_COOKIE];
+  if (!raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    if (parsed && typeof parsed === "object" && parsed.userId) {
+      return {
+        userId: String(parsed.userId),
+        username: sanitizeText(parsed.username, String(parsed.userId)),
+        displayName: sanitizeText(parsed.displayName || parsed.username, String(parsed.userId)),
+        avatarUrl: sanitizeText(parsed.avatarUrl, ""),
+        connectedAt: sanitizeText(parsed.connectedAt, new Date().toISOString())
+      };
+    }
+  } catch (_err) {}
+  return null;
+};
+
+const buildSessionCookieHeader = (userObj, baseUrl = "") => {
+  const isSecure = String(baseUrl || "").startsWith("https://");
+  const secureFlag = isSecure ? "; Secure" : "";
+  if (!userObj) {
+    return `${DISCORD_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`;
+  }
+  const encoded = Buffer.from(JSON.stringify(userObj), "utf8").toString("base64url");
+  return `${DISCORD_SESSION_COOKIE}=${encoded}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secureFlag}`;
+};
+
 const getPublicServiceBaseUrl = () => {
   const envUrl = sanitizeText(
     process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || "",
@@ -2093,7 +2145,8 @@ const buildDiscordLoginUrl = (redirectUri = "") => {
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: "code",
-    scope: "identify"
+    scope: "identify",
+    prompt: "consent"
   });
   if (redirectUri) {
     params.set("redirect_uri", redirectUri);
@@ -2126,11 +2179,12 @@ const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
   if (APP_STATE.latestJoinedGuildId && APP_STATE.tenants && APP_STATE.tenants[APP_STATE.latestJoinedGuildId]) {
     return sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId);
   }
-
-  return "";
-};
-
-const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = false, baseUrl = "") => {
+const buildPublicSnapshotPayload = async (
+  requestedGuildId = "",
+  isAdminView = false,
+  baseUrl = "",
+  sessionUser = null
+) => {
   const tokenPresent = Boolean(resolveDiscordBotToken());
   const cleanGuildId = sanitizeSnowflakeId(requestedGuildId || APP_STATE.guildId || "");
   const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
@@ -2182,13 +2236,13 @@ const buildPublicSnapshotPayload = async (requestedGuildId = "", isAdminView = f
     }
   }
 
-  const connectedUser = APP_STATE.connectedDiscordUser || null;
+  const connectedUser = sessionUser && sessionUser.userId ? sessionUser : null;
   if (cleanGuildId && !botAddedByInfo && connectedUser) {
     botAddedByInfo = connectedUser;
     if (tenant) {
       tenant.botAddedBy = connectedUser;
-      if (!tenant.ownerDiscordId && connectedUser.userId) {
-        tenant.ownerDiscordId = connectedUser.userId;
+      if (!tenant.ownerDiscordId && sanitizeSnowflakeId(connectedUser.userId)) {
+        tenant.ownerDiscordId = sanitizeSnowflakeId(connectedUser.userId);
       }
       saveAppStateToDisk();
     }
@@ -4131,25 +4185,10 @@ const createHttpServer = () => {
 
       if (method === "GET" && pathname === "/auth/discord") {
         const callbackUrl = `${baseUrl}/auth/discord/callback`;
-        const hasSecret = Boolean(sanitizeText(process.env.DISCORD_CLIENT_SECRET || "", ""));
-        if (!hasSecret) {
-          const fallbackName = "sadiq202020201212";
-          APP_STATE.connectedDiscordUser = {
-            userId: fallbackName,
-            username: fallbackName,
-            displayName: fallbackName,
-            avatarUrl: "",
-            connectedAt: new Date().toISOString()
-          };
-          saveAppStateToDisk();
-          res.writeHead(302, { Location: "/" });
-          res.end();
-          return;
-        }
         const clientId = sanitizeText(process.env.DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID, "");
         const directOauthUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(
           clientId
-        )}&response_type=code&scope=identify&redirect_uri=${encodeURIComponent(callbackUrl)}`;
+        )}&response_type=code&scope=identify&prompt=consent&redirect_uri=${encodeURIComponent(callbackUrl)}`;
         res.writeHead(302, { Location: directOauthUrl });
         res.end();
         return;
@@ -4163,16 +4202,10 @@ const createHttpServer = () => {
           oauthAccount = await exchangeOAuthCodeForDiscordAccount(oauthCode, callbackUrl);
         }
         if (!oauthAccount) {
-          const fallbackName = "sadiq202020201212";
-          oauthAccount = {
-            userId: fallbackName,
-            username: fallbackName,
-            displayName: fallbackName,
-            avatarUrl: "",
-            connectedAt: new Date().toISOString()
-          };
+          res.writeHead(302, { Location: "/?oauth_error=1" });
+          res.end();
+          return;
         }
-        APP_STATE.connectedDiscordUser = oauthAccount;
         const targetGid = sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
         if (targetGid) {
           const tRec = getTenantRecordByGuildId(targetGid, true);
@@ -4185,15 +4218,21 @@ const createHttpServer = () => {
           }
         }
         saveAppStateToDisk();
-        res.writeHead(302, { Location: "/" });
+        res.writeHead(302, {
+          Location: "/",
+          "Set-Cookie": buildSessionCookieHeader(oauthAccount, baseUrl)
+        });
         res.end();
         return;
       }
 
       if (method === "POST" && pathname === "/api/auth/discord/logout") {
-        APP_STATE.connectedDiscordUser = null;
-        saveAppStateToDisk();
-        sendJsonResponse(res, 200, { ok: true });
+        res.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+          "Set-Cookie": buildSessionCookieHeader(null, baseUrl)
+        });
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
 
@@ -4205,7 +4244,13 @@ const createHttpServer = () => {
       if (method === "GET" && pathname === "/api/snapshot") {
         const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
         const isAdminReq = reqUrl.searchParams.get("admin") === "1";
-        const snapshot = await buildPublicSnapshotPayload(targetGuildId, isAdminReq, baseUrl);
+        const sessionUser = getSessionDiscordUserFromRequest(req);
+        const snapshot = await buildPublicSnapshotPayload(
+          targetGuildId,
+          isAdminReq,
+          baseUrl,
+          sessionUser
+        );
         sendJsonResponse(res, 200, snapshot);
         return;
       }
@@ -4673,10 +4718,10 @@ const createHttpServer = () => {
 
         const normPlan = normalizePlanId(foundApi.planId);
         const customUserText = sanitizeText(String(body.discordUserInput || ""), "");
+        const sessionUser = getSessionDiscordUserFromRequest(req);
         const actorInfo = customUserText
           ? { userId: customUserText, username: customUserText, displayName: customUserText }
-          : APP_STATE.connectedDiscordUser || null;
-
+          : sessionUser || APP_STATE.connectedDiscordUser || null;
         foundApi.usedByUser = actorInfo;
         foundApi.usedByGuildId = targetGuildId || "";
         foundApi.usedAt = new Date().toISOString();
