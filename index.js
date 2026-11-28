@@ -765,8 +765,34 @@ const resolveScopedWorkspace = (guildId = "", ownerDiscordId = "") => {
 
 const getScriptsForGuild = (guildId = "", ownerDiscordId = "") => {
   const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
-  if (acc) return acc.scripts;
-  if (tenant && Array.isArray(tenant.scripts)) return tenant.scripts;
+  if (acc && Array.isArray(acc.scripts) && acc.scripts.length > 0) return acc.scripts;
+  if (tenant && Array.isArray(tenant.scripts) && tenant.scripts.length > 0) return tenant.scripts;
+
+  const cleanUid = sanitizeSnowflakeId(ownerDiscordId || "");
+  if (cleanUid && APP_STATE.accounts && APP_STATE.accounts[cleanUid]) {
+    const uAcc = APP_STATE.accounts[cleanUid];
+    if (Array.isArray(uAcc.scripts) && uAcc.scripts.length > 0) return uAcc.scripts;
+  }
+
+  const cleanGid = sanitizeSnowflakeId(guildId || "");
+  if (cleanGid && APP_STATE.tenants && APP_STATE.tenants[cleanGid]) {
+    const tRec = APP_STATE.tenants[cleanGid];
+    if (Array.isArray(tRec.scripts) && tRec.scripts.length > 0) return tRec.scripts;
+    const tOwner = sanitizeSnowflakeId(tRec.ownerDiscordId || "");
+    if (tOwner && APP_STATE.accounts && APP_STATE.accounts[tOwner]) {
+      const oScripts = APP_STATE.accounts[tOwner].scripts || [];
+      if (oScripts.length > 0) return oScripts;
+    }
+  }
+
+  if (APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+    for (const accObj of Object.values(APP_STATE.accounts)) {
+      if (accObj && Array.isArray(accObj.scripts) && accObj.scripts.length > 0) {
+        return accObj.scripts;
+      }
+    }
+  }
+
   return [];
 };
 
@@ -1990,10 +2016,13 @@ const handleDiscordInteraction = async (interaction) => {
 
 const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
   const scripts = getScriptsForGuild(guildId, ownerDiscordId);
-  const scriptChoices = scripts.slice(0, 25).map((s) => ({
-    name: sanitizeText(s.name, s.id).slice(0, 100),
-    value: s.id
-  }));
+  const scriptChoices = scripts
+    .filter((s) => s && s.id && sanitizeText(s.name, ""))
+    .slice(0, 25)
+    .map((s) => ({
+      name: sanitizeText(s.name, "").slice(0, 100),
+      value: s.id
+    }));
 
   const whitelistOptions = [
     {
@@ -2045,23 +2074,25 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
     });
   }
 
+  const panelOptions =
+    scriptChoices.length > 0
+      ? [
+          {
+            name: "script",
+            description: "Mövcud scriptlərdən birini seçin",
+            type: 3,
+            required: true,
+            choices: scriptChoices
+          }
+        ]
+      : [];
+
   return [
     {
       name: "panel",
       description: "Lisenziya və script panelini kanala göndər",
       type: 1,
-      options: [
-        {
-          name: "script",
-          description: "Mövcud scriptlərdən birini seçin",
-          type: 3,
-          required: true,
-          choices:
-            scriptChoices.length > 0
-              ? scriptChoices
-              : [{ name: "Default Script", value: "default" }]
-        }
-      ]
+      options: panelOptions
     },
     {
       name: "key",
@@ -2239,11 +2270,17 @@ const startDiscordGatewayListener = () => {
         }
 
         const guildsArr = Array.isArray(eventData.guilds) ? eventData.guilds : [];
+        let firstGid = "";
+        let firstOwnerId = "";
         if (guildsArr.length > 0) {
           for (const g of guildsArr) {
             const gid = sanitizeSnowflakeId(g && g.id);
             if (gid) {
+              if (!firstGid) firstGid = gid;
               const tRec = getTenantRecordByGuildId(gid, true, "");
+              if (!firstOwnerId && tRec && tRec.ownerDiscordId) {
+                firstOwnerId = sanitizeSnowflakeId(tRec.ownerDiscordId);
+              }
               const gInfo = await fetchGuildInfoFromDiscord(gid);
               if (tRec && gInfo && gInfo.name) {
                 tRec.guildName = gInfo.name;
@@ -2257,7 +2294,7 @@ const startDiscordGatewayListener = () => {
           saveAppStateToDisk();
         }
 
-        await syncSlashCommandsWithDiscord();
+        await syncSlashCommandsWithDiscord(firstGid, firstOwnerId);
         return;
       }
 
