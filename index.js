@@ -2097,7 +2097,7 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
     .slice(0, 25)
     .map((s) => ({
       name: sanitizeText(s.name, "").slice(0, 100),
-      value: s.id
+      value: sanitizeText(s.name, "").slice(0, 100)
     }));
 
   const whitelistOptions = [
@@ -2118,7 +2118,7 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Mövcud scriptlərdən birini seçin",
       type: 3,
       required: true,
-      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : { autocomplete: true })
     }
   ];
 
@@ -2140,7 +2140,7 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Hansı scriptdən silinsin (istəyə bağlı)",
       type: 3,
       required: false,
-      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : { autocomplete: true })
     }
   ];
 
@@ -2150,7 +2150,7 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Mövcud scriptlərdən birini seçin",
       type: 3,
       required: false,
-      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : {})
+      ...(scriptChoices.length > 0 ? { choices: scriptChoices } : { autocomplete: true })
     }
   ];
 
