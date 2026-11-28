@@ -785,12 +785,11 @@ const getScriptsForGuild = (guildId = "", ownerDiscordId = "") => {
     }
   }
 
-  if (APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
-    for (const accObj of Object.values(APP_STATE.accounts)) {
-      if (accObj && Array.isArray(accObj.scripts) && accObj.scripts.length > 0) {
-        return accObj.scripts;
-      }
-    }
+  if (acc) return acc.scripts;
+  if (tenant) return tenant.scripts;
+
+  if (!cleanUid && !cleanGid && Array.isArray(APP_STATE.scripts)) {
+    return APP_STATE.scripts;
   }
 
   return [];
@@ -4616,11 +4615,28 @@ const createHttpServer = () => {
           createdAt: new Date().toISOString()
         };
 
-        scripts.push(newScript);
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) {
+          acc.scripts = Array.isArray(acc.scripts) ? acc.scripts : [];
+          if (!acc.scripts.some((item) => item && item.id === newScript.id)) {
+            acc.scripts.push(newScript);
+          }
+        }
+        if (tenant) {
+          tenant.scripts = Array.isArray(tenant.scripts) ? tenant.scripts : [];
+          if (!tenant.scripts.some((item) => item && item.id === newScript.id)) {
+            tenant.scripts.push(newScript);
+          }
+        }
+        if (!acc && !tenant) {
+          APP_STATE.scripts = Array.isArray(APP_STATE.scripts) ? APP_STATE.scripts : [];
+          APP_STATE.scripts.push(newScript);
+        }
+
         syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
         appendAuditLog("CREATE_SCRIPT", name, targetGuildId, sessionUid);
-        await syncSlashCommandsWithDiscord(targetGuildId, sessionUid);
+        syncSlashCommandsWithDiscord(targetGuildId, sessionUid).catch(() => {});
         sendJsonResponse(res, 201, { ok: true, script: newScript });
         return;
       }
@@ -4659,10 +4675,20 @@ const createHttpServer = () => {
         };
         scripts[idx] = updatedScript;
 
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc && Array.isArray(acc.scripts)) {
+          const aIdx = acc.scripts.findIndex((s) => s && s.id === scriptId);
+          if (aIdx >= 0) acc.scripts[aIdx] = updatedScript;
+        }
+        if (tenant && Array.isArray(tenant.scripts)) {
+          const tIdx = tenant.scripts.findIndex((s) => s && s.id === scriptId);
+          if (tIdx >= 0) tenant.scripts[tIdx] = updatedScript;
+        }
+
         syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
         appendAuditLog("UPDATE_SCRIPT", updatedScript.name, targetGuildId, sessionUid);
-        await syncSlashCommandsWithDiscord(targetGuildId, sessionUid);
+        syncSlashCommandsWithDiscord(targetGuildId, sessionUid).catch(() => {});
         sendJsonResponse(res, 200, { ok: true, script: updatedScript });
         return;
       }
@@ -4674,10 +4700,13 @@ const createHttpServer = () => {
         const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
         if (acc) acc.scripts = nextScripts;
         if (tenant) tenant.scripts = nextScripts;
+        if (Array.isArray(APP_STATE.scripts)) {
+          APP_STATE.scripts = APP_STATE.scripts.filter((s) => s && s.id !== scriptId);
+        }
         syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
         appendAuditLog("DELETE_SCRIPT", scriptId, targetGuildId, sessionUid);
-        await syncSlashCommandsWithDiscord(targetGuildId, sessionUid);
+        syncSlashCommandsWithDiscord(targetGuildId, sessionUid).catch(() => {});
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
