@@ -1793,10 +1793,69 @@ const handleDiscordInteraction = async (interaction) => {
           effectiveOwnerId
         );
 
+        const copyCustomId = buildSafeCustomId("btn_copy_script", chosenScriptId);
+
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `📜 **${built.scriptName}** (ID: \`${actorId}\`)\n\`\`\`lua\n${built.code}\n\`\`\``,
+            content:
+              `📜 **${built.scriptName}** (ID: \`${actorId}\`)\n` +
+              `\`\`\`lua\n${built.code}\n\`\`\`\n` +
+              `Aşağıdakı **Scripti Kopyala** düyməsinə basaraq kopyalanacaq scripti əldə edin.`,
+            components: [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    custom_id: copyCustomId,
+                    label: "Scripti Kopyala",
+                    style: 1,
+                    emoji: { name: "📋" }
+                  }
+                ]
+              }
+            ],
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (baseId === "btn_copy_script") {
+        const accessInfo = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        if (!accessInfo.hasAccess) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Aktiv Key və ya Whitelist tapılmadı.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const chosenScriptId =
+          boundScriptId ||
+          (accessInfo.userWl && accessInfo.userWl.scriptId) ||
+          (accessInfo.userKeyObj && accessInfo.userKeyObj.scriptId) ||
+          "";
+
+        const built = getScriptContentForUser(
+          guildId,
+          actorId,
+          chosenScriptId,
+          accessInfo.activeKeyCode,
+          getPublicServiceBaseUrl(),
+          effectiveOwnerId
+        );
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content:
+              `✅ **Kopyalamağa hazır script (${built.scriptName}):**\n` +
+              `\`\`\`lua\n${built.code}\n\`\`\``,
             flags: 64
           }
         });
@@ -4059,24 +4118,8 @@ const createHttpServer = () => {
           ""
         ).slice(0, 180);
 
-        const clientIp = sanitizeText(
-          String(
-            req.headers["x-forwarded-for"] ||
-              (req.socket && req.socket.remoteAddress) ||
-              ""
-          )
-            .split(",")[0]
-            .trim(),
-          ""
-        );
-
-        const effectiveHwid =
-          rawHeaderHwid ||
-          `DEV-${crypto
-            .createHash("sha256")
-            .update(`${clientIp || "local"}|${uaHeader || "exec"}`)
-            .digest("hex")
-            .slice(0, 24)}`;
+        const hasExplicitDeviceHwid = Boolean(rawHeaderHwid);
+        const effectiveHwid = rawHeaderHwid || "";
 
         let matchedGuildId = providedGid;
         let matchedOwnerId = providedGid ? resolveOwnerDiscordIdForGuild(providedGid) : "";
@@ -4185,9 +4228,8 @@ const createHttpServer = () => {
           ""
         );
 
-        const isNewBindSession = !boundHwid;
-        if (isNewBindSession) {
-          const lockIdToSave = effectiveHwid || `LOCK-${crypto.randomBytes(6).toString("hex")}`;
+        if (!boundHwid && hasExplicitDeviceHwid) {
+          const lockIdToSave = effectiveHwid;
           if (wlEntry) {
             wlEntry.hwid = lockIdToSave;
             wlEntry.lockedHwid = lockIdToSave;
@@ -4204,7 +4246,7 @@ const createHttpServer = () => {
             matchedGuildId,
             matchedOwnerId
           );
-        } else if (boundHwid !== effectiveHwid) {
+        } else if (boundHwid && hasExplicitDeviceHwid && boundHwid !== effectiveHwid) {
           appendAuditLog(
             "HWID_MISMATCH_KICK",
             `UserID=${effectiveUid || "-"} Key=${effectiveKey} blocked on another device`,
