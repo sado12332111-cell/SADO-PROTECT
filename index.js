@@ -1281,110 +1281,291 @@ const handleDiscordInteraction = async (interaction) => {
         }
 
         const rawUserVal = getOpt("user");
+        const rawRoleVal = getOpt("role");
         const targetUserId = sanitizeSnowflakeId(rawUserVal || "");
-        if (!targetUserId) {
+        const targetRoleId = sanitizeSnowflakeId(rawRoleVal || "");
+
+        if (!targetUserId && !targetRoleId) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: "❌ Zəhmət olmasa düzgün istifadəçi (User ID) seçin.",
+              content: "❌ Zəhmət olmasa ya istifadəçi (`user`), ya da rol (`role`) seçin.",
               flags: 64
             }
           });
           return;
         }
-
-        const blCheck = getBlacklistForGuild(guildId, effectiveOwnerId);
-        if (blCheck.some((b) => String(b.discordId) === targetUserId)) {
-          await respondToDiscordInteraction(interactionId, interactionToken, {
-            type: 4,
-            data: {
-              content: `⛔ \`ID: ${targetUserId}\` Blacklist-dədir! Əvvəlcə Blacklist-dən çıxarın.`,
-              flags: 64
-            }
-          });
-          return;
-        }
-
-        const resolvedUsersMap =
-          (interaction.data && interaction.data.resolved && interaction.data.resolved.users) || {};
-        const resolvedMembersMap =
-          (interaction.data && interaction.data.resolved && interaction.data.resolved.members) || {};
-        const pickedUserObj = resolvedUsersMap[targetUserId] || null;
-        const pickedMemberObj = resolvedMembersMap[targetUserId] || null;
-        const pickedUserTag = pickedUserObj
-          ? sanitizeText(
-              (pickedMemberObj && pickedMemberObj.nick) ||
-                pickedUserObj.global_name ||
-                pickedUserObj.username,
-              `User_${targetUserId}`
-            )
-          : targetUserId === actorId
-            ? actorTag
-            : `User_${targetUserId}`;
 
         const targetScriptId = sanitizeText(String(getOpt("script") || ""), "");
         const scripts = getScriptsForGuild(guildId, effectiveOwnerId);
         const chosenScriptObj = scripts.find((s) => s.id === targetScriptId) || scripts[0] || null;
         const effectiveScriptId = chosenScriptObj ? chosenScriptObj.id : targetScriptId;
 
-        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
-        const keys = getKeysForGuild(guildId, effectiveOwnerId);
-        const idx = wl.findIndex((w) => String(w.discordId) === targetUserId);
+        const resolvedUsersMap =
+          (interaction.data && interaction.data.resolved && interaction.data.resolved.users) || {};
+        const resolvedMembersMap =
+          (interaction.data && interaction.data.resolved && interaction.data.resolved.members) || {};
 
-        let existingValidKey =
-          idx >= 0 && wl[idx].keyCode && wl[idx].keyCode !== "MANUAL-WL"
-            ? keys.find(
-                (k) =>
-                  String(k.code || "").toUpperCase() === String(wl[idx].keyCode || "").toUpperCase() &&
-                  !k.revoked
+        const candidateMembers = [];
+        const seenCandidateIds = new Set();
+
+        const pushCandidate = (uidRaw, fallbackTag = "") => {
+          const cleanUid = sanitizeSnowflakeId(uidRaw || "");
+          if (!cleanUid || seenCandidateIds.has(cleanUid)) return;
+          seenCandidateIds.add(cleanUid);
+          const uObj = resolvedUsersMap[cleanUid] || null;
+          const mObj = resolvedMembersMap[cleanUid] || null;
+          const computedTag = uObj
+            ? sanitizeText(
+                (mObj && mObj.nick) || uObj.global_name || uObj.username,
+                `User_${cleanUid}`
               )
-            : null;
+            : fallbackTag || (cleanUid === actorId ? actorTag : `User_${cleanUid}`);
+          candidateMembers.push({ discordId: cleanUid, tag: computedTag });
+        };
 
-        if (!existingValidKey) {
-          const autoKeyCode = generateUniqueLicenseKeyCode();
-          existingValidKey = {
-            id: `key_${crypto.randomBytes(5).toString("hex")}`,
-            code: autoKeyCode,
-            scriptId: effectiveScriptId,
-            claimedBy: targetUserId,
-            claimedByTag: pickedUserTag,
-            claimedAt: new Date().toISOString(),
-            revoked: false,
-            createdAt: new Date().toISOString()
-          };
-          keys.push(existingValidKey);
-        } else {
-          existingValidKey.claimedBy = targetUserId;
-          existingValidKey.claimedByTag = pickedUserTag;
+        if (targetUserId) {
+          pushCandidate(targetUserId);
         }
 
-        const record = {
-          discordId: targetUserId,
-          tag: pickedUserTag,
-          keyCode: existingValidKey.code,
-          scriptId: effectiveScriptId,
-          hwid: "",
-          lockedHwid: "",
-          resetCount: idx >= 0 ? Number(wl[idx].resetCount || 0) : 0,
-          addedAt: new Date().toISOString()
-        };
-        if (idx >= 0) wl[idx] = record;
-        else wl.push(record);
+        if (targetRoleId && guildId) {
+          for (const [mId, mObj] of Object.entries(resolvedMembersMap)) {
+            const rolesArr = Array.isArray(mObj && mObj.roles) ? mObj.roles : [];
+            if (rolesArr.includes(targetRoleId)) {
+              pushCandidate(mId);
+            }
+          }
+
+          try {
+            let afterId = "";
+            let fetchedTotal = 0;
+            while (fetchedTotal < 1000) {
+              const qStr = afterId ? `?limit=1000&after=${encodeURIComponent(afterId)}` : "?limit=1000";
+              const mRes = await discordApiRequest(`/guilds/${guildId}/members${qStr}`, "GET");
+              const mList = Array.isArray(mRes && mRes.data) ? mRes.data : [];
+              if (mList.length === 0) break;
+              for (const mem of mList) {
+                const memUser = mem && mem.user ? mem.user : null;
+                const memId = sanitizeSnowflakeId(memUser && memUser.id);
+                const memRoles = Array.isArray(mem && mem.roles) ? mem.roles : [];
+                if (memId && memRoles.includes(targetRoleId)) {
+                  const tagName = sanitizeText(
+                    (mem && mem.nick) ||
+                      (memUser && (memUser.global_name || memUser.username)),
+                    `User_${memId}`
+                  );
+                  pushCandidate(memId, tagName);
+                }
+              }
+              fetchedTotal += mList.length;
+              const lastMem = mList[mList.length - 1];
+              const nextAfter = sanitizeSnowflakeId(lastMem && lastMem.user && lastMem.user.id);
+              if (!nextAfter || mList.length < 1000) break;
+              afterId = nextAfter;
+            }
+          } catch (_roleFetchErr) {}
+        }
+
+        if (candidateMembers.length === 0) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content:
+                "❌ Seçilən istifadəçi/rol üzrə ID tapılmadı (botun sunucuda `Server Members Intent` / üzv oxuma icazəsi olduğundan əmin olun).",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
+        const bl = getBlacklistForGuild(guildId, effectiveOwnerId);
+        const blacklistedIds = new Set(bl.map((b) => String(b.discordId)));
+
+        const addedSummary = [];
+        const skippedBlacklist = [];
+
+        for (const cand of candidateMembers) {
+          if (blacklistedIds.has(cand.discordId)) {
+            skippedBlacklist.push(cand.discordId);
+            continue;
+          }
+
+          const idx = wl.findIndex((w) => String(w.discordId) === cand.discordId);
+          let existingValidKey =
+            idx >= 0 && wl[idx].keyCode && wl[idx].keyCode !== "MANUAL-WL"
+              ? keys.find(
+                  (k) =>
+                    String(k.code || "").toUpperCase() ===
+                      String(wl[idx].keyCode || "").toUpperCase() && !k.revoked
+                )
+              : null;
+
+          if (!existingValidKey) {
+            const autoKeyCode = generateUniqueLicenseKeyCode();
+            existingValidKey = {
+              id: `key_${crypto.randomBytes(5).toString("hex")}`,
+              code: autoKeyCode,
+              scriptId: effectiveScriptId,
+              claimedBy: cand.discordId,
+              claimedByTag: cand.tag,
+              claimedAt: new Date().toISOString(),
+              revoked: false,
+              createdAt: new Date().toISOString()
+            };
+            keys.push(existingValidKey);
+          } else {
+            existingValidKey.claimedBy = cand.discordId;
+            existingValidKey.claimedByTag = cand.tag;
+            if (effectiveScriptId) existingValidKey.scriptId = effectiveScriptId;
+          }
+
+          const record = {
+            discordId: cand.discordId,
+            tag: cand.tag,
+            keyCode: existingValidKey.code,
+            scriptId: effectiveScriptId,
+            hwid: "",
+            lockedHwid: "",
+            resetCount: idx >= 0 ? Number(wl[idx].resetCount || 0) : 0,
+            addedAt: new Date().toISOString()
+          };
+          if (idx >= 0) wl[idx] = record;
+          else wl.push(record);
+
+          addedSummary.push(`<@${cand.discordId}> (\`ID: ${cand.discordId}\`) → \`${existingValidKey.code}\``);
+        }
 
         syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
         appendAuditLog(
           "AUTO_WHITELIST_KEY",
-          `UserID=${targetUserId} (${pickedUserTag}) -> ${existingValidKey.code}`,
+          `Count=${addedSummary.length} RoleID=${targetRoleId || "-"} UserID=${targetUserId || "-"} Script=${effectiveScriptId || "default"}`,
           guildId,
           effectiveOwnerId
         );
 
         const scriptText = chosenScriptObj ? ` (**${chosenScriptObj.name}** scriptinə)` : "";
+        const roleText = targetRoleId ? ` • Rol: <@&${targetRoleId}> (\`ID: ${targetRoleId}\`)` : "";
+        const lines = [
+          `🛡️ **${addedSummary.length}** nəfər${scriptText}${roleText} Whitelist-ə əlavə olundu!`,
+          ...addedSummary.slice(0, 15)
+        ];
+        if (addedSummary.length > 15) {
+          lines.push(`... və daha **${addedSummary.length - 15}** nəfər.`);
+        }
+        if (skippedBlacklist.length > 0) {
+          lines.push(`⛔ Blacklist səbəbilə keçilən ID-lər: ${skippedBlacklist.map((id) => `\`${id}\``).join(", ")}`);
+        }
+
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `🛡️ <@${targetUserId}> (\`ID: ${targetUserId}\`)${scriptText} Whitelist-ə əlavə olundu!\n🔑 Avtomatik Key yaradıldı: \`${existingValidKey.code}\``,
+            content: lines.join("\n").slice(0, 1950),
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "unwhitelist") {
+        if (!isAdminOrOwnerUser(guildId, actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `⛔ Whitelist-dən silmək yalnız hesab/sunucu sahibi ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const targetUserId = sanitizeSnowflakeId(String(getOpt("user") || ""));
+        const targetRoleId = sanitizeSnowflakeId(String(getOpt("role") || ""));
+        const targetScriptId = sanitizeText(String(getOpt("script") || ""), "");
+
+        if (!targetUserId && !targetRoleId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa silinəcək istifadəçini (`user`) və ya rolu (`role`) seçin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const idsToRemove = new Set();
+        if (targetUserId) {
+          idsToRemove.add(targetUserId);
+        }
+
+        if (targetRoleId && guildId) {
+          const resolvedMembersMap =
+            (interaction.data && interaction.data.resolved && interaction.data.resolved.members) || {};
+          for (const [mId, mObj] of Object.entries(resolvedMembersMap)) {
+            const rolesArr = Array.isArray(mObj && mObj.roles) ? mObj.roles : [];
+            if (rolesArr.includes(targetRoleId)) {
+              const cleanMId = sanitizeSnowflakeId(mId);
+              if (cleanMId) idsToRemove.add(cleanMId);
+            }
+          }
+          try {
+            let afterId = "";
+            while (true) {
+              const qStr = afterId ? `?limit=1000&after=${encodeURIComponent(afterId)}` : "?limit=1000";
+              const mRes = await discordApiRequest(`/guilds/${guildId}/members${qStr}`, "GET");
+              const mList = Array.isArray(mRes && mRes.data) ? mRes.data : [];
+              if (mList.length === 0) break;
+              for (const mem of mList) {
+                const memId = sanitizeSnowflakeId(mem && mem.user && mem.user.id);
+                const memRoles = Array.isArray(mem && mem.roles) ? mem.roles : [];
+                if (memId && memRoles.includes(targetRoleId)) {
+                  idsToRemove.add(memId);
+                }
+              }
+              const lastMem = mList[mList.length - 1];
+              const nextAfter = sanitizeSnowflakeId(lastMem && lastMem.user && lastMem.user.id);
+              if (!nextAfter || mList.length < 1000) break;
+              afterId = nextAfter;
+            }
+          } catch (_unwlRoleErr) {}
+        }
+
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        let removedCount = 0;
+        const nextWl = wl.filter((w) => {
+          const wUid = sanitizeSnowflakeId(w && w.discordId);
+          const idMatches = idsToRemove.has(wUid);
+          const scriptMatches = !targetScriptId || String(w && w.scriptId || "") === targetScriptId;
+          if (idMatches && scriptMatches) {
+            removedCount += 1;
+            return false;
+          }
+          return true;
+        });
+
+        const { acc, tenant } = resolveScopedWorkspace(guildId, effectiveOwnerId);
+        if (acc) acc.whitelist = nextWl;
+        if (tenant) tenant.whitelist = nextWl;
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog(
+          "CMD_UNWHITELIST",
+          `Removed=${removedCount} RoleID=${targetRoleId || "-"} UserID=${targetUserId || "-"} Script=${targetScriptId || "ALL"} ByID=${actorId}`,
+          guildId,
+          effectiveOwnerId
+        );
+
+        const scriptInfo = targetScriptId ? ` (\`${targetScriptId}\` scriptindən)` : "";
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content:
+              removedCount > 0
+                ? `🗑️ **${removedCount}** istifadəçi${scriptInfo} Whitelist-dən çıxarıldı.`
+                : `ℹ️ Seçilən meyar üzrə Whitelist-də uyğun ID tapılmadı.`,
             flags: 64
           }
         });
@@ -1817,9 +1998,15 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
   const whitelistOptions = [
     {
       name: "user",
-      description: "Sunucudan istifadəçi seçin",
+      description: "İstifadəçi seçin (istəyə bağlı)",
       type: 6,
-      required: true
+      required: false
+    },
+    {
+      name: "role",
+      description: "Rol seçin (istəyə bağlı — roldakı hər kəs ID ilə əlavə olunur)",
+      type: 8,
+      required: false
     }
   ];
 
@@ -1829,6 +2016,31 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
       description: "Whitelist veriləcək scripti seçin",
       type: 3,
       required: true,
+      choices: scriptChoices
+    });
+  }
+
+  const unwhitelistOptions = [
+    {
+      name: "user",
+      description: "Silinəcək istifadəçi (istəyə bağlı)",
+      type: 6,
+      required: false
+    },
+    {
+      name: "role",
+      description: "Silinəcək rol (istəyə bağlı)",
+      type: 8,
+      required: false
+    }
+  ];
+
+  if (scriptChoices.length > 0) {
+    unwhitelistOptions.push({
+      name: "script",
+      description: "Hansı scriptdən silinsin (istəyə bağlı)",
+      type: 3,
+      required: false,
       choices: scriptChoices
     });
   }
@@ -1866,22 +2078,15 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
     },
     {
       name: "whitelist",
-      description: "İstifadəçini seçilmiş scriptə Whitelist-ə əlavə et",
+      description: "İstifadəçini və ya roldakı üzvləri seçilmiş scriptə Whitelist-ə əlavə et",
       type: 1,
       options: whitelistOptions
     },
     {
       name: "unwhitelist",
-      description: "İstifadəçini Whitelist-dən çıxar",
+      description: "İstifadəçini və ya roldakı üzvləri Whitelist-dən çıxar",
       type: 1,
-      options: [
-        {
-          name: "user",
-          description: "Çıxarılacaq istifadəçi",
-          type: 6,
-          required: true
-        }
-      ]
+      options: unwhitelistOptions
     },
     {
       name: "resethwid",
