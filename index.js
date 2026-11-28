@@ -1253,18 +1253,714 @@ const handleDiscordInteraction = async (interaction) => {
             content: "❌ İstifadəçi ID-si (User ID) müəyyən edilə bilmədi.",
             flags: 64
           }
-    } catch (err) {
-      try {
+        });
+        return;
+      }
+
+      if (guildId && !isGuildIdValidAndAuthorized(guildId, actorId)) {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `❌ Xəta baş verdi: ${err.message}`,
+            content: `❌ Bu Sunucu ID (\`${guildId}\`) fərqli hesaba/sahibə aiddir. Əməliyyat rədd edildi.`,
             flags: 64
           }
         });
-      } catch (_e) {}
+        return;
+      }
+
+      const blList = getBlacklistForGuild(guildId, effectiveOwnerId);
+      if (blList.some((b) => String(b.discordId) === actorId)) {
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: "⛔ Siz Blacklist-dəsiniz. Sistemdən istifadə edə bilməzsiniz.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "panel") {
+        const chosenScriptRaw = sanitizeText(String(getOpt("script") || ""), "");
+        const scopedScripts = getScriptsForGuild(guildId, effectiveOwnerId);
+        const matchedScript = chosenScriptRaw
+          ? scopedScripts.find(
+              (s) =>
+                String(s.id || "") === chosenScriptRaw ||
+                sanitizeText(s.name, "").toLowerCase() === chosenScriptRaw.toLowerCase()
+            ) || null
+          : null;
+
+        if (chosenScriptRaw && !matchedScript) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ \`${chosenScriptRaw}\` adlı script sizin hesabınızda/sunucunuzda tapılmadı (ID kontrolu).`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const targetChannelId = sanitizeSnowflakeId(interaction.channel_id || "");
+        if (!targetChannelId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Kanal ID-si müəyyən edilə bilmədi.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `⏳ Panel (<@${actorId}> / ID: \`${actorId}\`) <#${targetChannelId}> kanalına göndərilir...`,
+            flags: 64
+          }
+        });
+
+        await sendPanelMessageToChannel(
+          targetChannelId,
+          guildId,
+          matchedScript ? matchedScript.id : "",
+          effectiveOwnerId
+        );
+        appendAuditLog(
+          "SLASH_PANEL",
+          `By=${actorId} Channel=${targetChannelId} Script=${matchedScript ? matchedScript.name : "Default"}`,
+          guildId,
+          effectiveOwnerId
+        );
+        return;
+      }
+
+      if (cmdName === "key") {
+        const inputKey = sanitizeText(String(getOpt("key") || ""), "").toUpperCase();
+        if (!inputKey) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa aktivləşdiriləcək Key kodunu daxil edin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
+        const foundKey = keys.find(
+          (k) => String(k.code || "").toUpperCase() === inputKey && !k.revoked
+        );
+
+        if (!foundKey) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Bu Key kodu etibarsızdır və ya ləğv edilib.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        if (foundKey.claimedBy && String(foundKey.claimedBy) !== actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Bu Key artıq başqa Discord ID-sinə (\`${foundKey.claimedBy}\`) bağlanıb.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        foundKey.claimedBy = actorId;
+        foundKey.claimedByTag = actorTag;
+        foundKey.claimedAt = new Date().toISOString();
+
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const existingWlIdx = wl.findIndex((w) => String(w.discordId) === actorId);
+        const wlRecord = {
+          discordId: actorId,
+          tag: actorTag,
+          keyCode: foundKey.code,
+          scriptId: foundKey.scriptId || "",
+          hwid: existingWlIdx >= 0 ? wl[existingWlIdx].hwid || "" : "",
+          lockedHwid: existingWlIdx >= 0 ? wl[existingWlIdx].lockedHwid || "" : "",
+          resetCount: existingWlIdx >= 0 ? Number(wl[existingWlIdx].resetCount || 0) : 0,
+          addedAt: new Date().toISOString()
+        };
+        if (existingWlIdx >= 0) wl[existingWlIdx] = wlRecord;
+        else wl.push(wlRecord);
+
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog("SLASH_KEY_REDEEM", `ID=${actorId} Key=${foundKey.code}`, guildId, effectiveOwnerId);
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `✅ **Key aktivləşdirildi!**\n• **Discord ID:** \`${actorId}\`\n• **Key:** \`${foundKey.code}\`\n• **Whitelist:** Aktivdir`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "whitelist") {
+        if (!isAdminOrOwnerUser(guildId, actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Whitelist əlavə etmək üçün icazəniz yoxdur (ID: \`${actorId}\`).`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const chosenScriptRaw = sanitizeText(String(getOpt("script") || ""), "");
+        const scopedScripts = getScriptsForGuild(guildId, effectiveOwnerId);
+        const matchedScript = chosenScriptRaw
+          ? scopedScripts.find(
+              (s) =>
+                String(s.id || "") === chosenScriptRaw ||
+                sanitizeText(s.name, "").toLowerCase() === chosenScriptRaw.toLowerCase()
+            ) || null
+          : null;
+
+        if (!matchedScript) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Seçilmiş script (\`${chosenScriptRaw || "-"}\`) sizin hesabınızda/sunucunuzda tapılmadı (ID kontrolu).`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const rawTargetUser = sanitizeSnowflakeId(getOpt("user") || "");
+        const rawTargetRole = sanitizeSnowflakeId(getOpt("role") || "");
+
+        if (!rawTargetUser && !rawTargetRole) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa ən azı bir `user` və ya `role` seçin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const memberIdsToAdd = new Set();
+        if (rawTargetUser) {
+          memberIdsToAdd.add(rawTargetUser);
+        }
+
+        if (rawTargetRole && guildId) {
+          try {
+            const membersRes = await discordApiRequest(`/guilds/${guildId}/members?limit=1000`, "GET");
+            const membersArr = Array.isArray(membersRes && membersRes.data) ? membersRes.data : [];
+            for (const m of membersArr) {
+              const mUid = sanitizeSnowflakeId(m && m.user && m.user.id);
+              const rolesArr = Array.isArray(m && m.roles) ? m.roles : [];
+              if (mUid && rolesArr.includes(rawTargetRole)) {
+                memberIdsToAdd.add(mUid);
+              }
+            }
+          } catch (_roleErr) {}
+        }
+
+        if (memberIdsToAdd.size === 0) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Seçilmiş istifadəçi və ya rolda üzv ID-si tapılmadı.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
+        const addedEntries = [];
+
+        for (const uid of memberIdsToAdd) {
+          const existingIdx = wl.findIndex((w) => String(w.discordId) === uid);
+          const existingRec = existingIdx >= 0 ? wl[existingIdx] : null;
+          const generatedKey =
+            (existingRec && existingRec.keyCode && existingRec.keyCode !== "MANUAL-WL"
+              ? existingRec.keyCode
+              : generateUniqueLicenseKeyCode());
+
+          if (!keys.some((k) => String(k.code || "").toUpperCase() === generatedKey.toUpperCase() && !k.revoked)) {
+            keys.push({
+              id: `key_${crypto.randomBytes(5).toString("hex")}`,
+              code: generatedKey,
+              scriptId: matchedScript.id,
+              claimedBy: uid,
+              claimedByTag: `User_${uid}`,
+              claimedAt: new Date().toISOString(),
+              resetCount: 0,
+              revoked: false,
+              ownerDiscordId: effectiveOwnerId,
+              createdAt: new Date().toISOString()
+            });
+          }
+
+          const newWlEntry = {
+            discordId: uid,
+            tag: (existingRec && existingRec.tag) || `User_${uid}`,
+            keyCode: generatedKey,
+            scriptId: matchedScript.id,
+            roleId: rawTargetRole || "",
+            hwid: existingRec ? existingRec.hwid || "" : "",
+            lockedHwid: existingRec ? existingRec.lockedHwid || "" : "",
+            resetCount: existingRec ? Number(existingRec.resetCount || 0) : 0,
+            addedAt: new Date().toISOString()
+          };
+
+          if (existingIdx >= 0) wl[existingIdx] = newWlEntry;
+          else wl.push(newWlEntry);
+          addedEntries.push({ uid, keyCode: generatedKey });
+        }
+
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog(
+          "SLASH_WHITELIST_ADD",
+          `Script=${matchedScript.name} Count=${addedEntries.length} Role=${rawTargetRole || "-"} User=${rawTargetUser || "-"}`,
+          guildId,
+          effectiveOwnerId
+        );
+
+        const summaryLines = addedEntries
+          .slice(0, 10)
+          .map((item) => `• <@${item.uid}> (\`${item.uid}\`) — Key: \`${item.keyCode}\``)
+          .join("\n");
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `✅ **Whitelist əlavə edildi!**\n• **Script:** \`${matchedScript.name}\`\n• **Əlavə olunan ID sayı:** \`${addedEntries.length}\`\n${summaryLines}`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "unwhitelist") {
+        if (!isAdminOrOwnerUser(guildId, actorId)) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Whitelist-dən çıxarmaq üçün icazəniz yoxdur (ID: \`${actorId}\`).`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const chosenScriptRaw = sanitizeText(String(getOpt("script") || ""), "");
+        const scopedScripts = getScriptsForGuild(guildId, effectiveOwnerId);
+        const matchedScript = chosenScriptRaw
+          ? scopedScripts.find(
+              (s) =>
+                String(s.id || "") === chosenScriptRaw ||
+                sanitizeText(s.name, "").toLowerCase() === chosenScriptRaw.toLowerCase()
+            ) || null
+          : null;
+
+        if (chosenScriptRaw && !matchedScript) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Seçilmiş script (\`${chosenScriptRaw}\`) sizin hesabınızda/sunucunuzda tapılmadı (ID kontrolu).`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const rawTargetUser = sanitizeSnowflakeId(getOpt("user") || "");
+        const rawTargetRole = sanitizeSnowflakeId(getOpt("role") || "");
+
+        if (!rawTargetUser && !rawTargetRole) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Zəhmət olmasa silinəcək `user` və ya `role` seçin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const memberIdsToRemove = new Set();
+        if (rawTargetUser) {
+          memberIdsToRemove.add(rawTargetUser);
+        }
+
+        if (rawTargetRole && guildId) {
+          try {
+            const membersRes = await discordApiRequest(`/guilds/${guildId}/members?limit=1000`, "GET");
+            const membersArr = Array.isArray(membersRes && membersRes.data) ? membersRes.data : [];
+            for (const m of membersArr) {
+              const mUid = sanitizeSnowflakeId(m && m.user && m.user.id);
+              const rolesArr = Array.isArray(m && m.roles) ? m.roles : [];
+              if (mUid && rolesArr.includes(rawTargetRole)) {
+                memberIdsToRemove.add(mUid);
+              }
+            }
+          } catch (_roleErr) {}
+        }
+
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const nextWl = wl.filter((w) => {
+          const idMatch = memberIdsToRemove.has(String(w.discordId || ""));
+          if (!idMatch) return true;
+          if (matchedScript) {
+            return String(w.scriptId || "") !== String(matchedScript.id || "");
+          }
+          return false;
+        });
+
+        const removedCount = wl.length - nextWl.length;
+        const { acc, tenant } = resolveScopedWorkspace(guildId, effectiveOwnerId);
+        if (acc) acc.whitelist = nextWl;
+        if (tenant) tenant.whitelist = nextWl;
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog(
+          "SLASH_UNWHITELIST",
+          `Removed=${removedCount} Script=${matchedScript ? matchedScript.name : "All"}`,
+          guildId,
+          effectiveOwnerId
+        );
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `🗑️ **Unwhitelist tamamlandı!**\n• **Silinən ID sayı:** \`${removedCount}\`\n• **Script:** \`${matchedScript ? matchedScript.name : "Bütün scriptlər"}\``,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (cmdName === "resethwid") {
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
+        const userWl = wl.find((w) => String(w.discordId) === actorId) || null;
+        const userKey = keys.find((k) => !k.revoked && String(k.claimedBy || "") === actorId) || null;
+
+        if (!userWl && !userKey) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ HWID sıfırlamaq üçün aktiv Key və ya Whitelist qeydiniz tapılmadı (ID: \`${actorId}\`).`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        if (userWl) {
+          userWl.hwid = "";
+          userWl.lockedHwid = "";
+          userWl.resetCount = Number(userWl.resetCount || 0) + 1;
+        }
+        if (userKey) {
+          userKey.hwid = "";
+          userKey.lockedHwid = "";
+          userKey.resetCount = Number(userKey.resetCount || 0) + 1;
+        }
+
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog("SLASH_RESET_HWID", `ID=${actorId}`, guildId, effectiveOwnerId);
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `⚙️ **HWID sıfırlandı!**\n• **Discord ID:** \`${actorId}\`\nScripti növbəti dəfə işlədəndə yeni cihazınıza kilidlənəcək.`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      await respondToDiscordInteraction(interactionId, interactionToken, {
+        type: 4,
+        data: {
+          content: "ℹ️ Naməlum əmr.",
+          flags: 64
+        }
+      });
+      return;
     }
-  };
+
+    if (interactionType === 3) {
+      const rawCustomId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+      const { baseId, boundScriptId } = parseCustomIdAndScript(rawCustomId);
+
+      if (!actorId) {
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: "❌ İstifadəçi ID-si müəyyən edilə bilmədi.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      const blList = getBlacklistForGuild(guildId, effectiveOwnerId);
+      if (blList.some((b) => String(b.discordId) === actorId)) {
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: "⛔ Siz Blacklist-dəsiniz.",
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (baseId === "btn_redeem_key") {
+        const modalCustomId = boundScriptId
+          ? `modal_redeem_key::${boundScriptId}`
+          : "modal_redeem_key";
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 9,
+          data: {
+            custom_id: modalCustomId,
+            title: "Lisenziya Keyini Aktivləşdir",
+            components: [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 4,
+                    custom_id: "input_license_key",
+                    label: "Key Kodunuz",
+                    style: 1,
+                    min_length: 4,
+                    max_length: 80,
+                    required: true,
+                    placeholder: "SADO-XXXX-XXXX-XXXX"
+                  }
+                ]
+              }
+            ]
+          }
+        });
+        return;
+      }
+
+      if (baseId === "btn_get_script") {
+        const accessInfo = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        if (!accessInfo.hasAccess) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content:
+                "❌ Əvvəlcə aktiv Key daxil edin! **Reedem Key** düyməsinə basıb açarınızı yazın, sonra **Get Script** ilə qısa scriptinizi əldə edin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        const chosenScriptId =
+          boundScriptId ||
+          (accessInfo.userWl && accessInfo.userWl.scriptId) ||
+          (accessInfo.userKeyObj && accessInfo.userKeyObj.scriptId) ||
+          "";
+
+        const built = getScriptContentForUser(
+          guildId,
+          actorId,
+          chosenScriptId,
+          accessInfo.activeKeyCode,
+          getPublicServiceBaseUrl(),
+          effectiveOwnerId
+        );
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `📜 **${built.scriptName}** (ID: \`${actorId}\`)\n\`\`\`lua\n${built.code}\n\`\`\``,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (baseId === "btn_reset_hwid") {
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
+        const userWl = wl.find((w) => String(w.discordId) === actorId) || null;
+        const userKey = keys.find((k) => !k.revoked && String(k.claimedBy || "") === actorId) || null;
+
+        if (!userWl && !userKey) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ HWID sıfırlamaq üçün aktiv Key və ya Whitelist qeydiniz tapılmadı.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        if (userWl) {
+          userWl.hwid = "";
+          userWl.lockedHwid = "";
+          userWl.resetCount = Number(userWl.resetCount || 0) + 1;
+        }
+        if (userKey) {
+          userKey.hwid = "";
+          userKey.lockedHwid = "";
+          userKey.resetCount = Number(userKey.resetCount || 0) + 1;
+        }
+
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog("BTN_RESET_HWID", `ID=${actorId}`, guildId, effectiveOwnerId);
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `⚙️ **HWID sıfırlandı!** (ID: \`${actorId}\`)`,
+            flags: 64
+          }
+        });
+        return;
+      }
+
+      if (baseId === "btn_stats") {
+        const accessInfo = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        const boundHwid = sanitizeText(
+          (accessInfo.userWl && (accessInfo.userWl.lockedHwid || accessInfo.userWl.hwid)) ||
+            (accessInfo.userKeyObj && (accessInfo.userKeyObj.lockedHwid || accessInfo.userKeyObj.hwid)) ||
+            "",
+          ""
+        );
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content:
+              `📊 **Statistikanız**\n` +
+              `• **Discord ID:** \`${actorId}\`\n` +
+              `• **Status:** ${accessInfo.hasAccess ? "Aktiv ✅" : "Passiv ❌"}\n` +
+              `• **Key:** \`${accessInfo.activeKeyCode || "Yoxdur"}\`\n` +
+              `• **Müddət:** ${accessInfo.durationLabel}\n` +
+              `• **HWID:** \`${boundHwid ? `${boundHwid.slice(0, 14)}...` : "Bağlanmayıb"}\`\n` +
+              `• **Reset sayı:** \`${accessInfo.resetCount}\``,
+            flags: 64
+          }
+        });
+        return;
+      }
+    }
+
+    if (interactionType === 5) {
+      const rawModalId = sanitizeText(interaction.data && interaction.data.custom_id, "");
+      const { baseId, boundScriptId } = parseCustomIdAndScript(rawModalId);
+
+      if (baseId === "modal_redeem_key") {
+        let enteredKey = "";
+        const rows = Array.isArray(interaction.data && interaction.data.components)
+          ? interaction.data.components
+          : [];
+        for (const r of rows) {
+          const comps = Array.isArray(r && r.components) ? r.components : [];
+          for (const c of comps) {
+            if (c && c.custom_id === "input_license_key") {
+              enteredKey = sanitizeText(String(c.value || ""), "").toUpperCase();
+            }
+          }
+        }
+
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
+        const foundKey = keys.find(
+          (k) => String(k.code || "").toUpperCase() === enteredKey && !k.revoked
+        );
+
+        if (!foundKey) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Daxil etdiyiniz Key etibarsızdır və ya ləğv edilib.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        if (foundKey.claimedBy && String(foundKey.claimedBy) !== actorId) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: `❌ Bu Key artıq başqa Discord ID-sinə (\`${foundKey.claimedBy}\`) bağlanıb.`,
+              flags: 64
+            }
+          });
+          return;
+        }
+
+        foundKey.claimedBy = actorId;
+        foundKey.claimedByTag = actorTag;
+        foundKey.claimedAt = new Date().toISOString();
+
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const idx = wl.findIndex((w) => String(w.discordId) === actorId);
+        const wlEntry = {
+          discordId: actorId,
+          tag: actorTag,
+          keyCode: foundKey.code,
+          scriptId: boundScriptId || foundKey.scriptId || "",
+          hwid: idx >= 0 ? wl[idx].hwid || "" : "",
+          lockedHwid: idx >= 0 ? wl[idx].lockedHwid || "" : "",
+          resetCount: idx >= 0 ? Number(wl[idx].resetCount || 0) : 0,
+          addedAt: new Date().toISOString()
+        };
+        if (idx >= 0) wl[idx] = wlEntry;
+        else wl.push(wlEntry);
+
+        syncAccountAndTenant(effectiveOwnerId, guildId);
+        saveAppStateToDisk();
+        appendAuditLog("MODAL_KEY_REDEEM", `ID=${actorId} Key=${foundKey.code}`, guildId, effectiveOwnerId);
+
+        await respondToDiscordInteraction(interactionId, interactionToken, {
+          type: 4,
+          data: {
+            content: `✅ **Key uğurla aktivləşdirildi!**\n• **Discord ID:** \`${actorId}\`\n• **Key:** \`${foundKey.code}\`\nİndi **Get Script** düyməsinə basıb scriptinizi götürə bilərsiniz.`,
+            flags: 64
+          }
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    try {
+      await respondToDiscordInteraction(interactionId, interactionToken, {
+        type: 4,
+        data: {
+          content: `❌ Xəta baş verdi: ${err.message}`,
+          flags: 64
+        }
+      });
+    } catch (_e) {}
+  }
+};
 
 const buildSlashCommandsPayload = (_guildId = "", _ownerDiscordId = "") => {
   const scriptOption = (required) => ({
