@@ -765,34 +765,52 @@ const resolveScopedWorkspace = (guildId = "", ownerDiscordId = "") => {
 
 const getScriptsForGuild = (guildId = "", ownerDiscordId = "") => {
   const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
-  if (acc && Array.isArray(acc.scripts) && acc.scripts.length > 0) return acc.scripts;
-  if (tenant && Array.isArray(tenant.scripts) && tenant.scripts.length > 0) return tenant.scripts;
+  const collected = [];
+  const seenIds = new Set();
+
+  const addScriptsFrom = (list) => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (!item || typeof item !== "object") continue;
+      const sid = sanitizeText(item.id, "");
+      const sname = sanitizeText(item.name, "");
+      if (!sid || !sname || seenIds.has(sid)) continue;
+      seenIds.add(sid);
+      collected.push(item);
+    }
+  };
+
+  if (acc) addScriptsFrom(acc.scripts);
+  if (tenant) addScriptsFrom(tenant.scripts);
 
   const cleanUid = sanitizeSnowflakeId(ownerDiscordId || "");
   if (cleanUid && APP_STATE.accounts && APP_STATE.accounts[cleanUid]) {
-    const uAcc = APP_STATE.accounts[cleanUid];
-    if (Array.isArray(uAcc.scripts) && uAcc.scripts.length > 0) return uAcc.scripts;
+    addScriptsFrom(APP_STATE.accounts[cleanUid].scripts);
   }
 
   const cleanGid = sanitizeSnowflakeId(guildId || "");
   if (cleanGid && APP_STATE.tenants && APP_STATE.tenants[cleanGid]) {
     const tRec = APP_STATE.tenants[cleanGid];
-    if (Array.isArray(tRec.scripts) && tRec.scripts.length > 0) return tRec.scripts;
+    addScriptsFrom(tRec.scripts);
     const tOwner = sanitizeSnowflakeId(tRec.ownerDiscordId || "");
     if (tOwner && APP_STATE.accounts && APP_STATE.accounts[tOwner]) {
-      const oScripts = APP_STATE.accounts[tOwner].scripts || [];
-      if (oScripts.length > 0) return oScripts;
+      addScriptsFrom(APP_STATE.accounts[tOwner].scripts);
     }
   }
 
-  if (acc) return acc.scripts;
-  if (tenant) return tenant.scripts;
-
-  if (!cleanUid && !cleanGid && Array.isArray(APP_STATE.scripts)) {
-    return APP_STATE.scripts;
+  if (collected.length === 0 && APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+    for (const accRec of Object.values(APP_STATE.accounts)) {
+      if (accRec && (!cleanUid || sanitizeSnowflakeId(accRec.ownerDiscordId) === cleanUid)) {
+        addScriptsFrom(accRec.scripts);
+      }
+    }
   }
 
-  return [];
+  if (collected.length === 0 && Array.isArray(APP_STATE.scripts)) {
+    addScriptsFrom(APP_STATE.scripts);
+  }
+
+  return collected;
 };
 
 const getKeysForGuild = (guildId = "", ownerDiscordId = "") => {
@@ -2084,7 +2102,14 @@ const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
             choices: scriptChoices
           }
         ]
-      : [];
+      : [
+          {
+            name: "script",
+            description: "Script adını yazın və ya paneldən script yaradın",
+            type: 3,
+            required: false
+          }
+        ];
 
   return [
     {
@@ -2138,6 +2163,14 @@ const syncSlashCommandsWithDiscord = async (guildId = "", ownerDiscordId = "") =
   const commands = buildSlashCommandsPayload(guildId, ownerDiscordId);
   try {
     await discordApiRequest(`/applications/${BOT_RUNTIME.botUserId}/commands`, "PUT", commands);
+    const cleanGid = sanitizeSnowflakeId(guildId || "");
+    if (cleanGid) {
+      await discordApiRequest(
+        `/applications/${BOT_RUNTIME.botUserId}/guilds/${cleanGid}/commands`,
+        "PUT",
+        commands
+      ).catch(() => {});
+    }
   } catch (_err) {}
 };
 
