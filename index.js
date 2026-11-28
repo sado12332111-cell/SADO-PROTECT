@@ -4627,6 +4627,7 @@ const createHttpServer = () => {
 
       if (method === "POST" && pathname === "/api/admin/api-keys") {
         const body = await readJsonBody(req);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
         const planId = normalizePlanId(body.planId || "premium_1");
         const label = sanitizeText(body.label, "");
         const code = `SADO-API-${crypto.randomBytes(2).toString("hex").toUpperCase()}-${crypto
@@ -4655,9 +4656,36 @@ const createHttpServer = () => {
 
       if (method === "DELETE" && pathname.startsWith("/api/admin/api-keys/")) {
         const id = decodeURIComponent(pathname.replace("/api/admin/api-keys/", ""));
+        const removedApiKey = (APP_STATE.apiKeys || []).find((k) => k.id === id) || null;
         APP_STATE.apiKeys = (APP_STATE.apiKeys || []).filter((k) => k.id !== id);
+
+        if (removedApiKey && removedApiKey.code) {
+          const targetCodeUpper = String(removedApiKey.code).toUpperCase();
+          if (APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+            for (const acc of Object.values(APP_STATE.accounts)) {
+              if (acc && String(acc.activeApiKeyCode || "").toUpperCase() === targetCodeUpper) {
+                acc.activeApiKeyCode = "";
+                acc.activePlan = "free";
+              }
+            }
+          }
+          if (APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
+            for (const tenant of Object.values(APP_STATE.tenants)) {
+              if (tenant && String(tenant.activeApiKeyCode || "").toUpperCase() === targetCodeUpper) {
+                tenant.activeApiKeyCode = "";
+                tenant.activePlan = "free";
+              }
+            }
+          }
+        }
+
         saveAppStateToDisk();
-        appendAuditLog("DELETE_API_KEY", id, "", sessionUid);
+        appendAuditLog(
+          "DELETE_API_KEY",
+          removedApiKey ? `${removedApiKey.code} (Plan -> free)` : id,
+          removedApiKey && removedApiKey.usedByGuildId ? removedApiKey.usedByGuildId : "",
+          sessionUid
+        );
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
