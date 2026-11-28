@@ -41,7 +41,7 @@ const PLAN_CONFIGS = {
   },
   premium_1: {
     id: "premium_1",
-    name: "Premium (1$)",
+    name: "Pro (1$)",
     priceLabel: "1$",
     scriptLimit: 5,
     badge: "PRO 1$"
@@ -51,7 +51,7 @@ const PLAN_CONFIGS = {
     name: "Premium (2$)",
     priceLabel: "2$",
     scriptLimit: null,
-    badge: "UNLIMITED 2$"
+    badge: "PREMIUM 2$"
   }
 };
 
@@ -69,7 +69,7 @@ const sanitizeSnowflakeId = (value) => {
 
 const normalizePlanId = (planId) => {
   const key = String(planId || "").trim().toLowerCase();
-  if (key === "premium_1" || key === "1$" || key === "pro_1" || key === "premium1") {
+  if (key === "premium_1" || key === "1$" || key === "pro_1" || key === "premium1" || key === "pro" || key === "pro (1$)") {
     return "premium_1";
   }
   if (
@@ -77,7 +77,9 @@ const normalizePlanId = (planId) => {
     key === "2$" ||
     key === "pro_2" ||
     key === "premium2" ||
-    key === "unlimited"
+    key === "unlimited" ||
+    key === "premium" ||
+    key === "premium (2$)"
   ) {
     return "premium_2";
   }
@@ -216,7 +218,6 @@ const loadInitialAppState = () => {
       auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : []
     };
 
-    // Preserve and cross-hydrate accounts & tenants so existing keys/whitelists are never lost
     for (const [gid, tRec] of Object.entries(merged.tenants)) {
       if (!tRec || typeof tRec !== "object") continue;
       const ownerId = sanitizeSnowflakeId(
@@ -3018,7 +3019,7 @@ const renderDashboardHtml = () => {
             <div class="stat-label">Başlanğıc plan</div>
           </div>
           <div class="card">
-            <div class="stat-label">Premium (1$)</div>
+            <div class="stat-label">Pro (1$)</div>
             <div class="stat-value">5 Script</div>
             <div class="stat-label">API açarla aktivləşir</div>
           </div>
@@ -3051,7 +3052,7 @@ const renderDashboardHtml = () => {
               <label for="adminApiPlanSelect">Plan Seçimi</label>
               <select id="adminApiPlanSelect">
                 <option value="free">Free (1 Script)</option>
-                <option value="premium_1" selected>Premium 1$ (5 Script)</option>
+                <option value="premium_1" selected>Pro 1$ (5 Script)</option>
                 <option value="premium_2">Premium 2$ (Sonsuz Script)</option>
               </select>
             </div>
