@@ -388,12 +388,22 @@ const getGuildOwnerId = (guildId = "") => {
   return resolveOwnerDiscordIdForGuild(gid);
 };
 
+const isGuildIdValidAndAuthorized = (guildId = "", userId = "") => {
+  const gid = sanitizeSnowflakeId(guildId || "");
+  if (!gid) return false;
+  const ownerId = getGuildOwnerId(gid);
+  const uid = sanitizeSnowflakeId(userId || "");
+  if (ownerId && uid && ownerId !== uid) {
+    return false;
+  }
+  return true;
+};
+
 const isGuildAuthorized = (guildId = "", userId = "") => {
   const gid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
   const uid = sanitizeSnowflakeId(userId || "");
   if (!gid || !uid) return false;
-  const ownerId = getGuildOwnerId(gid);
-  return !ownerId || ownerId === uid;
+  return isGuildIdValidAndAuthorized(gid, uid);
 };
 
 const isAdminOrOwnerUser = (guildId = "", userId = "") => {
@@ -1132,7 +1142,7 @@ const handleDiscordInteraction = async (interaction) => {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⛔ Discord ID nəzarəti: bu sunucunun sahibi \`${guildOwnerId}\` ID-li hesabdır, sizin ID (\`${actorId}\`) fərqlidir.`,
+            content: `⛔ Sunucu ID (\`${guildId}\`) nəzarəti: bu sunucu \`${guildOwnerId}\` ID-li hesaba bağlıdır, sizin ID (\`${actorId}\`) fərqlidir.`,
             flags: 64
           }
         });
@@ -2125,20 +2135,21 @@ const buildDiscordAuthorizeUrl = () => {
 };
 
 const resolveRequestGuildId = (req, reqUrl, bodyObj = null, sessionUser = null) => {
-  const fromBody = bodyObj && bodyObj.guildId ? sanitizeSnowflakeId(bodyObj.guildId) : "";
-  if (fromBody) return fromBody;
-
-  const fromQuery = reqUrl && reqUrl.searchParams
-    ? sanitizeSnowflakeId(reqUrl.searchParams.get("guildId") || "")
-    : "";
-  if (fromQuery) return fromQuery;
-
-  const fromHeader = req && req.headers
-    ? sanitizeSnowflakeId(req.headers["x-guild-id"] || "")
-    : "";
-  if (fromHeader) return fromHeader;
-
   const uid = sanitizeSnowflakeId(sessionUser && sessionUser.userId);
+  const rawCandidate =
+    (bodyObj && bodyObj.guildId ? String(bodyObj.guildId).trim() : "") ||
+    (reqUrl && reqUrl.searchParams ? String(reqUrl.searchParams.get("guildId") || "").trim() : "") ||
+    (req && req.headers ? String(req.headers["x-guild-id"] || "").trim() : "");
+
+  const cleanCandidate = sanitizeSnowflakeId(rawCandidate);
+  if (cleanCandidate) {
+    const ownerOfCandidate = resolveOwnerDiscordIdForGuild(cleanCandidate);
+    if (!uid || !ownerOfCandidate || ownerOfCandidate === uid) {
+      return cleanCandidate;
+    }
+    return "";
+  }
+
   if (uid && APP_STATE.accounts && APP_STATE.accounts[uid]) {
     const accGid = sanitizeSnowflakeId(APP_STATE.accounts[uid].guildId || "");
     if (accGid) return accGid;
@@ -4239,8 +4250,27 @@ const createHttpServer = () => {
 
       if (method === "POST" && pathname === "/api/guild/settings") {
         const body = await readJsonBody(req);
-        const guildId = sanitizeSnowflakeId(body.guildId || "");
+        const rawGuildInput = String(body.guildId || "").trim();
+        const guildId = sanitizeSnowflakeId(rawGuildInput);
         const panelChannelId = sanitizeSnowflakeId(body.panelChannelId || "");
+
+        if (rawGuildInput && !guildId) {
+          sendJsonResponse(res, 400, {
+            error: "Sunucu ID (Guild ID) düzgün deyil! Yalnız 15-22 rəqəmli Discord Sunucu ID daxil edin."
+          });
+          return;
+        }
+
+        if (guildId && sessionUid) {
+          const existingOwner = resolveOwnerDiscordIdForGuild(guildId);
+          if (existingOwner && existingOwner !== sessionUid) {
+            sendJsonResponse(res, 403, {
+              error: `Bu Sunucu ID (\`${guildId}\`) artıq başqa Discord hesabına (\`${existingOwner}\`) bağlıdır.`
+            });
+            return;
+          }
+        }
+
         let resolvedName = "";
         const acc = sessionUid ? getAccountWorkspace(sessionUid, guildId, true) : null;
 
@@ -4281,7 +4311,16 @@ const createHttpServer = () => {
 
       if (method === "POST" && pathname === "/api/panel/send") {
         const body = await readJsonBody(req);
+        const rawGuildInput = String(body.guildId || "").trim();
         const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
+
+        if (rawGuildInput && !targetGuildId) {
+          sendJsonResponse(res, 403, {
+            error: "Daxil edilən Sunucu ID düzgün deyil və ya sizin hesabınıza aid deyil."
+          });
+          return;
+        }
+
         const scoped = resolveScopedWorkspace(targetGuildId, sessionUid);
         const channelId = sanitizeSnowflakeId(
           body.channelId ||
@@ -4289,8 +4328,14 @@ const createHttpServer = () => {
             (scoped.tenant ? scoped.tenant.panelChannelId : "") ||
             ""
         );
+        if (!channelId) {
+          sendJsonResponse(res, 400, {
+            error: "Panel Kanal ID daxil edin və ya əvvəlcə sunucu/kanal parametrlərini yadda saxlayın."
+          });
+          return;
+        }
         const sent = await sendPanelMessageToChannel(channelId, targetGuildId, "", sessionUid);
-        appendAuditLog("SEND_PANEL", `Channel=${channelId}`, targetGuildId, sessionUid);
+        appendAuditLog("SEND_PANEL", `Guild=${targetGuildId || "-"} Channel=${channelId}`, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, messageId: sent && sent.id ? sent.id : "" });
         return;
       }
