@@ -2179,6 +2179,10 @@ const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
   if (APP_STATE.latestJoinedGuildId && APP_STATE.tenants && APP_STATE.tenants[APP_STATE.latestJoinedGuildId]) {
     return sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId);
   }
+
+  return "";
+};
+
 const buildPublicSnapshotPayload = async (
   requestedGuildId = "",
   isAdminView = false,
@@ -3143,8 +3147,8 @@ const renderDashboardHtml = () => {
       editorEl.querySelectorAll("[data-move-down]").forEach((el) => {
         el.addEventListener("click", () => {
           const i = Number(el.getAttribute("data-move-down"));
+          const arr = clientState.draftDesign.buttons;
           if (i < arr.length - 1) {
-            const arr = clientState.draftDesign.buttons;
             const tmp = arr[i + 1];
             arr[i + 1] = arr[i];
             arr[i] = tmp;
