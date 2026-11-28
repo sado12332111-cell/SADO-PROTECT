@@ -8,6 +8,7 @@ const { URL, URLSearchParams } = require("url");
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const STATE_FILE = path.join(DATA_DIR, "sado_protect_state.json");
+const BACKUP_STATE_FILE = path.join(DATA_DIR, "sado_protect_state.backup.json");
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const DEFAULT_CLIENT_ID = "1562080654282199121";
@@ -160,6 +161,18 @@ const createEmptyAccountWorkspace = (discordId = "", guildId = "") => {
   };
 };
 
+const readStateFileSafe = (filePath) => {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, "utf8");
+    if (!raw || !raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_err) {
+    return null;
+  }
+};
+
 const loadInitialAppState = () => {
   ensureStorageDirectory();
   const baseState = {
@@ -179,35 +192,59 @@ const loadInitialAppState = () => {
     auditLogs: []
   };
 
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = fs.readFileSync(STATE_FILE, "utf8");
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        return {
-          ...baseState,
-          ...parsed,
-          guildId: sanitizeSnowflakeId(parsed.guildId || baseState.guildId),
-          guildName: sanitizeText(parsed.guildName, ""),
-          panelChannelId: sanitizeSnowflakeId(parsed.panelChannelId || baseState.panelChannelId),
-          latestJoinedGuildId: sanitizeSnowflakeId(parsed.latestJoinedGuildId || ""),
-          connectedDiscordUser:
-            parsed.connectedDiscordUser && typeof parsed.connectedDiscordUser === "object"
-              ? parsed.connectedDiscordUser
-              : null,
-          accounts: parsed.accounts && typeof parsed.accounts === "object" ? parsed.accounts : {},
-          scripts: Array.isArray(parsed.scripts) ? parsed.scripts : [],
-          keys: Array.isArray(parsed.keys) ? parsed.keys : [],
-          whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
-          blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [],
-          tenants: parsed.tenants && typeof parsed.tenants === "object" ? parsed.tenants : {},
-          apiKeys: Array.isArray(parsed.apiKeys) ? parsed.apiKeys : [],
-          panelDesign: normalizePanelDesign(parsed.panelDesign),
-          auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : []
-        };
+  const parsed = readStateFileSafe(STATE_FILE) || readStateFileSafe(BACKUP_STATE_FILE);
+  if (parsed) {
+    const merged = {
+      ...baseState,
+      ...parsed,
+      guildId: sanitizeSnowflakeId(parsed.guildId || baseState.guildId),
+      guildName: sanitizeText(parsed.guildName, ""),
+      panelChannelId: sanitizeSnowflakeId(parsed.panelChannelId || baseState.panelChannelId),
+      latestJoinedGuildId: sanitizeSnowflakeId(parsed.latestJoinedGuildId || ""),
+      connectedDiscordUser:
+        parsed.connectedDiscordUser && typeof parsed.connectedDiscordUser === "object"
+          ? parsed.connectedDiscordUser
+          : null,
+      accounts: parsed.accounts && typeof parsed.accounts === "object" ? parsed.accounts : {},
+      scripts: Array.isArray(parsed.scripts) ? parsed.scripts : [],
+      keys: Array.isArray(parsed.keys) ? parsed.keys : [],
+      whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
+      blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [],
+      tenants: parsed.tenants && typeof parsed.tenants === "object" ? parsed.tenants : {},
+      apiKeys: Array.isArray(parsed.apiKeys) ? parsed.apiKeys : [],
+      panelDesign: normalizePanelDesign(parsed.panelDesign),
+      auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : []
+    };
+
+    // Preserve and cross-hydrate accounts & tenants so existing keys/whitelists are never lost
+    for (const [gid, tRec] of Object.entries(merged.tenants)) {
+      if (!tRec || typeof tRec !== "object") continue;
+      const ownerId = sanitizeSnowflakeId(
+        tRec.ownerDiscordId || (tRec.botAddedBy && tRec.botAddedBy.userId) || ""
+      );
+      if (ownerId) {
+        if (!merged.accounts[ownerId]) {
+          merged.accounts[ownerId] = createEmptyAccountWorkspace(ownerId, gid);
+        }
+        const acc = merged.accounts[ownerId];
+        if (!acc.guildId) acc.guildId = sanitizeSnowflakeId(gid);
+        if (Array.isArray(tRec.scripts) && tRec.scripts.length > 0 && (!Array.isArray(acc.scripts) || acc.scripts.length === 0)) {
+          acc.scripts = tRec.scripts;
+        }
+        if (Array.isArray(tRec.keys) && tRec.keys.length > 0 && (!Array.isArray(acc.keys) || acc.keys.length === 0)) {
+          acc.keys = tRec.keys;
+        }
+        if (Array.isArray(tRec.whitelist) && tRec.whitelist.length > 0 && (!Array.isArray(acc.whitelist) || acc.whitelist.length === 0)) {
+          acc.whitelist = tRec.whitelist;
+        }
+        if (Array.isArray(tRec.blacklist) && tRec.blacklist.length > 0 && (!Array.isArray(acc.blacklist) || acc.blacklist.length === 0)) {
+          acc.blacklist = tRec.blacklist;
+        }
       }
     }
-  } catch (_err) {}
+
+    return merged;
+  }
 
   return baseState;
 };
@@ -217,7 +254,11 @@ const APP_STATE = loadInitialAppState();
 const saveAppStateToDisk = () => {
   try {
     ensureStorageDirectory();
-    fs.writeFileSync(STATE_FILE, JSON.stringify(APP_STATE, null, 2), "utf8");
+    const serialized = JSON.stringify(APP_STATE, null, 2);
+    const tmpFile = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, serialized, "utf8");
+    fs.renameSync(tmpFile, STATE_FILE);
+    fs.writeFileSync(BACKUP_STATE_FILE, serialized, "utf8");
   } catch (_err) {}
 };
 
@@ -347,6 +388,19 @@ const getTenantRecordByGuildId = (guildId, createIfMissing = true, ownerDiscordI
   return APP_STATE.tenants[cleanId];
 };
 
+const mergeUniqueRecordsByKey = (primaryArr = [], secondaryArr = [], keySelector) => {
+  const out = [];
+  const seen = new Set();
+  for (const item of [...(Array.isArray(primaryArr) ? primaryArr : []), ...(Array.isArray(secondaryArr) ? secondaryArr : [])]) {
+    if (!item || typeof item !== "object") continue;
+    const k = keySelector(item);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(item);
+  }
+  return out;
+};
+
 const syncAccountAndTenant = (ownerDiscordId = "", guildId = "") => {
   const uid = sanitizeSnowflakeId(ownerDiscordId || "");
   const gid = sanitizeSnowflakeId(guildId || "");
@@ -359,10 +413,23 @@ const syncAccountAndTenant = (ownerDiscordId = "", guildId = "") => {
         tenant.ownerDiscordId = uid;
         if (tenant.guildName) acc.guildName = tenant.guildName;
         if (tenant.panelChannelId) acc.panelChannelId = tenant.panelChannelId;
-        tenant.scripts = acc.scripts;
-        tenant.keys = acc.keys;
-        tenant.whitelist = acc.whitelist;
-        tenant.blacklist = acc.blacklist;
+        const mergedScripts = mergeUniqueRecordsByKey(acc.scripts, tenant.scripts, (s) => s.id);
+        const mergedKeys = mergeUniqueRecordsByKey(acc.keys, tenant.keys, (k) => k.id || k.code);
+        const mergedWl = mergeUniqueRecordsByKey(
+          acc.whitelist,
+          tenant.whitelist,
+          (w) => `${w.discordId}::${w.scriptId || "default"}`
+        );
+        const mergedBl = mergeUniqueRecordsByKey(acc.blacklist, tenant.blacklist, (b) => b.discordId);
+
+        acc.scripts = mergedScripts;
+        tenant.scripts = mergedScripts;
+        acc.keys = mergedKeys;
+        tenant.keys = mergedKeys;
+        acc.whitelist = mergedWl;
+        tenant.whitelist = mergedWl;
+        acc.blacklist = mergedBl;
+        tenant.blacklist = mergedBl;
         tenant.panelDesign = normalizePanelDesign(acc.panelDesign);
         tenant.activePlan = normalizePlanId(acc.activePlan);
         tenant.activeApiKeyCode = sanitizeText(acc.activeApiKeyCode, "");
@@ -372,12 +439,7 @@ const syncAccountAndTenant = (ownerDiscordId = "", guildId = "") => {
     const tenant = getTenantRecordByGuildId(gid, true, "");
     const ownerId = sanitizeSnowflakeId((tenant && tenant.ownerDiscordId) || "");
     if (ownerId && tenant) {
-      const acc = getAccountWorkspace(ownerId, gid, true);
-      if (acc) {
-        acc.guildId = gid;
-        if (tenant.guildName) acc.guildName = tenant.guildName;
-        if (tenant.panelChannelId) acc.panelChannelId = tenant.panelChannelId;
-      }
+      syncAccountAndTenant(ownerId, gid);
     }
   }
 };
@@ -397,13 +459,6 @@ const isGuildIdValidAndAuthorized = (guildId = "", userId = "") => {
     return false;
   }
   return true;
-};
-
-const isGuildAuthorized = (guildId = "", userId = "") => {
-  const gid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  const uid = sanitizeSnowflakeId(userId || "");
-  if (!gid || !uid) return false;
-  return isGuildIdValidAndAuthorized(gid, uid);
 };
 
 const isAdminOrOwnerUser = (guildId = "", userId = "") => {
@@ -443,21 +498,59 @@ const formatDurationStatusText = (recordObj = null) => {
   return "Ömürlük (Lifetime) ♾️";
 };
 
-const getUserAccessSummary = (guildId = "", userId = "", ownerDiscordId = "") => {
+const doesRecordMatchTargetScript = (recScriptId = "", targetScriptId = "") => {
+  const cleanRec = sanitizeText(recScriptId, "");
+  const cleanTarget = sanitizeText(targetScriptId, "");
+  if (!cleanTarget) return true;
+  if (!cleanRec) return false;
+  return cleanRec === cleanTarget;
+};
+
+const getUserAccessSummary = (
+  guildId = "",
+  userId = "",
+  ownerDiscordId = "",
+  targetScriptId = ""
+) => {
   const uid = sanitizeSnowflakeId(userId || "");
   const wl = getWhitelistForGuild(guildId, ownerDiscordId);
   const keys = getKeysForGuild(guildId, ownerDiscordId);
-  const userWl = wl.find((w) => String(w.discordId) === uid) || null;
-  const userKeyObj =
-    keys.find(
-      (k) =>
-        !k.revoked &&
-        ((userWl &&
-          userWl.keyCode &&
-          userWl.keyCode !== "MANUAL-WL" &&
-          String(k.code || "").toUpperCase() === String(userWl.keyCode || "").toUpperCase()) ||
-          String(k.claimedBy || "") === uid)
-    ) || null;
+  const cleanTargetScript = sanitizeText(targetScriptId, "");
+
+  const userWlList = wl.filter((w) => String(w.discordId) === uid);
+  const userKeyList = keys.filter((k) => !k.revoked && String(k.claimedBy || "") === uid);
+
+  let userWl = null;
+  let userKeyObj = null;
+
+  if (cleanTargetScript) {
+    userWl = userWlList.find((w) => doesRecordMatchTargetScript(w.scriptId, cleanTargetScript)) || null;
+    userKeyObj =
+      userKeyList.find((k) => doesRecordMatchTargetScript(k.scriptId, cleanTargetScript)) ||
+      (userWl &&
+      userWl.keyCode &&
+      userWl.keyCode !== "MANUAL-WL"
+        ? keys.find(
+            (k) =>
+              !k.revoked &&
+              String(k.code || "").toUpperCase() === String(userWl.keyCode || "").toUpperCase() &&
+              doesRecordMatchTargetScript(k.scriptId, cleanTargetScript)
+          )
+        : null);
+  } else {
+    userWl = userWlList[0] || null;
+    userKeyObj =
+      userKeyList[0] ||
+      (userWl &&
+      userWl.keyCode &&
+      userWl.keyCode !== "MANUAL-WL"
+        ? keys.find(
+            (k) =>
+              !k.revoked &&
+              String(k.code || "").toUpperCase() === String(userWl.keyCode || "").toUpperCase()
+          )
+        : null);
+  }
 
   const hasValidWl = Boolean(
     userWl &&
@@ -478,6 +571,8 @@ const getUserAccessSummary = (guildId = "", userId = "", ownerDiscordId = "") =>
     hasAccess,
     userWl,
     userKeyObj,
+    userWlList,
+    userKeyList,
     activeKeyCode,
     resetCount: Number.isFinite(resetCount) && resetCount >= 0 ? Math.floor(resetCount) : 0,
     durationLabel
@@ -704,46 +799,6 @@ const fetchBotUserIdentity = async () => {
   }
 };
 
-const tryResolveBotAdderFromAuditLog = async (guildId) => {
-  const cleanId = sanitizeSnowflakeId(guildId);
-  if (!cleanId) return null;
-  try {
-    if (!BOT_RUNTIME.botUserId) {
-      await fetchBotUserIdentity();
-    }
-    const res = await discordApiRequest(`/guilds/${cleanId}/audit-logs?action_type=28&limit=10`, "GET");
-    const entries = res && res.data && Array.isArray(res.data.audit_log_entries)
-      ? res.data.audit_log_entries
-      : [];
-    const users = res && res.data && Array.isArray(res.data.users)
-      ? res.data.users
-      : [];
-    const match = entries.find(
-      (e) =>
-        e &&
-        String(e.target_id || "") === String(BOT_RUNTIME.botUserId || "") &&
-        e.user_id
-    );
-    if (match && match.user_id) {
-      const foundUser = users.find((u) => String(u && u.id) === String(match.user_id)) || {};
-      const uid = String(match.user_id);
-      const uname = sanitizeText(foundUser.username, `User_${uid}`);
-      const dname = sanitizeText(foundUser.global_name || foundUser.username, uname);
-      const avUrl = foundUser.avatar
-        ? `https://cdn.discordapp.com/avatars/${uid}/${foundUser.avatar}.png?size=128`
-        : "";
-      return {
-        userId: uid,
-        username: uname,
-        displayName: dname,
-        avatarUrl: avUrl,
-        connectedAt: new Date().toISOString()
-      };
-    }
-  } catch (_err) {}
-  return null;
-};
-
 const resolveScopedWorkspace = (guildId = "", ownerDiscordId = "") => {
   const cleanUid = sanitizeSnowflakeId(ownerDiscordId || "");
   const cleanGid = sanitizeSnowflakeId(guildId || "");
@@ -752,6 +807,9 @@ const resolveScopedWorkspace = (guildId = "", ownerDiscordId = "") => {
   if (resolvedUid) {
     const acc = getAccountWorkspace(resolvedUid, cleanGid, true);
     const tenant = cleanGid ? getTenantRecordByGuildId(cleanGid, true, resolvedUid) : null;
+    if (acc && tenant) {
+      syncAccountAndTenant(resolvedUid, cleanGid);
+    }
     return { ownerId: resolvedUid, guildId: cleanGid || (acc ? acc.guildId : ""), acc, tenant };
   }
 
@@ -802,22 +860,6 @@ const getScriptsForGuild = (guildId = "", ownerDiscordId = "") => {
     for (const accRec of Object.values(APP_STATE.accounts)) {
       if (accRec && (!cleanUid || sanitizeSnowflakeId(accRec.ownerDiscordId) === cleanUid)) {
         addScriptsFrom(accRec.scripts);
-      }
-    }
-  }
-
-  if (collected.length === 0 && APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
-    for (const accRec of Object.values(APP_STATE.accounts)) {
-      if (accRec) {
-        addScriptsFrom(accRec.scripts);
-      }
-    }
-  }
-
-  if (collected.length === 0 && APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
-    for (const tRec of Object.values(APP_STATE.tenants)) {
-      if (tRec) {
-        addScriptsFrom(tRec.scripts);
       }
     }
   }
@@ -1042,6 +1084,7 @@ const getScriptContentForUser = (
   const safeKey = sanitizeText(activeKeyCode, "").replace(/"/g, '\\"');
 
   return {
+    scriptId: scriptIdForUrl,
     scriptName,
     code: `script_key="${safeKey}"\nloadstring(game:HttpGet("${safeUrl}"))()`
   };
@@ -1121,7 +1164,7 @@ const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "",
   }
 
   const design = getPanelDesignForGuild(guildId, ownerDiscordId);
-  const scripts = getAllKnownScriptsAcrossState(guildId, ownerDiscordId);
+  const scripts = getScriptsForGuild(guildId, ownerDiscordId);
   const selectedScript = scriptId
     ? scripts.find(
         (s) =>
@@ -1377,17 +1420,26 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
+        const scopedScripts = getScriptsForGuild(guildId, effectiveOwnerId);
+        const keyTargetScriptId =
+          sanitizeText(foundKey.scriptId, "") ||
+          (scopedScripts[0] ? sanitizeText(scopedScripts[0].id, "") : "");
+        foundKey.scriptId = keyTargetScriptId;
         foundKey.claimedBy = actorId;
         foundKey.claimedByTag = actorTag;
         foundKey.claimedAt = new Date().toISOString();
 
         const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
-        const existingWlIdx = wl.findIndex((w) => String(w.discordId) === actorId);
+        const existingWlIdx = wl.findIndex(
+          (w) =>
+            String(w.discordId) === actorId &&
+            sanitizeText(w.scriptId, "") === keyTargetScriptId
+        );
         const wlRecord = {
           discordId: actorId,
           tag: actorTag,
           keyCode: foundKey.code,
-          scriptId: foundKey.scriptId || "",
+          scriptId: keyTargetScriptId,
           hwid: existingWlIdx >= 0 ? wl[existingWlIdx].hwid || "" : "",
           lockedHwid: existingWlIdx >= 0 ? wl[existingWlIdx].lockedHwid || "" : "",
           resetCount: existingWlIdx >= 0 ? Number(wl[existingWlIdx].resetCount || 0) : 0,
@@ -1400,10 +1452,15 @@ const handleDiscordInteraction = async (interaction) => {
         saveAppStateToDisk();
         appendAuditLog("SLASH_KEY_REDEEM", `ID=${actorId} Key=${foundKey.code}`, guildId, effectiveOwnerId);
 
+        const targetScriptObj = scopedScripts.find((s) => s.id === keyTargetScriptId) || null;
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `✅ **Key aktivləşdirildi!**\n• **Discord ID:** \`${actorId}\`\n• **Key:** \`${foundKey.code}\`\n• **Whitelist:** Aktivdir`,
+            content:
+              `✅ **Key aktivləşdirildi!**\n` +
+              `• **Discord ID:** \`${actorId}\`\n` +
+              `• **Key:** \`${foundKey.code}\`\n` +
+              `• **Script:** \`${targetScriptObj ? targetScriptObj.name : keyTargetScriptId || "-"}\``,
             flags: 64
           }
         });
@@ -1492,14 +1549,24 @@ const handleDiscordInteraction = async (interaction) => {
         const addedEntries = [];
 
         for (const uid of memberIdsToAdd) {
-          const existingIdx = wl.findIndex((w) => String(w.discordId) === uid);
+          const existingIdx = wl.findIndex(
+            (w) =>
+              String(w.discordId) === uid &&
+              sanitizeText(w.scriptId, "") === String(matchedScript.id)
+          );
           const existingRec = existingIdx >= 0 ? wl[existingIdx] : null;
           const generatedKey =
-            (existingRec && existingRec.keyCode && existingRec.keyCode !== "MANUAL-WL"
+            existingRec && existingRec.keyCode && existingRec.keyCode !== "MANUAL-WL"
               ? existingRec.keyCode
-              : generateUniqueLicenseKeyCode());
+              : generateUniqueLicenseKeyCode();
 
-          if (!keys.some((k) => String(k.code || "").toUpperCase() === generatedKey.toUpperCase() && !k.revoked)) {
+          if (
+            !keys.some(
+              (k) =>
+                String(k.code || "").toUpperCase() === generatedKey.toUpperCase() &&
+                !k.revoked
+            )
+          ) {
             keys.push({
               id: `key_${crypto.randomBytes(5).toString("hex")}`,
               code: generatedKey,
@@ -1657,10 +1724,10 @@ const handleDiscordInteraction = async (interaction) => {
       if (cmdName === "resethwid") {
         const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
         const keys = getKeysForGuild(guildId, effectiveOwnerId);
-        const userWl = wl.find((w) => String(w.discordId) === actorId) || null;
-        const userKey = keys.find((k) => !k.revoked && String(k.claimedBy || "") === actorId) || null;
+        const userWlEntries = wl.filter((w) => String(w.discordId) === actorId);
+        const userKeyEntries = keys.filter((k) => !k.revoked && String(k.claimedBy || "") === actorId);
 
-        if (!userWl && !userKey) {
+        if (userWlEntries.length === 0 && userKeyEntries.length === 0) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
@@ -1671,15 +1738,15 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        if (userWl) {
-          userWl.hwid = "";
-          userWl.lockedHwid = "";
-          userWl.resetCount = Number(userWl.resetCount || 0) + 1;
+        for (const item of userWlEntries) {
+          item.hwid = "";
+          item.lockedHwid = "";
+          item.resetCount = Number(item.resetCount || 0) + 1;
         }
-        if (userKey) {
-          userKey.hwid = "";
-          userKey.lockedHwid = "";
-          userKey.resetCount = Number(userKey.resetCount || 0) + 1;
+        for (const item of userKeyEntries) {
+          item.hwid = "";
+          item.lockedHwid = "";
+          item.resetCount = Number(item.resetCount || 0) + 1;
         }
 
         syncAccountAndTenant(effectiveOwnerId, guildId);
@@ -1765,13 +1832,25 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (baseId === "btn_get_script") {
-        const accessInfo = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        const scopedScripts = getScriptsForGuild(guildId, effectiveOwnerId);
+        const accessInfo = getUserAccessSummary(
+          guildId,
+          actorId,
+          effectiveOwnerId,
+          boundScriptId
+        );
+
         if (!accessInfo.hasAccess) {
+          const boundScriptObj = boundScriptId
+            ? scopedScripts.find((s) => s.id === boundScriptId)
+            : null;
+          const missingMsg = boundScriptObj
+            ? `❌ Sizin **${boundScriptObj.name}** scripti üçün Whitelist / aktiv Key icazəniz yoxdur!\n• Bu scriptə giriş əldə etmək üçün bu scriptə aid Key daxil edin və ya admin tərəfindən bu scriptə Whitelist əlavə olunmağınızı gözləyin.`
+            : "❌ Əvvəlcə aktiv Key daxil edin! **Reedem Key** düyməsinə basıb açarınızı yazın, sonra **Get Script** ilə qısa scriptinizi əldə edin.";
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content:
-                "❌ Əvvəlcə aktiv Key daxil edin! **Reedem Key** düyməsinə basıb açarınızı yazın, sonra **Get Script** ilə qısa scriptinizi əldə edin.",
+              content: missingMsg,
               flags: 64
             }
           });
@@ -1823,12 +1902,17 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (baseId === "btn_copy_script") {
-        const accessInfo = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        const accessInfo = getUserAccessSummary(
+          guildId,
+          actorId,
+          effectiveOwnerId,
+          boundScriptId
+        );
         if (!accessInfo.hasAccess) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: "❌ Aktiv Key və ya Whitelist tapılmadı.",
+              content: "❌ Bu script üçün aktiv Key və ya Whitelist tapılmadı.",
               flags: 64
             }
           });
@@ -1863,34 +1947,43 @@ const handleDiscordInteraction = async (interaction) => {
       if (baseId === "btn_reset_hwid") {
         const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
         const keys = getKeysForGuild(guildId, effectiveOwnerId);
-        const userWl = wl.find((w) => String(w.discordId) === actorId) || null;
-        const userKey = keys.find((k) => !k.revoked && String(k.claimedBy || "") === actorId) || null;
+        const userWlEntries = wl.filter(
+          (w) =>
+            String(w.discordId) === actorId &&
+            doesRecordMatchTargetScript(w.scriptId, boundScriptId)
+        );
+        const userKeyEntries = keys.filter(
+          (k) =>
+            !k.revoked &&
+            String(k.claimedBy || "") === actorId &&
+            doesRecordMatchTargetScript(k.scriptId, boundScriptId)
+        );
 
-        if (!userWl && !userKey) {
+        if (userWlEntries.length === 0 && userKeyEntries.length === 0) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: "❌ HWID sıfırlamaq üçün aktiv Key və ya Whitelist qeydiniz tapılmadı.",
+              content: "❌ HWID sıfırlamaq üçün bu scriptdə aktiv Key və ya Whitelist qeydiniz tapılmadı.",
               flags: 64
             }
           });
           return;
         }
 
-        if (userWl) {
-          userWl.hwid = "";
-          userWl.lockedHwid = "";
-          userWl.resetCount = Number(userWl.resetCount || 0) + 1;
+        for (const item of userWlEntries) {
+          item.hwid = "";
+          item.lockedHwid = "";
+          item.resetCount = Number(item.resetCount || 0) + 1;
         }
-        if (userKey) {
-          userKey.hwid = "";
-          userKey.lockedHwid = "";
-          userKey.resetCount = Number(userKey.resetCount || 0) + 1;
+        for (const item of userKeyEntries) {
+          item.hwid = "";
+          item.lockedHwid = "";
+          item.resetCount = Number(item.resetCount || 0) + 1;
         }
 
         syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
-        appendAuditLog("BTN_RESET_HWID", `ID=${actorId}`, guildId, effectiveOwnerId);
+        appendAuditLog("BTN_RESET_HWID", `ID=${actorId} Script=${boundScriptId || "All"}`, guildId, effectiveOwnerId);
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1903,7 +1996,12 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (baseId === "btn_stats") {
-        const accessInfo = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        const accessInfo = getUserAccessSummary(
+          guildId,
+          actorId,
+          effectiveOwnerId,
+          boundScriptId
+        );
         const boundHwid = sanitizeText(
           (accessInfo.userWl && (accessInfo.userWl.lockedHwid || accessInfo.userWl.hwid)) ||
             (accessInfo.userKeyObj && (accessInfo.userKeyObj.lockedHwid || accessInfo.userKeyObj.hwid)) ||
@@ -1962,6 +2060,21 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
+        if (
+          boundScriptId &&
+          foundKey.scriptId &&
+          String(foundKey.scriptId) !== String(boundScriptId)
+        ) {
+          await respondToDiscordInteraction(interactionId, interactionToken, {
+            type: 4,
+            data: {
+              content: "❌ Bu Key başqa scriptə aiddir. Bu panelin scriptinə aid Key daxil edin.",
+              flags: 64
+            }
+          });
+          return;
+        }
+
         if (foundKey.claimedBy && String(foundKey.claimedBy) !== actorId) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
@@ -1973,17 +2086,28 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
+        const scopedScripts = getScriptsForGuild(guildId, effectiveOwnerId);
+        const resolvedTargetScriptId =
+          sanitizeText(foundKey.scriptId, "") ||
+          sanitizeText(boundScriptId, "") ||
+          (scopedScripts[0] ? sanitizeText(scopedScripts[0].id, "") : "");
+
+        foundKey.scriptId = resolvedTargetScriptId;
         foundKey.claimedBy = actorId;
         foundKey.claimedByTag = actorTag;
         foundKey.claimedAt = new Date().toISOString();
 
         const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
-        const idx = wl.findIndex((w) => String(w.discordId) === actorId);
+        const idx = wl.findIndex(
+          (w) =>
+            String(w.discordId) === actorId &&
+            sanitizeText(w.scriptId, "") === resolvedTargetScriptId
+        );
         const wlEntry = {
           discordId: actorId,
           tag: actorTag,
           keyCode: foundKey.code,
-          scriptId: boundScriptId || foundKey.scriptId || "",
+          scriptId: resolvedTargetScriptId,
           hwid: idx >= 0 ? wl[idx].hwid || "" : "",
           lockedHwid: idx >= 0 ? wl[idx].lockedHwid || "" : "",
           resetCount: idx >= 0 ? Number(wl[idx].resetCount || 0) : 0,
@@ -1996,10 +2120,16 @@ const handleDiscordInteraction = async (interaction) => {
         saveAppStateToDisk();
         appendAuditLog("MODAL_KEY_REDEEM", `ID=${actorId} Key=${foundKey.code}`, guildId, effectiveOwnerId);
 
+        const targetScriptObj = scopedScripts.find((s) => s.id === resolvedTargetScriptId) || null;
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `✅ **Key uğurla aktivləşdirildi!**\n• **Discord ID:** \`${actorId}\`\n• **Key:** \`${foundKey.code}\`\nİndi **Get Script** düyməsinə basıb scriptinizi götürə bilərsiniz.`,
+            content:
+              `✅ **Key uğurla aktivləşdirildi!**\n` +
+              `• **Discord ID:** \`${actorId}\`\n` +
+              `• **Key:** \`${foundKey.code}\`\n` +
+              `• **Script:** \`${targetScriptObj ? targetScriptObj.name : resolvedTargetScriptId || "-"}\`\n` +
+              `İndi **Get Script** düyməsinə basıb scriptinizi götürə bilərsiniz.`,
             flags: 64
           }
         });
@@ -2365,6 +2495,7 @@ const buildPublicSnapshotPayload = async (
     if (tenant && !tenant.ownerDiscordId) {
       tenant.ownerDiscordId = sessionUid;
     }
+    syncAccountAndTenant(sessionUid, cleanGuildId);
   }
 
   let resolvedGuildName =
@@ -3448,9 +3579,9 @@ const renderDashboardHtml = () => {
       document.getElementById("statWlCount").textContent = String(wl.length);
       document.getElementById("statBlCount").textContent = String(bl.length);
 
-      const scriptOptionsHtml =
-        "<option value=''>Default / İlk Script</option>" +
-        scripts.map((s) => "<option value='" + escapeHtmlClient(s.id) + "'>" + escapeHtmlClient(s.name) + "</option>").join("");
+      const scriptOptionsHtml = scripts.length > 0
+        ? scripts.map((s) => "<option value='" + escapeHtmlClient(s.id) + "'>" + escapeHtmlClient(s.name) + "</option>").join("")
+        : "<option value=''>Əvvəlcə Script yaradın</option>";
       document.getElementById("keyScriptSelect").innerHTML = scriptOptionsHtml;
       document.getElementById("wlScriptSelect").innerHTML = scriptOptionsHtml;
 
@@ -3513,13 +3644,15 @@ const renderDashboardHtml = () => {
 
       document.getElementById("keysTableBody").innerHTML = keys
         .map(function (k) {
+          const matchedSc = scripts.find((sc) => sc.id === k.scriptId);
+          const scName = matchedSc ? matchedSc.name : k.scriptId || "-";
           return (
             "<tr>" +
             "<td><code>" +
             escapeHtmlClient(k.code) +
             "</code></td>" +
             "<td>" +
-            escapeHtmlClient(k.scriptId || "Default") +
+            escapeHtmlClient(scName) +
             "</td>" +
             "<td>" +
             escapeHtmlClient(k.claimedByTag || "Gözləyir") +
@@ -3547,7 +3680,7 @@ const renderDashboardHtml = () => {
       document.getElementById("whitelistTableBody").innerHTML = wl
         .map(function (w) {
           const matchedScript = scripts.find((sc) => sc.id === w.scriptId);
-          const scriptLabel = matchedScript ? matchedScript.name : w.scriptId || "Default";
+          const scriptLabel = matchedScript ? matchedScript.name : w.scriptId || "-";
           return (
             "<tr>" +
             "<td>" +
@@ -3558,6 +3691,8 @@ const renderDashboardHtml = () => {
             "</td>" +
             "<td><button class='btn btn-danger btn-sm' data-del-wl='" +
             escapeHtmlClient(w.discordId) +
+            "' data-del-wl-script='" +
+            escapeHtmlClient(w.scriptId || "") +
             "'>Sil</button></td>" +
             "</tr>"
           );
@@ -3567,7 +3702,10 @@ const renderDashboardHtml = () => {
       document.querySelectorAll("[data-del-wl]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await apiRequest("/api/whitelist/" + encodeURIComponent(btn.getAttribute("data-del-wl")), "DELETE");
+            const uidVal = encodeURIComponent(btn.getAttribute("data-del-wl"));
+            const sidVal = btn.getAttribute("data-del-wl-script") || "";
+            const q = sidVal ? "?scriptId=" + encodeURIComponent(sidVal) : "";
+            await apiRequest("/api/whitelist/" + uidVal + q, "DELETE");
             showToast("Whitelist-dən silindi");
             await refreshDashboardSnapshot();
           } catch (err) {
@@ -4118,6 +4256,8 @@ const createHttpServer = () => {
 
         const hasExplicitDeviceHwid = Boolean(rawHeaderHwid);
         const effectiveHwid = rawHeaderHwid || "";
+        const cleanRequestedScript =
+          requestedScriptId && requestedScriptId !== "default" ? requestedScriptId : "";
 
         let matchedGuildId = providedGid;
         let matchedOwnerId = providedGid ? resolveOwnerDiscordIdForGuild(providedGid) : "";
@@ -4127,12 +4267,18 @@ const createHttpServer = () => {
           if (!Array.isArray(list)) return null;
           if (providedKey) {
             return list.find(
-              (k) => String(k.code || "").toUpperCase() === providedKey && !k.revoked
+              (k) =>
+                String(k.code || "").toUpperCase() === providedKey &&
+                !k.revoked &&
+                doesRecordMatchTargetScript(k.scriptId, cleanRequestedScript)
             );
           }
           if (providedUid) {
             return list.find(
-              (k) => String(k.claimedBy || "") === providedUid && !k.revoked
+              (k) =>
+                String(k.claimedBy || "") === providedUid &&
+                !k.revoked &&
+                doesRecordMatchTargetScript(k.scriptId, cleanRequestedScript)
             );
           }
           return null;
@@ -4169,13 +4315,15 @@ const createHttpServer = () => {
         const wlList = getWhitelistForGuild(matchedGuildId, matchedOwnerId);
         let wlEntry = wlList.find(
           (w) =>
-            (providedUid && String(w.discordId) === providedUid) ||
-            (providedKey && String(w.keyCode || "").toUpperCase() === providedKey) ||
-            (matchedKey && String(w.keyCode || "").toUpperCase() === String(matchedKey.code || "").toUpperCase())
+            doesRecordMatchTargetScript(w.scriptId, cleanRequestedScript) &&
+            ((providedUid && String(w.discordId) === providedUid) ||
+              (providedKey && String(w.keyCode || "").toUpperCase() === providedKey) ||
+              (matchedKey &&
+                String(w.keyCode || "").toUpperCase() === String(matchedKey.code || "").toUpperCase()))
         );
 
         if (!matchedKey && !wlEntry) {
-          sendLuaError("Acar ve ya Whitelist tapilmadi!");
+          sendLuaError("Bu script ucun Whitelist ve ya aktiv Acar tapilmadi!");
           return;
         }
 
@@ -4210,7 +4358,7 @@ const createHttpServer = () => {
             discordId: effectiveUid,
             tag: (matchedKey && matchedKey.claimedByTag) || `User_${effectiveUid}`,
             keyCode: effectiveKey,
-            scriptId: (matchedKey && matchedKey.scriptId) || "",
+            scriptId: cleanRequestedScript || (matchedKey && matchedKey.scriptId) || "",
             hwid: "",
             lockedHwid: "",
             resetCount: 0,
@@ -4260,9 +4408,7 @@ const createHttpServer = () => {
 
         const scripts = getAllKnownScriptsAcrossState(matchedGuildId, matchedOwnerId);
         const targetScript =
-          (requestedScriptId &&
-            requestedScriptId !== "default" &&
-            scripts.find((s) => s.id === requestedScriptId)) ||
+          (cleanRequestedScript && scripts.find((s) => s.id === cleanRequestedScript)) ||
           (matchedKey && matchedKey.scriptId && scripts.find((s) => s.id === matchedKey.scriptId)) ||
           (wlEntry && wlEntry.scriptId && scripts.find((s) => s.id === wlEntry.scriptId)) ||
           scripts[0] ||
@@ -4379,6 +4525,7 @@ const createHttpServer = () => {
             if (tRec && !tRec.ownerDiscordId) {
               tRec.ownerDiscordId = oauthUid;
             }
+            syncAccountAndTenant(oauthUid, acc.guildId);
           }
         }
         saveAppStateToDisk();
@@ -4465,6 +4612,7 @@ const createHttpServer = () => {
             if (panelChannelId) acc.panelChannelId = panelChannelId;
             if (resolvedName) acc.guildName = resolvedName;
           }
+          syncAccountAndTenant(sessionUid, guildId);
         } else if (acc && panelChannelId) {
           acc.panelChannelId = panelChannelId;
         }
@@ -4644,6 +4792,14 @@ const createHttpServer = () => {
         const body = await readJsonBody(req);
         const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
         const keys = getKeysForGuild(targetGuildId, sessionUid);
+        const scripts = getScriptsForGuild(targetGuildId, sessionUid);
+        const chosenScriptId =
+          sanitizeText(body.scriptId, "") || (scripts[0] ? sanitizeText(scripts[0].id, "") : "");
+        if (!chosenScriptId) {
+          sendJsonResponse(res, 400, { error: "Əvvəlcə script yaradın və ya seçin." });
+          return;
+        }
+
         const customCode = sanitizeText(String(body.code || ""), "").toUpperCase();
         const code =
           customCode ||
@@ -4655,7 +4811,7 @@ const createHttpServer = () => {
         const newKey = {
           id: `key_${crypto.randomBytes(5).toString("hex")}`,
           code,
-          scriptId: sanitizeText(body.scriptId, ""),
+          scriptId: chosenScriptId,
           claimedBy: "",
           claimedByTag: "",
           resetCount: 0,
@@ -4667,7 +4823,7 @@ const createHttpServer = () => {
         keys.push(newKey);
         syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("CREATE_KEY", code, targetGuildId, sessionUid);
+        appendAuditLog("CREATE_KEY", `${code} (${chosenScriptId})`, targetGuildId, sessionUid);
         sendJsonResponse(res, 201, { ok: true, key: newKey });
         return;
       }
@@ -4724,10 +4880,21 @@ const createHttpServer = () => {
           sendJsonResponse(res, 400, { error: "Düzgün Discord ID daxil edin." });
           return;
         }
+        const scripts = getScriptsForGuild(targetGuildId, sessionUid);
+        const chosenScriptId =
+          sanitizeText(body.scriptId, "") || (scripts[0] ? sanitizeText(scripts[0].id, "") : "");
+        if (!chosenScriptId) {
+          sendJsonResponse(res, 400, { error: "Əvvəlcə script yaradın və ya seçin." });
+          return;
+        }
+
         const wl = getWhitelistForGuild(targetGuildId, sessionUid);
         const keys = getKeysForGuild(targetGuildId, sessionUid);
-        const idx = wl.findIndex((w) => String(w.discordId) === discordId);
-        const chosenScriptId = sanitizeText(body.scriptId, "");
+        const idx = wl.findIndex(
+          (w) =>
+            String(w.discordId) === discordId &&
+            sanitizeText(w.scriptId, "") === chosenScriptId
+        );
 
         let keyRec =
           idx >= 0 && wl[idx].keyCode && wl[idx].keyCode !== "MANUAL-WL"
@@ -4769,23 +4936,28 @@ const createHttpServer = () => {
 
         syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("ADD_WHITELIST", `${discordId} (Key: ${keyRec.code})`, targetGuildId, sessionUid);
+        appendAuditLog("ADD_WHITELIST", `${discordId} -> ${chosenScriptId} (Key: ${keyRec.code})`, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, keyCode: keyRec.code });
         return;
       }
 
       if (method === "DELETE" && pathname.startsWith("/api/whitelist/")) {
         const targetUserId = sanitizeSnowflakeId(decodeURIComponent(pathname.replace("/api/whitelist/", "")));
+        const targetScriptFilter = sanitizeText(reqUrl.searchParams.get("scriptId") || "", "");
         const targetGuildId = resolveRequestGuildId(req, reqUrl, null, sessionUser);
-        const nextWl = getWhitelistForGuild(targetGuildId, sessionUid).filter(
-          (w) => String(w.discordId) !== targetUserId
-        );
+        const nextWl = getWhitelistForGuild(targetGuildId, sessionUid).filter((w) => {
+          if (String(w.discordId) !== targetUserId) return true;
+          if (targetScriptFilter) {
+            return String(w.scriptId || "") !== targetScriptFilter;
+          }
+          return false;
+        });
         const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
         if (acc) acc.whitelist = nextWl;
         if (tenant) tenant.whitelist = nextWl;
         syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("REMOVE_WHITELIST", targetUserId, targetGuildId, sessionUid);
+        appendAuditLog("REMOVE_WHITELIST", `${targetUserId} (${targetScriptFilter || "All"})`, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
