@@ -4070,19 +4070,30 @@ const createHttpServer = () => {
           ""
         );
 
-        if (!boundHwid) {
+        const isNewBindSession = !boundHwid;
+        if (isNewBindSession) {
           const lockIdToSave = effectiveHwid || `LOCK-${crypto.randomBytes(6).toString("hex")}`;
           if (wlEntry) {
             wlEntry.hwid = lockIdToSave;
             wlEntry.lockedHwid = lockIdToSave;
+            wlEntry.lastBoundAt = new Date().toISOString();
           }
           if (matchedKey) {
             matchedKey.hwid = lockIdToSave;
             matchedKey.lockedHwid = lockIdToSave;
+            matchedKey.lastBoundAt = new Date().toISOString();
           }
-          appendAuditLog("HWID_LOCKED", `UserID=${effectiveUid || "-"} Key=${effectiveKey} -> ${lockIdToSave.slice(0, 14)}`, matchedGuildId);
+          appendAuditLog(
+            "HWID_BOUND_FIRST_RUN",
+            `UserID=${effectiveUid || "-"} Key=${effectiveKey} -> ${lockIdToSave.slice(0, 14)}`,
+            matchedGuildId
+          );
         } else if (boundHwid !== effectiveHwid) {
-          appendAuditLog("HWID_MISMATCH_KICK", `UserID=${effectiveUid || "-"} Key=${effectiveKey} blocked on another device`, matchedGuildId);
+          appendAuditLog(
+            "HWID_MISMATCH_KICK",
+            `UserID=${effectiveUid || "-"} Key=${effectiveKey} blocked on another device`,
+            matchedGuildId
+          );
           sendLuaKick("HWID basqa cihaza kilidlenib! Yeniden baglamaq ucun Reset HWID edin.");
           return;
         }
