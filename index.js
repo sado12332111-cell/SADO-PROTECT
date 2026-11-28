@@ -1853,9 +1853,7 @@ const handleDiscordInteraction = async (interaction) => {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content:
-              `✅ **Kopyalamağa hazır script (${built.scriptName}):**\n` +
-              `\`\`\`lua\n${built.code}\n\`\`\``,
+            content: built.code,
             flags: 64
           }
         });
