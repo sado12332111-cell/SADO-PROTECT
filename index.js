@@ -141,6 +141,25 @@ const ensureStorageDirectory = () => {
   } catch (_err) {}
 };
 
+const createEmptyAccountWorkspace = (discordId = "", guildId = "") => {
+  const uid = sanitizeSnowflakeId(discordId);
+  const gid = sanitizeSnowflakeId(guildId);
+  return {
+    ownerDiscordId: uid,
+    guildId: gid,
+    guildName: "",
+    panelChannelId: "",
+    activePlan: "free",
+    activeApiKeyCode: "",
+    scripts: [],
+    keys: [],
+    whitelist: [],
+    blacklist: [],
+    panelDesign: normalizePanelDesign(DEFAULT_PANEL_DESIGN),
+    auditLogs: []
+  };
+};
+
 const loadInitialAppState = () => {
   ensureStorageDirectory();
   const baseState = {
@@ -149,6 +168,7 @@ const loadInitialAppState = () => {
     panelChannelId: sanitizeSnowflakeId(process.env.DEFAULT_PANEL_CHANNEL_ID || ""),
     latestJoinedGuildId: "",
     connectedDiscordUser: null,
+    accounts: {},
     scripts: [],
     keys: [],
     whitelist: [],
@@ -175,6 +195,7 @@ const loadInitialAppState = () => {
             parsed.connectedDiscordUser && typeof parsed.connectedDiscordUser === "object"
               ? parsed.connectedDiscordUser
               : null,
+          accounts: parsed.accounts && typeof parsed.accounts === "object" ? parsed.accounts : {},
           scripts: Array.isArray(parsed.scripts) ? parsed.scripts : [],
           keys: Array.isArray(parsed.keys) ? parsed.keys : [],
           whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
@@ -200,44 +221,109 @@ const saveAppStateToDisk = () => {
   } catch (_err) {}
 };
 
-const appendAuditLog = (action, details = "", guildId = "") => {
+const getAccountWorkspace = (discordId = "", guildId = "", createIfMissing = true) => {
+  const uid = sanitizeSnowflakeId(discordId || "");
+  if (!uid) return null;
+  if (!APP_STATE.accounts || typeof APP_STATE.accounts !== "object") {
+    APP_STATE.accounts = {};
+  }
+  if (!APP_STATE.accounts[uid]) {
+    if (!createIfMissing) return null;
+    APP_STATE.accounts[uid] = createEmptyAccountWorkspace(uid, guildId);
+    saveAppStateToDisk();
+  }
+  const acc = APP_STATE.accounts[uid];
+  acc.ownerDiscordId = uid;
+  if (guildId) {
+    acc.guildId = sanitizeSnowflakeId(guildId);
+  }
+  acc.guildName = sanitizeText(acc.guildName, "");
+  acc.panelChannelId = sanitizeSnowflakeId(acc.panelChannelId || "");
+  acc.activePlan = normalizePlanId(acc.activePlan || "free");
+  acc.activeApiKeyCode = sanitizeText(acc.activeApiKeyCode, "");
+  acc.scripts = Array.isArray(acc.scripts) ? acc.scripts : [];
+  acc.keys = Array.isArray(acc.keys) ? acc.keys : [];
+  acc.whitelist = Array.isArray(acc.whitelist) ? acc.whitelist : [];
+  acc.blacklist = Array.isArray(acc.blacklist) ? acc.blacklist : [];
+  acc.panelDesign = normalizePanelDesign(acc.panelDesign);
+  acc.auditLogs = Array.isArray(acc.auditLogs) ? acc.auditLogs : [];
+  return acc;
+};
+
+const resolveOwnerDiscordIdForGuild = (guildId = "") => {
+  const gid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
+  if (!gid) return "";
+  const t = APP_STATE.tenants && APP_STATE.tenants[gid] ? APP_STATE.tenants[gid] : null;
+  const fromTenant = sanitizeSnowflakeId(
+    (t && (t.ownerDiscordId || (t.botAddedBy && t.botAddedBy.userId))) || ""
+  );
+  if (fromTenant) return fromTenant;
+
+  if (APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+    for (const [uid, acc] of Object.entries(APP_STATE.accounts)) {
+      if (acc && sanitizeSnowflakeId(acc.guildId) === gid) {
+        return sanitizeSnowflakeId(uid);
+      }
+    }
+  }
+  return "";
+};
+
+const appendAuditLog = (action, details = "", guildId = "", ownerDiscordId = "") => {
   try {
-    APP_STATE.auditLogs.unshift({
+    const cleanGid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
+    const cleanUid = sanitizeSnowflakeId(ownerDiscordId || resolveOwnerDiscordIdForGuild(cleanGid) || "");
+    const entry = {
       id: `log_${crypto.randomBytes(6).toString("hex")}`,
       action: sanitizeText(action, "ACTION"),
       details: sanitizeText(details, ""),
-      guildId: sanitizeSnowflakeId(guildId || APP_STATE.guildId || ""),
+      guildId: cleanGid,
+      ownerDiscordId: cleanUid,
       timestamp: new Date().toISOString()
-    });
-    if (APP_STATE.auditLogs.length > 250) {
-      APP_STATE.auditLogs = APP_STATE.auditLogs.slice(0, 250);
+    };
+
+    if (cleanUid) {
+      const acc = getAccountWorkspace(cleanUid, cleanGid, true);
+      if (acc) {
+        acc.auditLogs.unshift(entry);
+        if (acc.auditLogs.length > 150) {
+          acc.auditLogs = acc.auditLogs.slice(0, 150);
+        }
+      }
+    } else {
+      APP_STATE.auditLogs.unshift(entry);
+      if (APP_STATE.auditLogs.length > 250) {
+        APP_STATE.auditLogs = APP_STATE.auditLogs.slice(0, 250);
+      }
     }
     saveAppStateToDisk();
   } catch (_err) {}
 };
 
-const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
+const getTenantRecordByGuildId = (guildId, createIfMissing = true, ownerDiscordId = "") => {
   const cleanId = sanitizeSnowflakeId(guildId);
   if (!cleanId) return null;
   if (!APP_STATE.tenants || typeof APP_STATE.tenants !== "object") {
     APP_STATE.tenants = {};
   }
+  const explicitOwner = sanitizeSnowflakeId(ownerDiscordId || "");
   if (!APP_STATE.tenants[cleanId]) {
     if (!createIfMissing) return null;
-    const isPrimary = APP_STATE.guildId === cleanId;
+    const ownerId = explicitOwner || "";
+    const ownerAcc = ownerId ? getAccountWorkspace(ownerId, cleanId, true) : null;
     APP_STATE.tenants[cleanId] = {
       guildId: cleanId,
-      guildName: isPrimary ? sanitizeText(APP_STATE.guildName, "") : "",
-      panelChannelId: isPrimary ? sanitizeSnowflakeId(APP_STATE.panelChannelId) : "",
-      ownerDiscordId: isPrimary && APP_STATE.connectedDiscordUser ? sanitizeSnowflakeId(APP_STATE.connectedDiscordUser.userId) : "",
-      botAddedBy: isPrimary && APP_STATE.connectedDiscordUser ? APP_STATE.connectedDiscordUser : null,
-      activePlan: "free",
-      activeApiKeyCode: "",
-      scripts: isPrimary && Array.isArray(APP_STATE.scripts) ? APP_STATE.scripts : [],
-      keys: isPrimary && Array.isArray(APP_STATE.keys) ? APP_STATE.keys : [],
-      whitelist: isPrimary && Array.isArray(APP_STATE.whitelist) ? APP_STATE.whitelist : [],
-      blacklist: isPrimary && Array.isArray(APP_STATE.blacklist) ? APP_STATE.blacklist : [],
-      panelDesign: normalizePanelDesign(isPrimary ? APP_STATE.panelDesign : DEFAULT_PANEL_DESIGN)
+      guildName: ownerAcc ? sanitizeText(ownerAcc.guildName, "") : "",
+      panelChannelId: ownerAcc ? sanitizeSnowflakeId(ownerAcc.panelChannelId) : "",
+      ownerDiscordId: ownerId,
+      botAddedBy: null,
+      activePlan: ownerAcc ? normalizePlanId(ownerAcc.activePlan) : "free",
+      activeApiKeyCode: ownerAcc ? sanitizeText(ownerAcc.activeApiKeyCode, "") : "",
+      scripts: ownerAcc ? ownerAcc.scripts : [],
+      keys: ownerAcc ? ownerAcc.keys : [],
+      whitelist: ownerAcc ? ownerAcc.whitelist : [],
+      blacklist: ownerAcc ? ownerAcc.blacklist : [],
+      panelDesign: normalizePanelDesign(ownerAcc ? ownerAcc.panelDesign : DEFAULT_PANEL_DESIGN)
     };
     saveAppStateToDisk();
   } else {
@@ -245,6 +331,9 @@ const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
     rec.guildId = cleanId;
     rec.guildName = sanitizeText(rec.guildName, "");
     rec.panelChannelId = sanitizeSnowflakeId(rec.panelChannelId || "");
+    if (explicitOwner && !rec.ownerDiscordId) {
+      rec.ownerDiscordId = explicitOwner;
+    }
     rec.ownerDiscordId = sanitizeSnowflakeId(rec.ownerDiscordId || (rec.botAddedBy && rec.botAddedBy.userId) || "");
     rec.botAddedBy = rec.botAddedBy && typeof rec.botAddedBy === "object" ? rec.botAddedBy : null;
     rec.activePlan = normalizePlanId(rec.activePlan || "free");
@@ -258,13 +347,45 @@ const getTenantRecordByGuildId = (guildId, createIfMissing = true) => {
   return APP_STATE.tenants[cleanId];
 };
 
+const syncAccountAndTenant = (ownerDiscordId = "", guildId = "") => {
+  const uid = sanitizeSnowflakeId(ownerDiscordId || "");
+  const gid = sanitizeSnowflakeId(guildId || "");
+  if (uid) {
+    const acc = getAccountWorkspace(uid, gid, true);
+    if (gid && acc) {
+      acc.guildId = gid;
+      const tenant = getTenantRecordByGuildId(gid, true, uid);
+      if (tenant) {
+        tenant.ownerDiscordId = uid;
+        if (tenant.guildName) acc.guildName = tenant.guildName;
+        if (tenant.panelChannelId) acc.panelChannelId = tenant.panelChannelId;
+        tenant.scripts = acc.scripts;
+        tenant.keys = acc.keys;
+        tenant.whitelist = acc.whitelist;
+        tenant.blacklist = acc.blacklist;
+        tenant.panelDesign = normalizePanelDesign(acc.panelDesign);
+        tenant.activePlan = normalizePlanId(acc.activePlan);
+        tenant.activeApiKeyCode = sanitizeText(acc.activeApiKeyCode, "");
+      }
+    }
+  } else if (gid) {
+    const tenant = getTenantRecordByGuildId(gid, true, "");
+    const ownerId = sanitizeSnowflakeId((tenant && tenant.ownerDiscordId) || "");
+    if (ownerId && tenant) {
+      const acc = getAccountWorkspace(ownerId, gid, true);
+      if (acc) {
+        acc.guildId = gid;
+        if (tenant.guildName) acc.guildName = tenant.guildName;
+        if (tenant.panelChannelId) acc.panelChannelId = tenant.panelChannelId;
+      }
+    }
+  }
+};
+
 const getGuildOwnerId = (guildId = "") => {
   const gid = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
   if (!gid) return "";
-  const t = getTenantRecordByGuildId(gid, false);
-  return sanitizeSnowflakeId(
-    (t && (t.ownerDiscordId || (t.botAddedBy && t.botAddedBy.userId))) || ""
-  );
+  return resolveOwnerDiscordIdForGuild(gid);
 };
 
 const isGuildAuthorized = (guildId = "", userId = "") => {
@@ -312,10 +433,10 @@ const formatDurationStatusText = (recordObj = null) => {
   return "Ömürlük (Lifetime) ♾️";
 };
 
-const getUserAccessSummary = (guildId = "", userId = "") => {
+const getUserAccessSummary = (guildId = "", userId = "", ownerDiscordId = "") => {
   const uid = sanitizeSnowflakeId(userId || "");
-  const wl = getWhitelistForGuild(guildId);
-  const keys = getKeysForGuild(guildId);
+  const wl = getWhitelistForGuild(guildId, ownerDiscordId);
+  const keys = getKeysForGuild(guildId, ownerDiscordId);
   const userWl = wl.find((w) => String(w.discordId) === uid) || null;
   const userKeyObj =
     keys.find(
@@ -351,22 +472,6 @@ const getUserAccessSummary = (guildId = "", userId = "") => {
     resetCount: Number.isFinite(resetCount) && resetCount >= 0 ? Math.floor(resetCount) : 0,
     durationLabel
   };
-};
-
-const syncTenantIntoGlobalIfPrimary = (tenant) => {
-  if (!tenant || !tenant.guildId) return;
-  if (!APP_STATE.guildId) {
-    APP_STATE.guildId = tenant.guildId;
-  }
-  if (APP_STATE.guildId === tenant.guildId) {
-    APP_STATE.guildName = sanitizeText(tenant.guildName, APP_STATE.guildName || "");
-    APP_STATE.panelChannelId = sanitizeSnowflakeId(tenant.panelChannelId || APP_STATE.panelChannelId || "");
-    APP_STATE.scripts = Array.isArray(tenant.scripts) ? tenant.scripts : [];
-    APP_STATE.keys = Array.isArray(tenant.keys) ? tenant.keys : [];
-    APP_STATE.whitelist = Array.isArray(tenant.whitelist) ? tenant.whitelist : [];
-    APP_STATE.blacklist = Array.isArray(tenant.blacklist) ? tenant.blacklist : [];
-    APP_STATE.panelDesign = normalizePanelDesign(tenant.panelDesign);
-  }
 };
 
 const BOT_RUNTIME = {
@@ -416,11 +521,12 @@ const getSessionDiscordUserFromRequest = (req) => {
   try {
     const decoded = Buffer.from(raw, "base64url").toString("utf8");
     const parsed = JSON.parse(decoded);
-    if (parsed && typeof parsed === "object" && parsed.userId) {
+    const cleanUid = sanitizeSnowflakeId(parsed && parsed.userId);
+    if (parsed && typeof parsed === "object" && cleanUid) {
       return {
-        userId: String(parsed.userId),
-        username: sanitizeText(parsed.username, String(parsed.userId)),
-        displayName: sanitizeText(parsed.displayName || parsed.username, String(parsed.userId)),
+        userId: cleanUid,
+        username: sanitizeText(parsed.username, cleanUid),
+        displayName: sanitizeText(parsed.displayName || parsed.username, cleanUid),
         avatarUrl: sanitizeText(parsed.avatarUrl, ""),
         connectedAt: sanitizeText(parsed.connectedAt, new Date().toISOString())
       };
@@ -628,79 +734,76 @@ const tryResolveBotAdderFromAuditLog = async (guildId) => {
   return null;
 };
 
-const getScriptsForGuild = (guildId = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  if (cleanId) {
-    const tenant = getTenantRecordByGuildId(cleanId, true);
-    if (tenant && Array.isArray(tenant.scripts)) {
-      return tenant.scripts;
-    }
+const resolveScopedWorkspace = (guildId = "", ownerDiscordId = "") => {
+  const cleanUid = sanitizeSnowflakeId(ownerDiscordId || "");
+  const cleanGid = sanitizeSnowflakeId(guildId || "");
+  const resolvedUid = cleanUid || (cleanGid ? resolveOwnerDiscordIdForGuild(cleanGid) : "");
+
+  if (resolvedUid) {
+    const acc = getAccountWorkspace(resolvedUid, cleanGid, true);
+    const tenant = cleanGid ? getTenantRecordByGuildId(cleanGid, true, resolvedUid) : null;
+    return { ownerId: resolvedUid, guildId: cleanGid || (acc ? acc.guildId : ""), acc, tenant };
   }
-  return Array.isArray(APP_STATE.scripts) ? APP_STATE.scripts : [];
+
+  if (cleanGid) {
+    const tenant = getTenantRecordByGuildId(cleanGid, true, "");
+    return { ownerId: "", guildId: cleanGid, acc: null, tenant };
+  }
+
+  return { ownerId: "", guildId: "", acc: null, tenant: null };
 };
 
-const getKeysForGuild = (guildId = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  if (cleanId) {
-    const tenant = getTenantRecordByGuildId(cleanId, true);
-    if (tenant && Array.isArray(tenant.keys)) {
-      return tenant.keys;
-    }
-  }
-  return Array.isArray(APP_STATE.keys) ? APP_STATE.keys : [];
+const getScriptsForGuild = (guildId = "", ownerDiscordId = "") => {
+  const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
+  if (acc) return acc.scripts;
+  if (tenant && Array.isArray(tenant.scripts)) return tenant.scripts;
+  return [];
 };
 
-const getWhitelistForGuild = (guildId = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  if (cleanId) {
-    const tenant = getTenantRecordByGuildId(cleanId, true);
-    if (tenant && Array.isArray(tenant.whitelist)) {
-      return tenant.whitelist;
-    }
-  }
-  return Array.isArray(APP_STATE.whitelist) ? APP_STATE.whitelist : [];
+const getKeysForGuild = (guildId = "", ownerDiscordId = "") => {
+  const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
+  if (acc) return acc.keys;
+  if (tenant && Array.isArray(tenant.keys)) return tenant.keys;
+  return [];
 };
 
-const getBlacklistForGuild = (guildId = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  if (cleanId) {
-    const tenant = getTenantRecordByGuildId(cleanId, true);
-    if (tenant && Array.isArray(tenant.blacklist)) {
-      return tenant.blacklist;
-    }
-  }
-  return Array.isArray(APP_STATE.blacklist) ? APP_STATE.blacklist : [];
+const getWhitelistForGuild = (guildId = "", ownerDiscordId = "") => {
+  const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
+  if (acc) return acc.whitelist;
+  if (tenant && Array.isArray(tenant.whitelist)) return tenant.whitelist;
+  return [];
 };
 
-const getPanelDesignForGuild = (guildId = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  if (cleanId) {
-    const tenant = getTenantRecordByGuildId(cleanId, true);
-    if (tenant && tenant.panelDesign) {
-      return normalizePanelDesign(tenant.panelDesign);
-    }
-  }
-  return normalizePanelDesign(APP_STATE.panelDesign);
+const getBlacklistForGuild = (guildId = "", ownerDiscordId = "") => {
+  const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
+  if (acc) return acc.blacklist;
+  if (tenant && Array.isArray(tenant.blacklist)) return tenant.blacklist;
+  return [];
 };
 
-const getEffectivePlanForGuild = (guildId = "") => {
-  const cleanId = sanitizeSnowflakeId(guildId || APP_STATE.guildId || "");
-  if (cleanId) {
-    const tenant = getTenantRecordByGuildId(cleanId, true);
-    if (tenant) {
-      const boundApiKey = sanitizeText(tenant.activeApiKeyCode, "");
-      if (boundApiKey) {
-        const keyRec = (APP_STATE.apiKeys || []).find(
-          (k) => String(k.code || "").toUpperCase() === boundApiKey.toUpperCase()
-        );
-        if (keyRec && !keyRec.revoked) {
-          const normalized = normalizePlanId(keyRec.planId);
-          tenant.activePlan = normalized;
-          return normalized;
-        }
+const getPanelDesignForGuild = (guildId = "", ownerDiscordId = "") => {
+  const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
+  if (acc && acc.panelDesign) return normalizePanelDesign(acc.panelDesign);
+  if (tenant && tenant.panelDesign) return normalizePanelDesign(tenant.panelDesign);
+  return normalizePanelDesign(DEFAULT_PANEL_DESIGN);
+};
+
+const getEffectivePlanForGuild = (guildId = "", ownerDiscordId = "") => {
+  const { acc, tenant } = resolveScopedWorkspace(guildId, ownerDiscordId);
+  const source = acc || tenant;
+  if (source) {
+    const boundApiKey = sanitizeText(source.activeApiKeyCode, "");
+    if (boundApiKey) {
+      const keyRec = (APP_STATE.apiKeys || []).find(
+        (k) => String(k.code || "").toUpperCase() === boundApiKey.toUpperCase()
+      );
+      if (keyRec && !keyRec.revoked) {
+        const normalized = normalizePlanId(keyRec.planId);
+        source.activePlan = normalized;
+        return normalized;
       }
-      return normalizePlanId(tenant.activePlan || "free");
     }
+    return normalizePlanId(source.activePlan || "free");
   }
   return "free";
 };
@@ -807,9 +910,10 @@ const getScriptContentForUser = (
   userId = "",
   preferredScriptId = "",
   activeKeyCode = "",
-  baseUrlOverride = ""
+  baseUrlOverride = "",
+  ownerDiscordId = ""
 ) => {
-  const scripts = getScriptsForGuild(guildId);
+  const scripts = getScriptsForGuild(guildId, ownerDiscordId);
   const chosen =
     (preferredScriptId && scripts.find((s) => s.id === preferredScriptId)) ||
     scripts[0] ||
@@ -903,14 +1007,14 @@ const buildSafeCustomId = (baseId, scriptId = "") => {
   return combined.length <= 100 ? combined : cleanBase;
 };
 
-const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "") => {
+const sendPanelMessageToChannel = async (channelId, guildId = "", scriptId = "", ownerDiscordId = "") => {
   const targetChannelId = sanitizeSnowflakeId(channelId);
   if (!targetChannelId) {
     throw new Error("Panel göndəriləcək kanal ID-si düzgün deyil.");
   }
 
-  const design = getPanelDesignForGuild(guildId);
-  const scripts = getScriptsForGuild(guildId);
+  const design = getPanelDesignForGuild(guildId, ownerDiscordId);
+  const scripts = getScriptsForGuild(guildId, ownerDiscordId);
   const selectedScript = scriptId ? scripts.find((s) => s.id === scriptId) : null;
 
   const rowsMap = new Map();
@@ -969,7 +1073,7 @@ const handleDiscordInteraction = async (interaction) => {
   const interactionId = String(interaction.id);
   const interactionToken = String(interaction.token);
   const interactionType = Number(interaction.type);
-  const guildId = sanitizeSnowflakeId(interaction.guild_id || APP_STATE.guildId || "");
+  const guildId = sanitizeSnowflakeId(interaction.guild_id || "");
   const memberUser =
     (interaction.member && interaction.member.user) || interaction.user || {};
   const actorId = sanitizeSnowflakeId(memberUser.id || "");
@@ -978,10 +1082,14 @@ const handleDiscordInteraction = async (interaction) => {
     `User_${actorId}`
   );
 
-  if (guildId && actorId) {
-    const tRec = getTenantRecordByGuildId(guildId, true);
+  const guildOwnerId = guildId ? resolveOwnerDiscordIdForGuild(guildId) : "";
+  const effectiveOwnerId = guildOwnerId || actorId || "";
+
+  if (guildId && actorId && !guildOwnerId) {
+    const tRec = getTenantRecordByGuildId(guildId, true, actorId);
     if (tRec && !tRec.ownerDiscordId) {
       tRec.ownerDiscordId = actorId;
+      syncAccountAndTenant(actorId, guildId);
       saveAppStateToDisk();
     }
   }
@@ -1008,7 +1116,7 @@ const handleDiscordInteraction = async (interaction) => {
         return;
       }
 
-      const bl = getBlacklistForGuild(guildId);
+      const bl = getBlacklistForGuild(guildId, effectiveOwnerId);
       if (bl.some((b) => String(b.discordId) === actorId)) {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1020,11 +1128,11 @@ const handleDiscordInteraction = async (interaction) => {
         return;
       }
 
-      if (!isGuildAuthorized(guildId, actorId)) {
+      if (guildId && guildOwnerId && guildOwnerId !== actorId) {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
-            content: `⛔ Sunucu ID nəzarəti: bu sunucu yalnız sahibinin (\`${getGuildOwnerId(guildId)}\`) ID-si ilə işləyir.`,
+            content: `⛔ Discord ID nəzarəti: bu sunucunun sahibi \`${guildOwnerId}\` ID-li hesabdır, sizin ID (\`${actorId}\`) fərqlidir.`,
             flags: 64
           }
         });
@@ -1036,7 +1144,7 @@ const handleDiscordInteraction = async (interaction) => {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: `⛔ Bu əmr yalnız sunucu sahibi / admin ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
+              content: `⛔ Bu əmr yalnız hesab/sunucu sahibi ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
               flags: 64
             }
           });
@@ -1044,10 +1152,11 @@ const handleDiscordInteraction = async (interaction) => {
         }
 
         const chosenScriptId = sanitizeText(String(getOpt("script") || ""), "");
+        const scoped = resolveScopedWorkspace(guildId, effectiveOwnerId);
         const targetCh = sanitizeSnowflakeId(
           interaction.channel_id ||
-            (guildId ? getTenantRecordByGuildId(guildId, true).panelChannelId : "") ||
-            APP_STATE.panelChannelId ||
+            (scoped.acc ? scoped.acc.panelChannelId : "") ||
+            (scoped.tenant ? scoped.tenant.panelChannelId : "") ||
             ""
         );
 
@@ -1062,7 +1171,7 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        appendAuditLog("CMD_PANEL", `UserID=${actorId} ChannelID=${targetCh}`, guildId);
+        appendAuditLog("CMD_PANEL", `UserID=${actorId} ChannelID=${targetCh}`, guildId, effectiveOwnerId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
@@ -1070,7 +1179,7 @@ const handleDiscordInteraction = async (interaction) => {
             flags: 64
           }
         });
-        await sendPanelMessageToChannel(targetCh, guildId, chosenScriptId);
+        await sendPanelMessageToChannel(targetCh, guildId, chosenScriptId, effectiveOwnerId);
         return;
       }
 
@@ -1087,7 +1196,7 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const keys = getKeysForGuild(guildId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
         const foundKey = keys.find(
           (k) => String(k.code || "").toUpperCase() === inputKey && !k.revoked
         );
@@ -1117,7 +1226,7 @@ const handleDiscordInteraction = async (interaction) => {
         foundKey.claimedByTag = actorTag;
         foundKey.claimedAt = new Date().toISOString();
 
-        const wl = getWhitelistForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
         const existingIdx = wl.findIndex((w) => String(w.discordId) === actorId);
         const wlRecord = {
           discordId: actorId,
@@ -1135,14 +1244,9 @@ const handleDiscordInteraction = async (interaction) => {
           wl.push(wlRecord);
         }
 
-        const tenant = guildId ? getTenantRecordByGuildId(guildId, true) : null;
-        if (tenant) {
-          tenant.keys = keys;
-          tenant.whitelist = wl;
-          syncTenantIntoGlobalIfPrimary(tenant);
-        }
+        syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
-        appendAuditLog("CMD_REDEEM_KEY", `UserID=${actorId} Key=${foundKey.code}`, guildId);
+        appendAuditLog("CMD_REDEEM_KEY", `UserID=${actorId} Key=${foundKey.code}`, guildId, effectiveOwnerId);
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1159,7 +1263,7 @@ const handleDiscordInteraction = async (interaction) => {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: `⛔ Whitelist əlavə etmək yalnız sunucu sahibi / admin ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
+              content: `⛔ Whitelist əlavə etmək yalnız hesab/sunucu sahibi ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
               flags: 64
             }
           });
@@ -1179,7 +1283,7 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const blCheck = getBlacklistForGuild(guildId);
+        const blCheck = getBlacklistForGuild(guildId, effectiveOwnerId);
         if (blCheck.some((b) => String(b.discordId) === targetUserId)) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
@@ -1209,12 +1313,12 @@ const handleDiscordInteraction = async (interaction) => {
             : `User_${targetUserId}`;
 
         const targetScriptId = sanitizeText(String(getOpt("script") || ""), "");
-        const scripts = getScriptsForGuild(guildId);
+        const scripts = getScriptsForGuild(guildId, effectiveOwnerId);
         const chosenScriptObj = scripts.find((s) => s.id === targetScriptId) || scripts[0] || null;
         const effectiveScriptId = chosenScriptObj ? chosenScriptObj.id : targetScriptId;
 
-        const wl = getWhitelistForGuild(guildId);
-        const keys = getKeysForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
         const idx = wl.findIndex((w) => String(w.discordId) === targetUserId);
 
         let existingValidKey =
@@ -1257,17 +1361,14 @@ const handleDiscordInteraction = async (interaction) => {
         if (idx >= 0) wl[idx] = record;
         else wl.push(record);
 
-        const tenant = guildId ? getTenantRecordByGuildId(guildId, true) : null;
-        if (tenant) {
-          tenant.keys = keys;
-          tenant.whitelist = wl;
-          syncTenantIntoGlobalIfPrimary(tenant);
-        } else {
-          APP_STATE.keys = keys;
-          APP_STATE.whitelist = wl;
-        }
+        syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
-        appendAuditLog("AUTO_WHITELIST_KEY", `UserID=${targetUserId} (${pickedUserTag}) -> ${existingValidKey.code}`, guildId);
+        appendAuditLog(
+          "AUTO_WHITELIST_KEY",
+          `UserID=${targetUserId} (${pickedUserTag}) -> ${existingValidKey.code}`,
+          guildId,
+          effectiveOwnerId
+        );
 
         const scriptText = chosenScriptObj ? ` (**${chosenScriptObj.name}** scriptinə)` : "";
         await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1285,7 +1386,7 @@ const handleDiscordInteraction = async (interaction) => {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
             data: {
-              content: `⛔ Whitelist-dən silmək yalnız sunucu sahibi / admin ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
+              content: `⛔ Whitelist-dən silmək yalnız hesab/sunucu sahibi ID-si (\`${getGuildOwnerId(guildId)}\`) üçündür.`,
               flags: 64
             }
           });
@@ -1304,20 +1405,15 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const wl = getWhitelistForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
         const existed = wl.some((w) => String(w.discordId) === targetUserId);
         const nextWl = wl.filter((w) => String(w.discordId) !== targetUserId);
-        if (guildId) {
-          const tenant = getTenantRecordByGuildId(guildId, true);
-          if (tenant) {
-            tenant.whitelist = nextWl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.whitelist = nextWl;
-        }
+        const { acc, tenant } = resolveScopedWorkspace(guildId, effectiveOwnerId);
+        if (acc) acc.whitelist = nextWl;
+        if (tenant) tenant.whitelist = nextWl;
+        syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
-        appendAuditLog("CMD_UNWHITELIST", `TargetID=${targetUserId} ByID=${actorId}`, guildId);
+        appendAuditLog("CMD_UNWHITELIST", `TargetID=${targetUserId} ByID=${actorId}`, guildId, effectiveOwnerId);
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1332,7 +1428,7 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (cmdName === "resethwid") {
-        const access = getUserAccessSummary(guildId, actorId);
+        const access = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
         if (!access.hasAccess) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
@@ -1344,8 +1440,8 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const wl = getWhitelistForGuild(guildId);
-        const keys = getKeysForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
         const nextResetCount = access.resetCount + 1;
         const entry = wl.find((w) => String(w.discordId) === actorId);
         if (entry) {
@@ -1364,16 +1460,9 @@ const handleDiscordInteraction = async (interaction) => {
             k.resetCount = nextResetCount;
           }
         }
-        if (guildId) {
-          const tenant = getTenantRecordByGuildId(guildId, true);
-          if (tenant) {
-            tenant.keys = keys;
-            tenant.whitelist = wl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        }
+        syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
-        appendAuditLog("RESET_HWID_CMD", `UserID=${actorId} Count=${nextResetCount}`, guildId);
+        appendAuditLog("RESET_HWID_CMD", `UserID=${actorId} Count=${nextResetCount}`, guildId, effectiveOwnerId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
@@ -1400,7 +1489,7 @@ const handleDiscordInteraction = async (interaction) => {
         return;
       }
 
-      const blBtn = getBlacklistForGuild(guildId);
+      const blBtn = getBlacklistForGuild(guildId, effectiveOwnerId);
       if (blBtn.some((b) => String(b.discordId) === actorId)) {
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1440,8 +1529,8 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_get_script") {
-        const wl = getWhitelistForGuild(guildId);
-        const keys = getKeysForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
         const userWl = wl.find(
           (w) =>
             String(w.discordId) === actorId &&
@@ -1488,14 +1577,7 @@ const handleDiscordInteraction = async (interaction) => {
           });
           userWl.keyCode = autoKeyCode;
           activeKeyLabel = autoKeyCode;
-          if (guildId) {
-            const tenant = getTenantRecordByGuildId(guildId, true);
-            if (tenant) {
-              tenant.keys = keys;
-              tenant.whitelist = wl;
-              syncTenantIntoGlobalIfPrimary(tenant);
-            }
-          }
+          syncAccountAndTenant(effectiveOwnerId, guildId);
           saveAppStateToDisk();
         }
         const scriptInfo = getScriptContentForUser(
@@ -1503,7 +1585,8 @@ const handleDiscordInteraction = async (interaction) => {
           actorId,
           effectiveScriptId,
           activeKeyLabel,
-          getPublicServiceBaseUrl()
+          getPublicServiceBaseUrl(),
+          effectiveOwnerId
         );
         const safeCode = String(scriptInfo.code || "").slice(0, 1800);
         const copyBtnCustomId = buildSafeCustomId("btn_copy_script", effectiveScriptId);
@@ -1533,14 +1616,15 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_copy_script") {
-        const wl = getWhitelistForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
         const userWl = wl.find((w) => String(w.discordId) === actorId);
         const scriptInfo = getScriptContentForUser(
           guildId,
           actorId,
           boundScriptId || (userWl ? userWl.scriptId || "" : ""),
           userWl ? userWl.keyCode || "" : "",
-          getPublicServiceBaseUrl()
+          getPublicServiceBaseUrl(),
+          effectiveOwnerId
         );
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1553,7 +1637,7 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_reset_hwid") {
-        const access = getUserAccessSummary(guildId, actorId);
+        const access = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
         if (!access.hasAccess) {
           await respondToDiscordInteraction(interactionId, interactionToken, {
             type: 4,
@@ -1565,8 +1649,8 @@ const handleDiscordInteraction = async (interaction) => {
           return;
         }
 
-        const wl = getWhitelistForGuild(guildId);
-        const keys = getKeysForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
         const nextResetCount = access.resetCount + 1;
         const entry = wl.find((w) => String(w.discordId) === actorId);
         if (entry) {
@@ -1585,16 +1669,9 @@ const handleDiscordInteraction = async (interaction) => {
             k.resetCount = nextResetCount;
           }
         }
-        if (guildId) {
-          const tenant = getTenantRecordByGuildId(guildId, true);
-          if (tenant) {
-            tenant.keys = keys;
-            tenant.whitelist = wl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        }
+        syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
-        appendAuditLog("RESET_HWID_BTN", `${actorTag} (Count: ${nextResetCount})`, guildId);
+        appendAuditLog("RESET_HWID_BTN", `${actorTag} (Count: ${nextResetCount})`, guildId, effectiveOwnerId);
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
           data: {
@@ -1606,8 +1683,8 @@ const handleDiscordInteraction = async (interaction) => {
       }
 
       if (customId === "btn_stats") {
-        const access = getUserAccessSummary(guildId, actorId);
-        const planMeta = getPlanMeta(getEffectivePlanForGuild(guildId));
+        const access = getUserAccessSummary(guildId, actorId, effectiveOwnerId);
+        const planMeta = getPlanMeta(getEffectivePlanForGuild(guildId, effectiveOwnerId));
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
           type: 4,
@@ -1620,7 +1697,7 @@ const handleDiscordInteraction = async (interaction) => {
               `• Müddət: **${access.hasAccess ? access.durationLabel : "Aktiv deyil ❌"}**`,
               `• HWID Reset Sayı: **${access.resetCount}**`,
               `• HWID Vəziyyəti: **${access.userWl && access.userWl.hwid ? "Bağlıdır 🔒" : "Boşdur 🔓"}**`,
-              `• Sunucu Planı: **${planMeta.name}**`
+              `• Plan: **${planMeta.name}**`
             ].join("\n"),
             flags: 64
           }
@@ -1646,7 +1723,7 @@ const handleDiscordInteraction = async (interaction) => {
           }
         }
 
-        const keys = getKeysForGuild(guildId);
+        const keys = getKeysForGuild(guildId, effectiveOwnerId);
         const foundKey = keys.find(
           (k) => String(k.code || "").toUpperCase() === rawInput && !k.revoked
         );
@@ -1677,7 +1754,7 @@ const handleDiscordInteraction = async (interaction) => {
         foundKey.claimedByTag = actorTag;
         foundKey.claimedAt = new Date().toISOString();
 
-        const wl = getWhitelistForGuild(guildId);
+        const wl = getWhitelistForGuild(guildId, effectiveOwnerId);
         const existingIdx = wl.findIndex((w) => String(w.discordId) === actorId);
         const nextWlEntry = {
           discordId: actorId,
@@ -1695,14 +1772,7 @@ const handleDiscordInteraction = async (interaction) => {
           wl.push(nextWlEntry);
         }
 
-        if (guildId) {
-          const tenant = getTenantRecordByGuildId(guildId, true);
-          if (tenant) {
-            tenant.keys = keys;
-            tenant.whitelist = wl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        }
+        syncAccountAndTenant(effectiveOwnerId, guildId);
         saveAppStateToDisk();
 
         await respondToDiscordInteraction(interactionId, interactionToken, {
@@ -1727,8 +1797,8 @@ const handleDiscordInteraction = async (interaction) => {
   }
 };
 
-const buildSlashCommandsPayload = (guildId = "") => {
-  const scripts = getScriptsForGuild(guildId);
+const buildSlashCommandsPayload = (guildId = "", ownerDiscordId = "") => {
+  const scripts = getScriptsForGuild(guildId, ownerDiscordId);
   const scriptChoices = scripts.slice(0, 25).map((s) => ({
     name: sanitizeText(s.name, s.id).slice(0, 100),
     value: s.id
@@ -1812,7 +1882,7 @@ const buildSlashCommandsPayload = (guildId = "") => {
   ];
 };
 
-const syncSlashCommandsWithDiscord = async (guildId = "") => {
+const syncSlashCommandsWithDiscord = async (guildId = "", ownerDiscordId = "") => {
   const token = resolveDiscordBotToken();
   if (!token) return;
   if (!BOT_RUNTIME.botUserId) {
@@ -1820,7 +1890,7 @@ const syncSlashCommandsWithDiscord = async (guildId = "") => {
   }
   if (!BOT_RUNTIME.botUserId) return;
 
-  const commands = buildSlashCommandsPayload(guildId);
+  const commands = buildSlashCommandsPayload(guildId, ownerDiscordId);
   try {
     await discordApiRequest(`/applications/${BOT_RUNTIME.botUserId}/commands`, "PUT", commands);
   } catch (_err) {}
@@ -1955,19 +2025,16 @@ const startDiscordGatewayListener = () => {
 
         const guildsArr = Array.isArray(eventData.guilds) ? eventData.guilds : [];
         if (guildsArr.length > 0) {
-          const firstGuildId = sanitizeSnowflakeId(guildsArr[0].id);
-          if (!APP_STATE.guildId && firstGuildId) {
-            APP_STATE.guildId = firstGuildId;
-          }
           for (const g of guildsArr) {
             const gid = sanitizeSnowflakeId(g && g.id);
             if (gid) {
-              const tRec = getTenantRecordByGuildId(gid, true);
+              const tRec = getTenantRecordByGuildId(gid, true, "");
               const gInfo = await fetchGuildInfoFromDiscord(gid);
               if (tRec && gInfo && gInfo.name) {
                 tRec.guildName = gInfo.name;
-                if (APP_STATE.guildId === gid) {
-                  APP_STATE.guildName = gInfo.name;
+                if (tRec.ownerDiscordId) {
+                  const acc = getAccountWorkspace(tRec.ownerDiscordId, gid, false);
+                  if (acc) acc.guildName = gInfo.name;
                 }
               }
             }
@@ -1975,7 +2042,7 @@ const startDiscordGatewayListener = () => {
           saveAppStateToDisk();
         }
 
-        await syncSlashCommandsWithDiscord(APP_STATE.guildId);
+        await syncSlashCommandsWithDiscord();
         return;
       }
 
@@ -1983,33 +2050,27 @@ const startDiscordGatewayListener = () => {
         const gid = sanitizeSnowflakeId(eventData.id);
         if (gid) {
           const gName = sanitizeText(eventData.name, "");
-          const tRec = getTenantRecordByGuildId(gid, true);
+          const tRec = getTenantRecordByGuildId(gid, true, "");
           if (tRec) {
             if (gName) {
               tRec.guildName = gName;
             }
             if (!tRec.botAddedBy) {
               const adder = await tryResolveBotAdderFromAuditLog(gid);
-              if (adder) {
+              if (adder && adder.userId) {
                 tRec.botAddedBy = adder;
-                if (!tRec.ownerDiscordId && adder.userId) {
-                  tRec.ownerDiscordId = adder.userId;
-                }
-              } else if (APP_STATE.connectedDiscordUser) {
-                tRec.botAddedBy = APP_STATE.connectedDiscordUser;
-                if (!tRec.ownerDiscordId && APP_STATE.connectedDiscordUser.userId) {
-                  tRec.ownerDiscordId = APP_STATE.connectedDiscordUser.userId;
+                if (!tRec.ownerDiscordId) {
+                  tRec.ownerDiscordId = sanitizeSnowflakeId(adder.userId);
                 }
               }
             }
             if (!APP_STATE.latestJoinedGuildId || APP_STATE.latestJoinedGuildId !== gid) {
               APP_STATE.latestJoinedGuildId = gid;
             }
-            if (!APP_STATE.guildId) {
-              APP_STATE.guildId = gid;
-              if (gName) APP_STATE.guildName = gName;
+            if (tRec.ownerDiscordId) {
+              const acc = getAccountWorkspace(tRec.ownerDiscordId, gid, true);
+              if (acc && gName) acc.guildName = gName;
             }
-            syncTenantIntoGlobalIfPrimary(tRec);
             saveAppStateToDisk();
           }
         }
@@ -2063,7 +2124,7 @@ const buildDiscordAuthorizeUrl = () => {
   return DISCORD_INVITE_URL;
 };
 
-const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
+const resolveRequestGuildId = (req, reqUrl, bodyObj = null, sessionUser = null) => {
   const fromBody = bodyObj && bodyObj.guildId ? sanitizeSnowflakeId(bodyObj.guildId) : "";
   if (fromBody) return fromBody;
 
@@ -2077,12 +2138,10 @@ const resolveRequestGuildId = (req, reqUrl, bodyObj = null) => {
     : "";
   if (fromHeader) return fromHeader;
 
-  if (APP_STATE.guildId) {
-    return sanitizeSnowflakeId(APP_STATE.guildId);
-  }
-
-  if (APP_STATE.latestJoinedGuildId && APP_STATE.tenants && APP_STATE.tenants[APP_STATE.latestJoinedGuildId]) {
-    return sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId);
+  const uid = sanitizeSnowflakeId(sessionUser && sessionUser.userId);
+  if (uid && APP_STATE.accounts && APP_STATE.accounts[uid]) {
+    const accGid = sanitizeSnowflakeId(APP_STATE.accounts[uid].guildId || "");
+    if (accGid) return accGid;
   }
 
   return "";
@@ -2095,10 +2154,25 @@ const buildPublicSnapshotPayload = async (
   sessionUser = null
 ) => {
   const tokenPresent = Boolean(resolveDiscordBotToken());
-  const cleanGuildId = sanitizeSnowflakeId(requestedGuildId || APP_STATE.guildId || "");
-  const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true) : null;
+  const sessionUid = sanitizeSnowflakeId(sessionUser && sessionUser.userId);
+  const acc = sessionUid ? getAccountWorkspace(sessionUid, requestedGuildId, true) : null;
 
-  let resolvedGuildName = tenant ? sanitizeText(tenant.guildName, "") : "";
+  const cleanGuildId = sanitizeSnowflakeId(
+    requestedGuildId || (acc ? acc.guildId : "") || ""
+  );
+  const tenant = cleanGuildId ? getTenantRecordByGuildId(cleanGuildId, true, sessionUid) : null;
+
+  if (sessionUid && cleanGuildId && acc) {
+    acc.guildId = cleanGuildId;
+    if (tenant && !tenant.ownerDiscordId) {
+      tenant.ownerDiscordId = sessionUid;
+    }
+  }
+
+  let resolvedGuildName =
+    (acc && sanitizeText(acc.guildName, "")) ||
+    (tenant && sanitizeText(tenant.guildName, "")) ||
+    "";
   if (
     resolvedGuildName &&
     (/^Sunucu\s*\(/i.test(resolvedGuildName) ||
@@ -2112,69 +2186,25 @@ const buildPublicSnapshotPayload = async (
     const info = await fetchGuildInfoFromDiscord(cleanGuildId);
     if (info && info.name) {
       resolvedGuildName = info.name;
-      if (tenant) {
-        tenant.guildName = info.name;
-        syncTenantIntoGlobalIfPrimary(tenant);
-        saveAppStateToDisk();
-      }
-    } else if (!resolvedGuildName && APP_STATE.guildId === cleanGuildId && sanitizeText(APP_STATE.guildName, "")) {
-      const gFallback = sanitizeText(APP_STATE.guildName, "");
-      if (
-        !/^Sunucu\s*\(/i.test(gFallback) &&
-        !/^Sunucu\s*#/i.test(gFallback) &&
-        !/^Sunucu$/i.test(gFallback) &&
-        !/^Discord Sunucusu/i.test(gFallback)
-      ) {
-        resolvedGuildName = gFallback;
-      }
-    }
-  }
-
-  let botAddedByInfo = tenant && tenant.botAddedBy ? tenant.botAddedBy : null;
-  if (cleanGuildId && !botAddedByInfo && tokenPresent) {
-    const detectedAdder = await tryResolveBotAdderFromAuditLog(cleanGuildId);
-    if (detectedAdder) {
-      botAddedByInfo = detectedAdder;
-      if (tenant) {
-        tenant.botAddedBy = detectedAdder;
-        if (!tenant.ownerDiscordId && detectedAdder.userId) {
-          tenant.ownerDiscordId = detectedAdder.userId;
-        }
-        saveAppStateToDisk();
-      }
-    }
-  }
-
-  const connectedUser = sessionUser && sessionUser.userId ? sessionUser : null;
-  if (cleanGuildId && !botAddedByInfo && connectedUser) {
-    botAddedByInfo = connectedUser;
-    if (tenant) {
-      tenant.botAddedBy = connectedUser;
-      if (!tenant.ownerDiscordId && sanitizeSnowflakeId(connectedUser.userId)) {
-        tenant.ownerDiscordId = sanitizeSnowflakeId(connectedUser.userId);
-      }
+      if (tenant) tenant.guildName = info.name;
+      if (acc) acc.guildName = info.name;
       saveAppStateToDisk();
     }
   }
 
-  const planId = getEffectivePlanForGuild(cleanGuildId);
+  const planId = getEffectivePlanForGuild(cleanGuildId, sessionUid);
   const planMeta = getPlanMeta(planId);
-  const scriptsList = getScriptsForGuild(cleanGuildId);
-  const keysList = getKeysForGuild(cleanGuildId);
-  const wlList = getWhitelistForGuild(cleanGuildId);
-  const blList = getBlacklistForGuild(cleanGuildId);
-  const panelDesign = getPanelDesignForGuild(cleanGuildId);
+  const scriptsList = getScriptsForGuild(cleanGuildId, sessionUid);
+  const keysList = getKeysForGuild(cleanGuildId, sessionUid);
+  const wlList = getWhitelistForGuild(cleanGuildId, sessionUid);
+  const blList = getBlacklistForGuild(cleanGuildId, sessionUid);
+  const panelDesign = getPanelDesignForGuild(cleanGuildId, sessionUid);
 
-  const guildList = Object.values(APP_STATE.tenants || {})
-    .filter((t) => t && t.guildId)
-    .map((t) => {
-      const gNameClean = sanitizeText(t.guildName, "");
-      return {
-        guildId: t.guildId,
-        guildName: gNameClean && !/^Sunucu\s*\(/i.test(gNameClean) ? gNameClean : "",
-        planId: getEffectivePlanForGuild(t.guildId)
-      };
-    });
+  const logsList = acc
+    ? acc.auditLogs || []
+    : cleanGuildId
+      ? (APP_STATE.auditLogs || []).filter((l) => sanitizeSnowflakeId(l.guildId) === cleanGuildId)
+      : APP_STATE.auditLogs || [];
 
   const apiKeysSanitized = (APP_STATE.apiKeys || []).map((k) => ({
     id: k.id,
@@ -2189,6 +2219,10 @@ const buildPublicSnapshotPayload = async (
     usedAt: k.usedAt || ""
   }));
 
+  const resolvedChannelId = sanitizeSnowflakeId(
+    (acc && acc.panelChannelId) || (tenant && tenant.panelChannelId) || ""
+  );
+
   return {
     bot: {
       connected: Boolean(BOT_RUNTIME.connected || tokenPresent),
@@ -2201,14 +2235,12 @@ const buildPublicSnapshotPayload = async (
       guildId: cleanGuildId,
       guildName: resolvedGuildName,
       displayName: resolvedGuildName || "Bağlı Sunucu Yoxdur",
-      ownerDiscordId: tenant ? sanitizeSnowflakeId(tenant.ownerDiscordId || "") : "",
-      panelChannelId: tenant ? sanitizeSnowflakeId(tenant.panelChannelId) : "",
-      botAddedBy: botAddedByInfo
+      ownerDiscordId: sessionUid || (tenant ? sanitizeSnowflakeId(tenant.ownerDiscordId || "") : ""),
+      panelChannelId: resolvedChannelId
     },
-    guilds: guildList,
     discordAccount: {
-      connected: Boolean(connectedUser && connectedUser.userId),
-      user: connectedUser,
+      connected: Boolean(sessionUid),
+      user: sessionUser && sessionUid ? sessionUser : null,
       loginUrl: buildDiscordLoginUrl(baseUrl ? `${baseUrl}/auth/discord/callback` : "")
     },
     oauth: {
@@ -2220,7 +2252,7 @@ const buildPublicSnapshotPayload = async (
       priceLabel: planMeta.priceLabel,
       scriptLimit: planMeta.scriptLimit,
       scriptCount: scriptsList.length,
-      activeApiKeyCode: tenant ? sanitizeText(tenant.activeApiKeyCode, "") : ""
+      activeApiKeyCode: (acc && acc.activeApiKeyCode) || (tenant && tenant.activeApiKeyCode) || ""
     },
     plansCatalog: Object.values(PLAN_CONFIGS),
     scripts: scriptsList,
@@ -2230,7 +2262,7 @@ const buildPublicSnapshotPayload = async (
     panelDesign,
     isAdminView: Boolean(isAdminView),
     apiKeys: isAdminView ? apiKeysSanitized : [],
-    auditLogs: (APP_STATE.auditLogs || []).slice(0, 40)
+    auditLogs: logsList.slice(0, 40)
   };
 };
 
@@ -3052,8 +3084,8 @@ const renderDashboardHtml = () => {
       editorEl.querySelectorAll("[data-move-down]").forEach((el) => {
         el.addEventListener("click", () => {
           const i = Number(el.getAttribute("data-move-down"));
-          const arr = clientState.draftDesign.buttons;
           if (i < arr.length - 1) {
+            const arr = clientState.draftDesign.buttons;
             const tmp = arr[i + 1];
             arr[i + 1] = arr[i];
             arr[i] = tmp;
@@ -3107,14 +3139,27 @@ const renderDashboardHtml = () => {
     };
 
     const applySnapshotToUi = (snap) => {
+      const prevOwnerId =
+        clientState.snapshot &&
+        clientState.snapshot.discordAccount &&
+        clientState.snapshot.discordAccount.user
+          ? clientState.snapshot.discordAccount.user.userId
+          : "";
+      const nextOwnerId =
+        snap && snap.discordAccount && snap.discordAccount.user
+          ? snap.discordAccount.user.userId
+          : "";
+
       clientState.snapshot = snap;
-      const bot = snap.bot || {};
       const guild = snap.guild || {};
       const plan = snap.plan || {};
 
       if (guild.guildId) {
         clientState.deviceGuildId = guild.guildId;
         localStorage.setItem(CLIENT_GUILD_STORAGE_KEY, guild.guildId);
+      } else if (prevOwnerId !== nextOwnerId) {
+        clientState.deviceGuildId = "";
+        localStorage.removeItem(CLIENT_GUILD_STORAGE_KEY);
       }
 
       const botPill = document.getElementById("botStatusPill");
@@ -3162,12 +3207,14 @@ const renderDashboardHtml = () => {
         const displayAcctName =
           accInfo.user.displayName ||
           accInfo.user.username ||
-          "sadiq202020201212";
+          accInfo.user.userId ||
+          "Discord User";
         if (document.getElementById("popoverUserName")) {
           document.getElementById("popoverUserName").textContent = displayAcctName;
         }
         if (document.getElementById("popoverUserId")) {
-          document.getElementById("popoverUserId").textContent = accInfo.user.username ? "@" + accInfo.user.username : "";
+          document.getElementById("popoverUserId").textContent =
+            "ID: " + accInfo.user.userId + (accInfo.user.username ? " (@" + accInfo.user.username + ")" : "");
         }
         const avImg = document.getElementById("popoverUserAvatar");
         if (avImg) {
@@ -3448,7 +3495,12 @@ const renderDashboardHtml = () => {
           ? snap.panelDesign
           : defaultDesignFallback;
 
-      if (!clientState.draftDesign || !Array.isArray(clientState.draftDesign.buttons) || clientState.draftDesign.buttons.length === 0) {
+      if (
+        prevOwnerId !== nextOwnerId ||
+        !clientState.draftDesign ||
+        !Array.isArray(clientState.draftDesign.buttons) ||
+        clientState.draftDesign.buttons.length === 0
+      ) {
         clientState.draftDesign = JSON.parse(JSON.stringify(incomingDesign));
         renderDesignEditor();
       }
@@ -3496,6 +3548,8 @@ const renderDashboardHtml = () => {
         disconnectBtn.onclick = async () => {
           try {
             await apiRequest("/api/auth/discord/logout", "POST", {});
+            clientState.deviceGuildId = "";
+            localStorage.removeItem(CLIENT_GUILD_STORAGE_KEY);
             showToast("Discord hesabı ayrıldı");
             await refreshDashboardSnapshot();
           } catch (err) {
@@ -3760,30 +3814,25 @@ const createHttpServer = () => {
       const reqUrl = new URL(req.url || "/", baseUrl);
       const pathname = reqUrl.pathname;
       const method = String(req.method || "GET").toUpperCase();
+      const sessionUser = getSessionDiscordUserFromRequest(req);
+      const sessionUid = sanitizeSnowflakeId(sessionUser && sessionUser.userId);
 
       if (method === "GET" && pathname === "/loader-report") {
         const repUid = sanitizeSnowflakeId(reqUrl.searchParams.get("uid") || "");
-        const repGid = sanitizeSnowflakeId(reqUrl.searchParams.get("gid") || APP_STATE.guildId || "");
+        const repGid = sanitizeSnowflakeId(reqUrl.searchParams.get("gid") || "");
         const repReason = sanitizeText(reqUrl.searchParams.get("reason") || "ANTI_LEAK", "ANTI_LEAK").slice(0, 80);
+        const ownerId = repGid ? resolveOwnerDiscordIdForGuild(repGid) : "";
         if (repUid) {
-          const bl = getBlacklistForGuild(repGid);
+          const bl = getBlacklistForGuild(repGid, ownerId);
           if (!bl.some((b) => String(b.discordId) === repUid)) {
             bl.push({
               discordId: repUid,
               reason: `Auto-Blacklist (${repReason})`,
               addedAt: new Date().toISOString()
             });
-            if (repGid) {
-              const t = getTenantRecordByGuildId(repGid, true);
-              if (t) {
-                t.blacklist = bl;
-                syncTenantIntoGlobalIfPrimary(t);
-              }
-            } else {
-              APP_STATE.blacklist = bl;
-            }
+            syncAccountAndTenant(ownerId, repGid);
             saveAppStateToDisk();
-            appendAuditLog("AUTO_BLACKLIST_LEAK", `${repUid} -> ${repReason}`, repGid);
+            appendAuditLog("AUTO_BLACKLIST_LEAK", `${repUid} -> ${repReason}`, repGid, ownerId);
           }
         }
         res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
@@ -3795,9 +3844,7 @@ const createHttpServer = () => {
         const requestedScriptId = decodeURIComponent(pathname.replace("/loader/", "")).trim();
         const providedKey = sanitizeText(reqUrl.searchParams.get("key") || "", "").toUpperCase();
         const providedUid = sanitizeSnowflakeId(reqUrl.searchParams.get("uid") || "");
-        const providedGid = sanitizeSnowflakeId(
-          reqUrl.searchParams.get("gid") || APP_STATE.guildId || ""
-        );
+        const providedGid = sanitizeSnowflakeId(reqUrl.searchParams.get("gid") || "");
 
         const uaHeader = String(req.headers["user-agent"] || "").toLowerCase();
         const acceptHeader = String(req.headers["accept"] || "").toLowerCase();
@@ -3891,9 +3938,10 @@ const createHttpServer = () => {
             .slice(0, 24)}`;
 
         let matchedGuildId = providedGid;
+        let matchedOwnerId = providedGid ? resolveOwnerDiscordIdForGuild(providedGid) : "";
         let matchedKey = null;
 
-        const searchKeyInList = (list = [], gid = "") => {
+        const searchKeyInList = (list = []) => {
           if (!Array.isArray(list)) return null;
           if (providedKey) {
             return list.find(
@@ -3908,24 +3956,35 @@ const createHttpServer = () => {
           return null;
         };
 
-        if (matchedGuildId) {
-          matchedKey = searchKeyInList(getKeysForGuild(matchedGuildId), matchedGuildId);
+        if (matchedGuildId || matchedOwnerId) {
+          matchedKey = searchKeyInList(getKeysForGuild(matchedGuildId, matchedOwnerId));
         }
-        if (!matchedKey && APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
-          for (const [gid, tRec] of Object.entries(APP_STATE.tenants)) {
-            const found = searchKeyInList(tRec.keys || [], gid);
+
+        if (!matchedKey && APP_STATE.accounts && typeof APP_STATE.accounts === "object") {
+          for (const [accUid, accRec] of Object.entries(APP_STATE.accounts)) {
+            const found = searchKeyInList((accRec && accRec.keys) || []);
             if (found) {
-              matchedGuildId = gid;
+              matchedOwnerId = accUid;
+              matchedGuildId = matchedGuildId || sanitizeSnowflakeId(accRec && accRec.guildId);
               matchedKey = found;
               break;
             }
           }
         }
-        if (!matchedKey) {
-          matchedKey = searchKeyInList(APP_STATE.keys || [], "");
+
+        if (!matchedKey && APP_STATE.tenants && typeof APP_STATE.tenants === "object") {
+          for (const [gid, tRec] of Object.entries(APP_STATE.tenants)) {
+            const found = searchKeyInList((tRec && tRec.keys) || []);
+            if (found) {
+              matchedGuildId = gid;
+              matchedOwnerId = matchedOwnerId || sanitizeSnowflakeId(tRec && tRec.ownerDiscordId);
+              matchedKey = found;
+              break;
+            }
+          }
         }
 
-        const wlList = getWhitelistForGuild(matchedGuildId);
+        const wlList = getWhitelistForGuild(matchedGuildId, matchedOwnerId);
         let wlEntry = wlList.find(
           (w) =>
             (providedUid && String(w.discordId) === providedUid) ||
@@ -3948,7 +4007,7 @@ const createHttpServer = () => {
           providedUid ||
           sanitizeSnowflakeId((matchedKey && matchedKey.claimedBy) || (wlEntry && wlEntry.discordId) || "");
 
-        const blList = getBlacklistForGuild(matchedGuildId);
+        const blList = getBlacklistForGuild(matchedGuildId, matchedOwnerId);
         if (effectiveUid && blList.some((b) => String(b.discordId) === effectiveUid)) {
           sendLuaError("Siz Blacklist-desiniz!");
           return;
@@ -4001,29 +4060,24 @@ const createHttpServer = () => {
           appendAuditLog(
             "HWID_BOUND_FIRST_RUN",
             `UserID=${effectiveUid || "-"} Key=${effectiveKey} -> ${lockIdToSave.slice(0, 14)}`,
-            matchedGuildId
+            matchedGuildId,
+            matchedOwnerId
           );
         } else if (boundHwid !== effectiveHwid) {
           appendAuditLog(
             "HWID_MISMATCH_KICK",
             `UserID=${effectiveUid || "-"} Key=${effectiveKey} blocked on another device`,
-            matchedGuildId
+            matchedGuildId,
+            matchedOwnerId
           );
           sendLuaKick("HWID basqa cihaza kilidlenib! Yeniden baglamaq ucun Reset HWID edin.");
           return;
         }
 
-        if (matchedGuildId) {
-          const tenant = getTenantRecordByGuildId(matchedGuildId, true);
-          if (tenant) {
-            tenant.keys = Array.isArray(tenant.keys) && tenant.keys.length > 0 ? tenant.keys : getKeysForGuild(matchedGuildId);
-            tenant.whitelist = wlList;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        }
+        syncAccountAndTenant(matchedOwnerId, matchedGuildId);
         saveAppStateToDisk();
 
-        const scripts = getScriptsForGuild(matchedGuildId);
+        const scripts = getScriptsForGuild(matchedGuildId, matchedOwnerId);
         const targetScript =
           (requestedScriptId &&
             requestedScriptId !== "default" &&
@@ -4136,15 +4190,14 @@ const createHttpServer = () => {
           res.end();
           return;
         }
-        const targetGid = sanitizeSnowflakeId(APP_STATE.latestJoinedGuildId || APP_STATE.guildId || "");
-        if (targetGid) {
-          const tRec = getTenantRecordByGuildId(targetGid, true);
-          if (tRec) {
-            tRec.botAddedBy = oauthAccount;
-            if (!tRec.ownerDiscordId && sanitizeSnowflakeId(oauthAccount.userId)) {
-              tRec.ownerDiscordId = sanitizeSnowflakeId(oauthAccount.userId);
+        const oauthUid = sanitizeSnowflakeId(oauthAccount.userId);
+        if (oauthUid) {
+          const acc = getAccountWorkspace(oauthUid, "", true);
+          if (acc && acc.guildId) {
+            const tRec = getTenantRecordByGuildId(acc.guildId, true, oauthUid);
+            if (tRec && !tRec.ownerDiscordId) {
+              tRec.ownerDiscordId = oauthUid;
             }
-            syncTenantIntoGlobalIfPrimary(tRec);
           }
         }
         saveAppStateToDisk();
@@ -4172,9 +4225,8 @@ const createHttpServer = () => {
       }
 
       if (method === "GET" && pathname === "/api/snapshot") {
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, null, sessionUser);
         const isAdminReq = reqUrl.searchParams.get("admin") === "1";
-        const sessionUser = getSessionDiscordUserFromRequest(req);
         const snapshot = await buildPublicSnapshotPayload(
           targetGuildId,
           isAdminReq,
@@ -4190,47 +4242,38 @@ const createHttpServer = () => {
         const guildId = sanitizeSnowflakeId(body.guildId || "");
         const panelChannelId = sanitizeSnowflakeId(body.panelChannelId || "");
         let resolvedName = "";
+        const acc = sessionUid ? getAccountWorkspace(sessionUid, guildId, true) : null;
+
         if (guildId) {
-          APP_STATE.guildId = guildId;
-          const tenant = getTenantRecordByGuildId(guildId, true);
+          const tenant = getTenantRecordByGuildId(guildId, true, sessionUid);
           if (tenant) {
-            if (panelChannelId) tenant.panelChannelId = panelChannelId;
-            if (!tenant.ownerDiscordId && APP_STATE.connectedDiscordUser && sanitizeSnowflakeId(APP_STATE.connectedDiscordUser.userId)) {
-              tenant.ownerDiscordId = sanitizeSnowflakeId(APP_STATE.connectedDiscordUser.userId);
+            if (sessionUid && !tenant.ownerDiscordId) {
+              tenant.ownerDiscordId = sessionUid;
             }
+            if (panelChannelId) tenant.panelChannelId = panelChannelId;
             const info = await fetchGuildInfoFromDiscord(guildId);
             if (info && info.name) {
               resolvedName = info.name;
               tenant.guildName = resolvedName;
-              APP_STATE.guildName = resolvedName;
             } else {
-              const prevName = sanitizeText(tenant.guildName || APP_STATE.guildName || "", "");
-              if (
-                prevName &&
-                !/^Sunucu\s*#/i.test(prevName) &&
-                !/^Sunucu$/i.test(prevName) &&
-                !/^Discord Sunucusu/i.test(prevName)
-              ) {
-                resolvedName = prevName;
-                tenant.guildName = resolvedName;
-                APP_STATE.guildName = resolvedName;
-              } else {
-                resolvedName = `Sunucu (${guildId.slice(-4)})`;
-                tenant.guildName = resolvedName;
-                APP_STATE.guildName = resolvedName;
-              }
+              resolvedName = `Sunucu (${guildId.slice(-4)})`;
+              tenant.guildName = resolvedName;
             }
-            syncTenantIntoGlobalIfPrimary(tenant);
           }
-        }
-        if (panelChannelId) {
-          APP_STATE.panelChannelId = panelChannelId;
+          if (acc) {
+            acc.guildId = guildId;
+            if (panelChannelId) acc.panelChannelId = panelChannelId;
+            if (resolvedName) acc.guildName = resolvedName;
+          }
+        } else if (acc && panelChannelId) {
+          acc.panelChannelId = panelChannelId;
         }
         saveAppStateToDisk();
         appendAuditLog(
           "GUILD_SETTINGS",
           `Guild=${resolvedName || guildId || "-"} Channel=${panelChannelId || "-"}`,
-          guildId
+          guildId,
+          sessionUid
         );
         sendJsonResponse(res, 200, { ok: true, guildId, guildName: resolvedName });
         return;
@@ -4238,24 +4281,25 @@ const createHttpServer = () => {
 
       if (method === "POST" && pathname === "/api/panel/send") {
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
+        const scoped = resolveScopedWorkspace(targetGuildId, sessionUid);
         const channelId = sanitizeSnowflakeId(
           body.channelId ||
-            (targetGuildId ? getTenantRecordByGuildId(targetGuildId, true).panelChannelId : "") ||
-            APP_STATE.panelChannelId ||
+            (scoped.acc ? scoped.acc.panelChannelId : "") ||
+            (scoped.tenant ? scoped.tenant.panelChannelId : "") ||
             ""
         );
-        const sent = await sendPanelMessageToChannel(channelId, targetGuildId);
-        appendAuditLog("SEND_PANEL", `Channel=${channelId}`, targetGuildId);
+        const sent = await sendPanelMessageToChannel(channelId, targetGuildId, "", sessionUid);
+        appendAuditLog("SEND_PANEL", `Channel=${channelId}`, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, messageId: sent && sent.id ? sent.id : "" });
         return;
       }
 
       if (method === "POST" && pathname === "/api/scripts") {
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
-        const planMeta = getPlanMeta(getEffectivePlanForGuild(targetGuildId));
-        const scripts = getScriptsForGuild(targetGuildId);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
+        const planMeta = getPlanMeta(getEffectivePlanForGuild(targetGuildId, sessionUid));
+        const scripts = getScriptsForGuild(targetGuildId, sessionUid);
 
         if (planMeta.scriptLimit !== null && scripts.length >= planMeta.scriptLimit) {
           sendJsonResponse(res, 400, {
@@ -4281,22 +4325,15 @@ const createHttpServer = () => {
           url,
           code,
           fileName,
+          ownerDiscordId: sessionUid,
           createdAt: new Date().toISOString()
         };
 
         scripts.push(newScript);
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.scripts = scripts;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.scripts = scripts;
-        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("CREATE_SCRIPT", name, targetGuildId);
-        await syncSlashCommandsWithDiscord(targetGuildId);
+        appendAuditLog("CREATE_SCRIPT", name, targetGuildId, sessionUid);
+        await syncSlashCommandsWithDiscord(targetGuildId, sessionUid);
         sendJsonResponse(res, 201, { ok: true, script: newScript });
         return;
       }
@@ -4304,8 +4341,8 @@ const createHttpServer = () => {
       if (method === "PUT" && pathname.startsWith("/api/scripts/")) {
         const scriptId = decodeURIComponent(pathname.replace("/api/scripts/", ""));
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
-        const scripts = getScriptsForGuild(targetGuildId);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
+        const scripts = getScriptsForGuild(targetGuildId, sessionUid);
         const idx = scripts.findIndex((s) => s.id === scriptId);
         if (idx === -1) {
           sendJsonResponse(res, 404, { error: "Script tapılmadı." });
@@ -4335,46 +4372,33 @@ const createHttpServer = () => {
         };
         scripts[idx] = updatedScript;
 
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.scripts = scripts;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.scripts = scripts;
-        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("UPDATE_SCRIPT", updatedScript.name, targetGuildId);
-        await syncSlashCommandsWithDiscord(targetGuildId);
+        appendAuditLog("UPDATE_SCRIPT", updatedScript.name, targetGuildId, sessionUid);
+        await syncSlashCommandsWithDiscord(targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, script: updatedScript });
         return;
       }
 
       if (method === "DELETE" && pathname.startsWith("/api/scripts/")) {
         const scriptId = decodeURIComponent(pathname.replace("/api/scripts/", ""));
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
-        const nextScripts = getScriptsForGuild(targetGuildId).filter((s) => s.id !== scriptId);
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.scripts = nextScripts;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.scripts = nextScripts;
-        }
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, null, sessionUser);
+        const nextScripts = getScriptsForGuild(targetGuildId, sessionUid).filter((s) => s.id !== scriptId);
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) acc.scripts = nextScripts;
+        if (tenant) tenant.scripts = nextScripts;
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("DELETE_SCRIPT", scriptId, targetGuildId);
-        await syncSlashCommandsWithDiscord(targetGuildId);
+        appendAuditLog("DELETE_SCRIPT", scriptId, targetGuildId, sessionUid);
+        await syncSlashCommandsWithDiscord(targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
 
       if (method === "POST" && pathname === "/api/keys") {
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
-        const keys = getKeysForGuild(targetGuildId);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
+        const keys = getKeysForGuild(targetGuildId, sessionUid);
         const customCode = sanitizeText(String(body.code || ""), "").toUpperCase();
         const code =
           customCode ||
@@ -4391,85 +4415,72 @@ const createHttpServer = () => {
           claimedByTag: "",
           resetCount: 0,
           revoked: false,
+          ownerDiscordId: sessionUid,
           createdAt: new Date().toISOString()
         };
 
         keys.push(newKey);
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.keys = keys;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.keys = keys;
-        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("CREATE_KEY", code, targetGuildId);
+        appendAuditLog("CREATE_KEY", code, targetGuildId, sessionUid);
         sendJsonResponse(res, 201, { ok: true, key: newKey });
         return;
       }
 
       if (method === "DELETE" && pathname.startsWith("/api/keys/")) {
         const keyId = decodeURIComponent(pathname.replace("/api/keys/", ""));
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
-        const keys = getKeysForGuild(targetGuildId);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, null, sessionUser);
+        const keys = getKeysForGuild(targetGuildId, sessionUid);
         const removedKey = keys.find((k) => k.id === keyId);
         const nextKeys = keys.filter((k) => k.id !== keyId);
 
-        let wl = getWhitelistForGuild(targetGuildId);
+        let wl = getWhitelistForGuild(targetGuildId, sessionUid);
         if (removedKey && removedKey.code) {
           wl = wl.filter(
             (w) => String(w.keyCode || "").toUpperCase() !== String(removedKey.code || "").toUpperCase()
           );
         }
 
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.keys = nextKeys;
-            tenant.whitelist = wl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.keys = nextKeys;
-          APP_STATE.whitelist = wl;
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) {
+          acc.keys = nextKeys;
+          acc.whitelist = wl;
         }
+        if (tenant) {
+          tenant.keys = nextKeys;
+          tenant.whitelist = wl;
+        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("DELETE_KEY", removedKey ? removedKey.code : keyId, targetGuildId);
+        appendAuditLog("DELETE_KEY", removedKey ? removedKey.code : keyId, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
 
       if (method === "POST" && pathname === "/api/panel-design") {
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
         const normalized = normalizePanelDesign(body.panelDesign || body);
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.panelDesign = normalized;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.panelDesign = normalized;
-        }
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) acc.panelDesign = normalized;
+        if (tenant) tenant.panelDesign = normalized;
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("SAVE_PANEL_DESIGN", normalized.title, targetGuildId);
+        appendAuditLog("SAVE_PANEL_DESIGN", normalized.title, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, panelDesign: normalized });
         return;
       }
 
       if (method === "POST" && pathname === "/api/whitelist") {
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
         const discordId = sanitizeSnowflakeId(body.discordId || "");
         if (!discordId) {
           sendJsonResponse(res, 400, { error: "Düzgün Discord ID daxil edin." });
           return;
         }
-        const wl = getWhitelistForGuild(targetGuildId);
-        const keys = getKeysForGuild(targetGuildId);
+        const wl = getWhitelistForGuild(targetGuildId, sessionUid);
+        const keys = getKeysForGuild(targetGuildId, sessionUid);
         const idx = wl.findIndex((w) => String(w.discordId) === discordId);
         const chosenScriptId = sanitizeText(body.scriptId, "");
 
@@ -4492,6 +4503,7 @@ const createHttpServer = () => {
             claimedAt: new Date().toISOString(),
             resetCount: 0,
             revoked: false,
+            ownerDiscordId: sessionUid,
             createdAt: new Date().toISOString()
           };
           keys.push(keyRec);
@@ -4510,88 +4522,60 @@ const createHttpServer = () => {
         if (idx >= 0) wl[idx] = entry;
         else wl.push(entry);
 
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.keys = keys;
-            tenant.whitelist = wl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.keys = keys;
-          APP_STATE.whitelist = wl;
-        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("ADD_WHITELIST", `${discordId} (Key: ${keyRec.code})`, targetGuildId);
+        appendAuditLog("ADD_WHITELIST", `${discordId} (Key: ${keyRec.code})`, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, keyCode: keyRec.code });
         return;
       }
 
       if (method === "DELETE" && pathname.startsWith("/api/whitelist/")) {
         const targetUserId = sanitizeSnowflakeId(decodeURIComponent(pathname.replace("/api/whitelist/", "")));
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
-        const nextWl = getWhitelistForGuild(targetGuildId).filter(
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, null, sessionUser);
+        const nextWl = getWhitelistForGuild(targetGuildId, sessionUid).filter(
           (w) => String(w.discordId) !== targetUserId
         );
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.whitelist = nextWl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.whitelist = nextWl;
-        }
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) acc.whitelist = nextWl;
+        if (tenant) tenant.whitelist = nextWl;
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("REMOVE_WHITELIST", targetUserId, targetGuildId);
+        appendAuditLog("REMOVE_WHITELIST", targetUserId, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
 
       if (method === "POST" && pathname === "/api/blacklist") {
         const body = await readJsonBody(req);
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
         const discordId = sanitizeSnowflakeId(body.discordId || "");
         if (!discordId) {
           sendJsonResponse(res, 400, { error: "Düzgün Discord ID daxil edin." });
           return;
         }
-        const bl = getBlacklistForGuild(targetGuildId);
+        const bl = getBlacklistForGuild(targetGuildId, sessionUid);
         if (!bl.some((b) => String(b.discordId) === discordId)) {
           bl.push({ discordId, addedAt: new Date().toISOString() });
         }
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.blacklist = bl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.blacklist = bl;
-        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("ADD_BLACKLIST", discordId, targetGuildId);
+        appendAuditLog("ADD_BLACKLIST", discordId, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
 
       if (method === "DELETE" && pathname.startsWith("/api/blacklist/")) {
         const targetUserId = sanitizeSnowflakeId(decodeURIComponent(pathname.replace("/api/blacklist/", "")));
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, null);
-        const nextBl = getBlacklistForGuild(targetGuildId).filter(
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, null, sessionUser);
+        const nextBl = getBlacklistForGuild(targetGuildId, sessionUid).filter(
           (b) => String(b.discordId) !== targetUserId
         );
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.blacklist = nextBl;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
-        } else {
-          APP_STATE.blacklist = nextBl;
-        }
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) acc.blacklist = nextBl;
+        if (tenant) tenant.blacklist = nextBl;
+        syncAccountAndTenant(sessionUid, targetGuildId);
         saveAppStateToDisk();
-        appendAuditLog("REMOVE_BLACKLIST", targetUserId, targetGuildId);
+        appendAuditLog("REMOVE_BLACKLIST", targetUserId, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
@@ -4619,7 +4603,7 @@ const createHttpServer = () => {
 
         APP_STATE.apiKeys.unshift(record);
         saveAppStateToDisk();
-        appendAuditLog("CREATE_API_KEY", `${code} (${planId})`);
+        appendAuditLog("CREATE_API_KEY", `${code} (${planId})`, targetGuildId || "", sessionUid);
         sendJsonResponse(res, 201, { ok: true, apiKey: record });
         return;
       }
@@ -4628,7 +4612,7 @@ const createHttpServer = () => {
         const id = decodeURIComponent(pathname.replace("/api/admin/api-keys/", ""));
         APP_STATE.apiKeys = (APP_STATE.apiKeys || []).filter((k) => k.id !== id);
         saveAppStateToDisk();
-        appendAuditLog("DELETE_API_KEY", id);
+        appendAuditLog("DELETE_API_KEY", id, "", sessionUid);
         sendJsonResponse(res, 200, { ok: true });
         return;
       }
@@ -4636,7 +4620,7 @@ const createHttpServer = () => {
       if (method === "POST" && pathname === "/api/plan/activate-api") {
         const body = await readJsonBody(req);
         const apiKeyCode = sanitizeText(String(body.apiKey || ""), "").toUpperCase();
-        const targetGuildId = resolveRequestGuildId(req, reqUrl, body);
+        const targetGuildId = resolveRequestGuildId(req, reqUrl, body, sessionUser);
         const foundApi = (APP_STATE.apiKeys || []).find(
           (k) => String(k.code || "").toUpperCase() === apiKeyCode && !k.revoked
         );
@@ -4648,25 +4632,26 @@ const createHttpServer = () => {
 
         const normPlan = normalizePlanId(foundApi.planId);
         const customUserText = sanitizeText(String(body.discordUserInput || ""), "");
-        const sessionUser = getSessionDiscordUserFromRequest(req);
         const actorInfo = customUserText
           ? { userId: customUserText, username: customUserText, displayName: customUserText }
-          : sessionUser || APP_STATE.connectedDiscordUser || null;
+          : sessionUser || null;
         foundApi.usedByUser = actorInfo;
         foundApi.usedByGuildId = targetGuildId || "";
         foundApi.usedAt = new Date().toISOString();
 
-        if (targetGuildId) {
-          const tenant = getTenantRecordByGuildId(targetGuildId, true);
-          if (tenant) {
-            tenant.activePlan = normPlan;
-            tenant.activeApiKeyCode = foundApi.code;
-            syncTenantIntoGlobalIfPrimary(tenant);
-          }
+        const { acc, tenant } = resolveScopedWorkspace(targetGuildId, sessionUid);
+        if (acc) {
+          acc.activePlan = normPlan;
+          acc.activeApiKeyCode = foundApi.code;
         }
+        if (tenant) {
+          tenant.activePlan = normPlan;
+          tenant.activeApiKeyCode = foundApi.code;
+        }
+        syncAccountAndTenant(sessionUid, targetGuildId);
 
         saveAppStateToDisk();
-        appendAuditLog("ACTIVATE_API_PLAN", `${foundApi.code} -> ${normPlan}`, targetGuildId);
+        appendAuditLog("ACTIVATE_API_PLAN", `${foundApi.code} -> ${normPlan}`, targetGuildId, sessionUid);
         sendJsonResponse(res, 200, { ok: true, plan: getPlanMeta(normPlan) });
         return;
       }
